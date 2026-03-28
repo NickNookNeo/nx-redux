@@ -131,7 +131,7 @@
 ///////////////////////////////
 
 #define MAIN_ROW_COUNT 10
-#define SETTINGS_ROW_COUNT 10
+#define SETTINGS_ROW_COUNT 11
 #define QUICK_SWITCHER_COUNT 4
 #define PADDING 10
 

@@ -48,6 +48,7 @@ Improvements:
 - All standalone emulators now include a custom in-game menu with UI styling consistent with the system.
 - All standalone emulators now support save states with screenshots.
 - Added sleep by pressing power button support for all standalone emulator and Portmaster games. 
+- Added top and bottom scroll indicators to the all menu list.
 
 New Features:
 - Redesigned UI with consistent styling across the system.

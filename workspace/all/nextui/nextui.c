@@ -732,6 +732,8 @@ int main(int argc, char* argv[]) {
 												  pos.text_x, pos.text_y, text_width, row_is_selected);
 						}
 					}
+					UI_renderScrollIndicators(screen, top->start, MAIN_ROW_COUNT - 1, total);
+
 					if (lastScreen == SCREEN_OFF) {
 						GFX_animateSurfaceOpacity(blackBG, 0, 0, screen->w, screen->h, 255,
 												  0, CFG_getMenuTransitions() ? 200 : 20,

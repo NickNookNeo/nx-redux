@@ -392,7 +392,8 @@ void UI_renderSettingsPage(SDL_Surface* screen, ListLayout* layout,
 
 	int total_rows = SETTINGS_ROW_COUNT;
 	layout->item_h = layout->list_h / total_rows;
-	layout->items_per_page = total_rows - 1;
+	layout->items_per_page = total_rows - 2;
+	int y_offset = layout->item_h / 2;
 
 	UI_adjustListScroll(selected, scroll, layout->items_per_page);
 
@@ -404,7 +405,7 @@ void UI_renderSettingsPage(SDL_Surface* screen, ListLayout* layout,
 	for (int vi = start; vi < end; vi++) {
 		UISettingsItem* item = &items[vi];
 		int sel = (vi == selected);
-		int item_y = layout->list_y + (vi - start) * layout->item_h;
+		int item_y = layout->list_y + y_offset + (vi - start) * layout->item_h;
 
 		// Custom draw override
 		if (item->custom_draw) {
@@ -433,7 +434,7 @@ void UI_renderSettingsPage(SDL_Surface* screen, ListLayout* layout,
 
 	// Status message centered below items (e.g. "Scanning for networks...")
 	if (status_msg && status_msg[0] && count < layout->items_per_page) {
-		int msg_row_y = layout->list_y + count * layout->item_h;
+		int msg_row_y = layout->list_y + y_offset + count * layout->item_h;
 		int empty_h = (layout->items_per_page - count) * layout->item_h;
 		int msg_y = msg_row_y + (empty_h - TTF_FontHeight(font.small)) / 2;
 		SDL_Surface* msg_surf = TTF_RenderUTF8_Blended(font.small, status_msg, COLOR_GRAY);
@@ -447,7 +448,7 @@ void UI_renderSettingsPage(SDL_Surface* screen, ListLayout* layout,
 	// Description text in the last row (row 9)
 	if (selected >= 0 && selected < count &&
 		items[selected].desc && items[selected].desc[0]) {
-		int desc_row_y = layout->list_y + layout->items_per_page * layout->item_h;
+		int desc_row_y = layout->list_y + y_offset + layout->items_per_page * layout->item_h;
 		int desc_y = desc_row_y + (layout->item_h - TTF_FontHeight(font.tiny)) / 2;
 		int desc_max_w = hw - SCALE1(PADDING * 2);
 
@@ -646,7 +647,8 @@ void UI_renderScrollIndicators(SDL_Surface* screen, int scroll, int items_per_pa
 		GFX_blitAsset(ASSET_SCROLL_UP, NULL, screen, &(SDL_Rect){ox, SCALE1(PADDING + PILL_SIZE - BUTTON_MARGIN)});
 	}
 	if (scroll + items_per_page < total_count) {
-		GFX_blitAsset(ASSET_SCROLL_DOWN, NULL, screen, &(SDL_Rect){ox, hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN)});
+		int bottom_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN) - SCALE1(8);
+		GFX_blitAsset(ASSET_SCROLL_DOWN, NULL, screen, &(SDL_Rect){ox, bottom_y});
 	}
 }
 
