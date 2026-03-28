@@ -704,8 +704,6 @@ int main(int argc, char* argv[]) {
 							MAX(0, (had_thumb ? ox + SCALE1(BUTTON_MARGIN)
 											  : screen->w - SCALE1(BUTTON_MARGIN)) -
 									   SCALE1(PADDING * 2));
-						if (row_is_top && !had_thumb)
-							available_width -= ow;
 
 						// Prepare display text: prefer unique name, fall back to entry name
 						trimSortingMeta(&entry_name);
