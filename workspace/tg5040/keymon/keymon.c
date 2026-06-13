@@ -30,6 +30,11 @@
 #define CODE_MUTE 1
 #define CODE_JACK 2
 
+#define LONG_PRESS_MS 500
+#define OSD_SHOW_PATH "/tmp/show_osdd"
+#define OSD_HIDE_PATH "/tmp/hide_osdd"
+#define OSD_STATE_PATH "/tmp/trimui_osd/osdd_show_up"
+
 #define RELEASED 0
 #define PRESSED 1
 #define REPEAT 2
@@ -52,6 +57,19 @@ static int epoll_fd = -1;
 static volatile int quit = 0;
 static void on_term(int sig) {
 	quit = 1;
+}
+
+static void toggle_osd(void) {
+	struct stat st;
+	if (stat(OSD_STATE_PATH, &st) == 0) {
+		FILE* f = fopen(OSD_HIDE_PATH, "w");
+		if (f)
+			fclose(f);
+	} else {
+		FILE* f = fopen(OSD_SHOW_PATH, "w");
+		if (f)
+			fclose(f);
+	}
 }
 
 static int getInt(char* path) {
@@ -178,8 +196,12 @@ int main(int argc, char* argv[]) {
 
 	// Input state
 	uint32_t val;
+	uint32_t select_pressed = 0;
+
+	// OSD trigger state (Menu long-press)
 	uint32_t menu_pressed = 0;
-	uint32_t menu2_pressed = 0;
+	uint32_t menu_press_start = 0;
+	int menu_long_fired = 0;
 
 	uint32_t up_pressed = 0;
 	uint32_t up_just_pressed = 0;
@@ -198,7 +220,10 @@ int main(int argc, char* argv[]) {
 		// Compute timeout: if a key is held, wake up for repeat; otherwise block longer
 		int timeout_ms;
 		uint32_t now = now_ms();
-		if (up_pressed || down_pressed) {
+		if (menu_pressed && !menu_long_fired) {
+			uint32_t remaining_lp = (menu_press_start + LONG_PRESS_MS > now) ? (menu_press_start + LONG_PRESS_MS - now) : 1;
+			timeout_ms = (int)remaining_lp;
+		} else if (up_pressed || down_pressed) {
 			uint32_t next_repeat = up_pressed ? up_repeat_at : down_repeat_at;
 			if (up_pressed && down_pressed)
 				next_repeat = up_repeat_at < down_repeat_at ? up_repeat_at : down_repeat_at;
@@ -218,8 +243,9 @@ int main(int argc, char* argv[]) {
 		now = now_ms();
 		if (now - then > 1000) {
 			// Ignore stale input after sleep
+			select_pressed = 0;
 			menu_pressed = 0;
-			menu2_pressed = 0;
+			menu_long_fired = 0;
 			up_pressed = up_just_pressed = 0;
 			down_pressed = down_just_pressed = 0;
 			up_repeat_at = 0;
@@ -272,11 +298,18 @@ int main(int argc, char* argv[]) {
 					if (val)
 						down_repeat_at = now + REPEAT_DELAY_MS;
 					break;
-				case CODE_MENU2:
-					menu_pressed = val;
+				case CODE_MENU0: // BTN_SELECT (314) — physical Select button
+					select_pressed = val;
 					break;
-				case CODE_MENU0:
-					menu2_pressed = val;
+				case CODE_MENU2: // BTN_MODE (316) — physical Menu button
+					if (val == PRESSED) {
+						menu_pressed = 1;
+						menu_press_start = now;
+						menu_long_fired = 0;
+					} else if (val == RELEASED) {
+						menu_pressed = 0;
+						menu_long_fired = 0;
+					}
 					break;
 				default:
 					break;
@@ -284,16 +317,23 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
+		// Cancel menu long-press if Plus/Minus pressed (brightness/volume combo)
+		if (menu_pressed && !menu_long_fired && (up_just_pressed || down_just_pressed)) {
+			menu_long_fired = 1;
+		}
+
+		// Check menu long-press threshold — trigger OSD
+		if (menu_pressed && !menu_long_fired && now - menu_press_start >= LONG_PRESS_MS) {
+			menu_long_fired = 1;
+			toggle_osd();
+		}
+
 		// Handle key repeat for volume/brightness
 		if (up_just_pressed || (up_pressed && now >= up_repeat_at)) {
-			if (menu_pressed) {
+			if (select_pressed) {
 				val = GetBrightness();
 				if (val < BRIGHTNESS_MAX)
 					SetBrightness(++val);
-			} else if (menu2_pressed) {
-				val = GetColortemp();
-				if (val < COLORTEMP_MAX)
-					SetColortemp(++val);
 			} else {
 				val = GetVolume();
 				if (val < VOLUME_MAX)
@@ -307,14 +347,10 @@ int main(int argc, char* argv[]) {
 		}
 
 		if (down_just_pressed || (down_pressed && now >= down_repeat_at)) {
-			if (menu_pressed) {
+			if (select_pressed) {
 				val = GetBrightness();
 				if (val > BRIGHTNESS_MIN)
 					SetBrightness(--val);
-			} else if (menu2_pressed) {
-				val = GetColortemp();
-				if (val > COLORTEMP_MIN)
-					SetColortemp(--val);
 			} else {
 				val = GetVolume();
 				if (val > VOLUME_MIN)
