@@ -28,7 +28,7 @@ jobs:
       release-name: ${{ steps.release-name.outputs.RELEASE_NAME }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5.0.0
         with:
           fetch-depth: 0
 
@@ -64,7 +64,7 @@ jobs:
           - tg5050
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5.0.0
 
       - name: Generate cores matrix
         id: cores
@@ -86,7 +86,7 @@ jobs:
         core: ${{ fromJson(needs.core-matrix.outputs.cores) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5.0.0
 
       - name: Compute core cache key
         id: cache-key
@@ -137,7 +137,7 @@ jobs:
       BUILD_TAG: ${{ needs.prepare.outputs.next-tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5.0.0
         with:
           fetch-depth: 0
 
@@ -193,7 +193,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5.0.0
         with:
           fetch-depth: 0
 
