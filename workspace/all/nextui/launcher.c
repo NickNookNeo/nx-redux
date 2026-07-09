@@ -16,12 +16,6 @@
 #include "launcher.h"
 #include "shortcuts.h"
 
-static CleanupPoolFunc _cleanupPool = NULL;
-
-void Launcher_setCleanupFunc(CleanupPoolFunc func) {
-	_cleanupPool = func;
-}
-
 ///////////////////////////////////////
 
 void queueNext(char* cmd) {
@@ -31,10 +25,13 @@ void queueNext(char* cmd) {
 }
 
 extern char** environ;
+// use posix_spawnp so a bare program name (eg. "gametimectl.elf") is resolved
+// via PATH — plain posix_spawn treats it as a path relative to CWD, which is
+// the pak dir at runtime, so the exec silently fails with ENOENT
 static int runCommand(const char* path, char* const argv[]) {
 	pid_t pid;
 	int status;
-	if (posix_spawn(&pid, path, NULL, NULL, argv, environ) != 0) {
+	if (posix_spawnp(&pid, path, NULL, NULL, argv, environ) != 0) {
 		return -1;
 	}
 	waitpid(pid, &status, 0);
@@ -42,7 +39,8 @@ static int runCommand(const char* path, char* const argv[]) {
 }
 static void runCommandAsync(const char* path, char* const argv[]) {
 	pid_t pid;
-	posix_spawn(&pid, path, NULL, NULL, argv, environ);
+	if (posix_spawnp(&pid, path, NULL, NULL, argv, environ) != 0)
+		return;
 	// Fire-and-forget: orphaned child is reaped by init
 }
 
@@ -134,6 +132,12 @@ void readyResumePath(char* rom_path, int type) {
 	}
 }
 void readyResume(Entry* entry) {
+	if (!entry) {
+		resume.can_resume = false;
+		resume.has_preview = false;
+		resume.has_boxart = false;
+		return;
+	}
 	readyResumePath(entry->path, entry->type);
 }
 
@@ -507,35 +511,6 @@ void closeDirectory(void) {
 	restore.relative = top->selected;
 }
 
-void toggleQuick(Entry* self) {
-	if (!self)
-		return;
-
-	switch (self->quickId) {
-	case QUICK_WIFI:
-		WIFI_enable(!WIFI_enabled());
-		break;
-	case QUICK_BLUETOOTH:
-		BT_enable(!BT_enabled());
-		break;
-	case QUICK_SLEEP:
-		PWR_sleep();
-		break;
-	case QUICK_REBOOT:
-		if (_cleanupPool)
-			_cleanupPool();
-		PWR_powerOff(1);
-		break;
-	case QUICK_POWEROFF:
-		if (_cleanupPool)
-			_cleanupPool();
-		PWR_powerOff(0);
-		break;
-	default:
-		break;
-	}
-}
-
 void Entry_open(Entry* self) {
 	Recents_setAlias(self->name);
 	if (self->type == ENTRY_ROM) {
@@ -560,8 +535,6 @@ void Entry_open(Entry* self) {
 		openPak(self->path);
 	} else if (self->type == ENTRY_DIR) {
 		openDirectory(self->path, 1);
-	} else if (self->type == ENTRY_DIP) {
-		toggleQuick(self);
 	}
 }
 
@@ -584,6 +557,13 @@ void loadLast(void) { // call after loading root directory
 	char last_path[MAX_PATH];
 	getFile(LAST_PATH, last_path, MAX_PATH);
 
+	// guard against a corrupt/foreign LAST_PATH (empty, or not under SDCARD):
+	// the truncation loop below assumes every iteration contains a '/' and
+	// eventually equals SDCARD_PATH — otherwise strrchr returns NULL and the
+	// pointer subtraction writes through a wild offset
+	if (!prefixMatch(SDCARD_PATH, last_path))
+		return;
+
 	char full_path[MAX_PATH];
 	strcpy(full_path, last_path);
 
@@ -598,6 +578,8 @@ void loadLast(void) { // call after loading root directory
 		Array_push(last, strdup(last_path));
 
 		char* slash = strrchr(last_path, '/');
+		if (!slash)
+			break;
 		last_path[(slash - last_path)] = '\0';
 	}
 

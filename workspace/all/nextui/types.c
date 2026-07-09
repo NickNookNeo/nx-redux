@@ -132,7 +132,6 @@ Entry* Entry_new(const char* path, int type) {
 	self->unique = NULL;
 	self->type = type;
 	self->alpha = 0;
-	self->quickId = QUICK_NONE;
 	return self;
 }
 
@@ -144,6 +143,8 @@ Entry* Entry_newNamed(const char* path, int type, const char* displayName) {
 }
 
 void Entry_free(Entry* self) {
+	if (!self)
+		return;
 	free(self->path);
 	free(self->name);
 	if (self->unique)

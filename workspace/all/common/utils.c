@@ -262,6 +262,16 @@ void serializeTime(char* dest_str, int nTime) {
 		sprintf(dest_str, "%ds", nTime);
 	}
 }
+void format_time(char* buf, int seconds) {
+	int hrs = seconds / 3600;
+	int mins = (seconds % 3600) / 60;
+	int secs = seconds % 60;
+	if (hrs > 0) {
+		sprintf(buf, "%d:%02d:%02d", hrs, mins, secs);
+	} else {
+		sprintf(buf, "%02d:%02d", mins, secs);
+	}
+}
 int countChar(const char* str, char ch) {
 	size_t i;
 	int count = 0;
@@ -352,9 +362,9 @@ bool pathRelativeTo(char* path_out, const char* dir_from, const char* file_to) {
 	return true;
 }
 
-void getDisplayName(const char* in_name, char* out_name) {
+void getDisplayName(const char* in_name, char* out_name) { // NOTE: out_name needs to be MAX_PATH length!
 	char* tmp;
-	char work_name[256];
+	char work_name[MAX_PATH];
 	strcpy(work_name, in_name);
 	strcpy(out_name, in_name);
 
@@ -528,6 +538,24 @@ char* allocFile(char* path) { // caller must free!
 		contents[size] = '\0';
 	}
 	return contents;
+}
+bool SimpleMode_readPin(char pin_out[5]) {
+	char buf[16] = {0};
+	getFile((char*)SIMPLE_MODE_PATH, buf, sizeof(buf));
+	int len = strlen(buf);
+	while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' ||
+					   buf[len - 1] == ' ' || buf[len - 1] == '\t'))
+		buf[--len] = '\0';
+	if (len != 4)
+		return false;
+	for (int i = 0; i < 4; i++)
+		if (buf[i] < '0' || buf[i] > '9')
+			return false;
+	if (pin_out) {
+		memcpy(pin_out, buf, 4);
+		pin_out[4] = '\0';
+	}
+	return true;
 }
 int getInt(char* path) {
 	int i = 0;

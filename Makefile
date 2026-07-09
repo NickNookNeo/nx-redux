@@ -97,6 +97,7 @@ ifneq ($(PLATFORM), desktop)
 	cp ./workspace/all/audiomon/build/$(PLATFORM)/audiomon.elf ./build/SYSTEM/$(PLATFORM)/bin/
 	cp ./workspace/all/show2/build/$(PLATFORM)/show2.elf ./build/SYSTEM/$(PLATFORM)/bin/
 	cp ./workspace/all/screenshot/build/$(PLATFORM)/screenshot.elf ./build/SYSTEM/$(PLATFORM)/bin/
+	cp ./workspace/all/screenrecorder/build/$(PLATFORM)/screenrecorder.elf ./build/SYSTEM/$(PLATFORM)/bin/
 
 	# game time tracking
 	cp ./workspace/all/libgametimedb/build/$(PLATFORM)/libgametimedb.so ./build/SYSTEM/$(PLATFORM)/lib
@@ -210,10 +211,10 @@ compile-commands:
 				;; \
 		esac; \
 		if [ "$$first" = "1" ]; then first=0; else echo ',' >> compile_commands.json; fi; \
-		printf '  {"directory": "%s", "file": "%s/%s", "arguments": ["clang", "-std=gnu99", "-DUSE_SDL2", "-DUSE_GLES", "-DGL_GLEXT_PROTOTYPES", "-DPLATFORM=\\"tg5040\\"", %s"-I%s/workspace/all/common", "-I%s/workspace/all/nextui", "-I%s/workspace/all/minarch", "-I%s/workspace/all/minarch/libretro-common/include", "-I%s/workspace/tg5040/platform", "-I%s/workspace/tg5050/platform", "-I%s/workspace/desktop/platform", "-I%s/workspace/tg5040/libmsettings", "-I%s/workspace/tg5050/libmsettings", "-I%s/workspace/desktop/libmsettings", "-I/opt/homebrew/include", "-c", "%s/%s"]}' \
+		printf '  {"directory": "%s", "file": "%s/%s", "arguments": ["clang", "-std=gnu99", "-DUSE_SDL2", "-DUSE_GLES", "-DGL_GLEXT_PROTOTYPES", "-DPLATFORM=\\"tg5040\\"", %s"-I%s/workspace/all/common", "-I%s/workspace/all/common/ui", "-I%s/workspace/all/nextui", "-I%s/workspace/all/minarch", "-I%s/workspace/all/minarch/libretro-common/include", "-I%s/workspace/tg5040/platform", "-I%s/workspace/tg5050/platform", "-I%s/workspace/desktop/platform", "-I%s/workspace/tg5040/libmsettings", "-I%s/workspace/tg5050/libmsettings", "-I%s/workspace/desktop/libmsettings", "-I/opt/homebrew/include", "-c", "%s/%s"]}' \
 			"$(CURDIR)" "$(CURDIR)" "$$file" \
 			"$$extra_flags" \
-			"$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" \
+			"$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" \
 			"$(CURDIR)" "$$file" >> compile_commands.json; \
 	done
 	@echo '' >> compile_commands.json
@@ -247,7 +248,7 @@ setup: name
 
 	# remove authoring detritus
 	cd ./build && find . -type f -name '.keep' -delete
-	cd ./build && find . -type f -name '*.meta' -not -path '*/ppsspp/*' -delete
+	cd ./build && find . -type f -name '*.meta' -delete
 	echo $(BUILD_HASH) > ./workspace/hash.txt
 	
 	# copy readmes to workspace so we can use Linux fmt instead of host's

@@ -3,10 +3,12 @@
 #include "content.h"
 #include "defines.h"
 #include "display_helper.h"
+#include "gamelist.h"
 #include "imgloader.h"
 #include "launcher.h"
 #include "types.h"
-#include "ui_components.h"
+#include "ui_buttonhintbar.h"
+#include "ui_message.h"
 #include "ui_keyboard.h"
 #include "ui_list.h"
 #include "api.h"
@@ -74,13 +76,7 @@ SearchResult Search_handleInput(unsigned long now) {
 		result.dirty = true;
 		result.folderbgchanged = true;
 		GFX_clearLayers(LAYER_SCROLLTEXT);
-		if (search_list_scroll.cached_scroll_surface) {
-			SDL_FreeSurface(search_list_scroll.cached_scroll_surface);
-			search_list_scroll.cached_scroll_surface = NULL;
-		}
-		search_list_scroll.text[0] = '\0';
-		search_list_scroll.needs_scroll = false;
-		search_list_scroll.scroll_active = false;
+		ScrollText_clear(&search_list_scroll);
 		return result;
 	}
 
@@ -128,6 +124,9 @@ void Search_render(SDL_Surface* screen, SDL_Surface* blackBG, int lastScreen) {
 	if (lastScreen != SCREEN_SEARCH) {
 		onBackgroundLoaded(NULL);
 		GFX_clearLayers(LAYER_THUMBNAIL);
+		// we just cleared the shared folder background; make the game list
+		// reload it on return instead of trusting its stale change-detection
+		GameList_invalidateBackground();
 	}
 
 	int total = search_results ? search_results->count : 0;

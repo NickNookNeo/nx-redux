@@ -618,8 +618,10 @@ Array* getRoot(int simple_mode) {
 		if (entries->count) {
 			Array_push(root, Entry_new(COLLECTIONS_PATH, ENTRY_DIR));
 		} else { // No visible systems, promote collections to root
+			// yoink into root directly — yoinking into `entries` meant the
+			// promoted collections never appeared when emulators were hidden
 			Array* collections = getCollections();
-			Array_yoink(entries, collections);
+			Array_yoink(root, collections);
 		}
 	}
 
@@ -658,6 +660,11 @@ Array* getRoot(int simple_mode) {
 	if (CFG_getShowEmulators()) {
 		// Move entries to root
 		Array_yoink(root, entries);
+	} else {
+		// emulators hidden: `entries` never reaches root, so free it (and its
+		// Entry items) here instead of leaking the whole console list on every
+		// root rebuild
+		EntryArray_free(entries);
 	}
 
 	// Add tools if applicable
@@ -665,6 +672,14 @@ Array* getRoot(int simple_mode) {
 		char tools_path[MAX_PATH];
 		snprintf(tools_path, sizeof(tools_path), "%s/Tools/%s", SDCARD_PATH, PLATFORM);
 		Array_push(root, Entry_new(tools_path, ENTRY_DIR));
+	} else if (simple_mode) {
+		// Simple mode hides Tools, but Settings must stay reachable (the
+		// game list PIN-gates it) or parents get locked out of the device.
+		char settings_path[MAX_PATH];
+		snprintf(settings_path, sizeof(settings_path), "%s/Tools/%s/Settings.pak",
+				 SDCARD_PATH, PLATFORM);
+		if (exists(settings_path))
+			Array_push(root, Entry_newNamed(settings_path, ENTRY_PAK, "Settings"));
 	}
 
 	return root;
@@ -838,72 +853,3 @@ Array* getEntries(char* path) {
 	return entries;
 }
 
-///////////////////////////////////////
-// Quick menu content
-
-Array* getQuickEntries(int simple_mode) {
-	Array* entries = Array_new();
-
-	if (Recents_count())
-		Array_push(entries, Entry_newNamed(FAUX_RECENT_PATH, ENTRY_DIR, "Recents"));
-
-	if (hasCollections())
-		Array_push(entries, Entry_new(COLLECTIONS_PATH, ENTRY_DIR));
-
-	Array_push(entries, Entry_newNamed(ROMS_PATH, ENTRY_DIR, "Games"));
-
-	if (hasTools() && !simple_mode) {
-		char tools_path[MAX_PATH];
-		snprintf(tools_path, sizeof(tools_path), "%s/Tools/%s", SDCARD_PATH, PLATFORM);
-		Array_push(entries, Entry_new(tools_path, ENTRY_DIR));
-	}
-
-	return entries;
-}
-
-Array* getQuickToggles(int simple_mode) {
-	Array* entries = Array_new();
-
-	if (!simple_mode) {
-		Entry* settings = entryFromPakName("Settings");
-		if (settings) {
-			settings->quickId = QUICK_SETTINGS;
-			Array_push(entries, settings);
-		}
-	}
-
-	if (WIFI_supported()) {
-		Entry* wifi = Entry_new("Wifi", ENTRY_DIP);
-		wifi->quickId = QUICK_WIFI;
-		Array_push(entries, wifi);
-	}
-	if (BT_supported()) {
-		Entry* bt = Entry_new("Bluetooth", ENTRY_DIP);
-		bt->quickId = QUICK_BLUETOOTH;
-		Array_push(entries, bt);
-	}
-	{
-		bool is_rec = access("/tmp/screenrecorder.pid", F_OK) == 0;
-		Entry* rec = Entry_new(is_rec ? "Recording" : "Record", ENTRY_DIP);
-		rec->quickId = QUICK_SCREENRECORD;
-		Array_push(entries, rec);
-	}
-	{
-		bool is_ss = access("/tmp/screenshot.pid", F_OK) == 0;
-		Entry* ss = Entry_new(is_ss ? "Screenshot On" : "Screenshot", ENTRY_DIP);
-		ss->quickId = QUICK_SCREENSHOT;
-		Array_push(entries, ss);
-	}
-	{
-		Entry* reboot = Entry_new("Reboot", ENTRY_DIP);
-		reboot->quickId = QUICK_REBOOT;
-		Array_push(entries, reboot);
-	}
-	{
-		Entry* poweroff = Entry_new("Poweroff", ENTRY_DIP);
-		poweroff->quickId = QUICK_POWEROFF;
-		Array_push(entries, poweroff);
-	}
-
-	return entries;
-}

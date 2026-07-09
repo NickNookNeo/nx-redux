@@ -161,16 +161,63 @@ Each widget has a directory under `/tmp/trimui_osd/`:
 }
 ```
 
+Note: the `hotkey` field is **inert** — the daemon never reads it (the string
+"hotkey" doesn't appear in the binary). The OSD is actually triggered by our
+keymon via `/tmp/show_osdd`: HOME press (instant) or MENU long-press (500ms).
+Verified empirically: a short MENU+SELECT chord does not open the OSD.
+
 ### Widget Directory Structure
 
 Each widget under `/usr/trimui/osd/widgets/` has:
 
 ```
 widgets/toggle_wifi/
-├── config.json       # Widget metadata (name, type, icon paths)
-├── set.sh            # Called when toggled (receives value)
-└── refresh.sh        # Called to query current state (returns value)
+├── config.json       # Widget metadata (name, type, icons, script names, status file)
+├── set.sh            # config.json "launch": called on press (toggles get an argument)
+└── update.sh         # config.json "update": refreshes the status file (every 3s)
 ```
+
+The script names come from `config.json` — toggles use `update.sh`, the static
+widgets (temperature, CPU clock) use `refresh.sh`. The daemon reads the widget's
+current value from the `status` file path in `config.json`.
+
+Both platforms vendor the **complete OSD tree** on the SD card
+(`skeleton/SYSTEM/<platform>/osd/`) — daemon binary, UI assets, toast scripts,
+and every widget (stock and custom). At boot, `launch.sh` copies the whole
+tree (~1MB) over `/usr/trimui/osd/`, making the SD card the source of truth
+regardless of firmware version. `regular.ttf` (16MB CJK font) is deliberately
+not shipped — the firmware's copy is used, since files are only overwritten,
+never deleted. `trimui_osdd` has `/usr/trimui/osd/` hardcoded in the
+closed-source binary, so it can't read from the SD card directly — the
+boot-time copy is the only way to control it. The two platforms' daemon
+builds differ (different md5), so each skeleton carries its own.
+
+Activating screenshot, screen record, or power auto-hides the OSD panel
+(`touch /tmp/hide_osdd`) so the user lands back on the app; toasts still
+render while the panel is hidden.
+Note the wifi/bt toggle scripts write the status file optimistically before the
+radio transition completes, so the icon can bounce once via the 3s refresh
+during a slow start (~7s for wifi, longer for BT).
+
+Platform note: on **tg5050** the BT toggle powers the adapter off/on via a live
+`bluetoothd` (matching the Settings app; killing the daemon wedges other apps'
+`bluetoothctl` calls). On **tg5040** it must fully stop the stack — the xradio
+combo chip drops WiFi throughput from ~330 KB/s to ~2 KB/s while bluetoothd
+runs. The apps tolerate losing bluetoothd mid-call via command timeouts in
+`generic_bt.c`.
+
+Capture toggles: both are PID-file driven. `toggle_screenshot` starts/stops
+`screenshot.elf` (daemon owns `/tmp/screenshot.pid`; L2+R2 together captures a
+frame — the widget shows a hint toast on enable, and the daemon toasts
+"Screenshot saved" after each capture).
+`toggle_screenrecord` on tg5050 brings cpu2 online and starts
+`screenrecorder.elf <output> 1280 720` (owns `/tmp/screenrecorder.pid`); on
+tg5040 it records `/dev/fb0` directly with ffmpeg and the script owns the PID
+file. The foreground app (`capture_check()` in `generic_video.c`, tg5050 only)
+notices the PID files on rendered frames and publishes RGBA frames to the
+`/tmp/fb_mirror.raw` shm. Because dirty-flag apps like nextui only render on
+activity, capture starts once the user interacts after toggling; the recorder
+waits up to 60s for the mirror before giving up.
 
 ### Available Widgets
 
@@ -183,14 +230,16 @@ widgets/toggle_wifi/
 | `toggle_wifi` | toggle | WiFi on/off |
 | `toggle_led` | toggle | LED strip on/off |
 | `toggle_rumble` | toggle | Vibration on/off |
-| `toggle_mute` | toggle | Audio mute |
-| `toggle_power` | toggle | Power off |
-| `static_pic_1` | static | Background/header image |
+| `toggle_mute` | toggle | Audio mute (osdctl-based) |
+| `toggle_power` | toggle | Power off — stock ships an empty `set.sh`; ours implements the launch.sh contract (`rm /tmp/nextui_exec` + `touch /tmp/poweroff` + kill foreground app → `poweroff_next`). In-game press exits minarch without quicksave. |
+| `toggle_screenshot` | toggle | Screenshot daemon on/off (custom; L2+R2 captures to `/mnt/SDCARD/Images/Screenshots`) |
+| `toggle_screenrecord` | toggle | Screen recording on/off (custom; records to `/mnt/SDCARD/Videos/Recordings`) |
+| `static_pic_1` | static | Background/header image (not shipped — removed from the tg5040 vendored tree) |
 | `static_battery` | static | Battery level display |
 | `static_cpu_freq` | static | CPU frequency display |
 | `static_temperature` | static | CPU temperature display |
-| `static_dram` | static | RAM usage display |
-| `app_music` | app | Music player controls |
+| `static_dram` | static | Used-memory display — stock widget was incomplete (empty `set.sh`, no update hook); ours adds `refresh.sh` (MemTotal−MemAvailable) |
+| `app_music` | app | Music player controls — vendored but not in the layout yet; to be integrated with `workspace/all/musicplayer` |
 
 ## DRM Plane Details
 
@@ -254,12 +303,14 @@ Both platforms use the same approach: `keymon` detects the trigger → toggles O
 
 ## Known Issues
 
-- Missing widget scripts (`set.sh` for `static_temperature`, `static_cpu_freq`) cause non-fatal errors
-- Fan level widget references `/tmp/system/set_fanlevel` which doesn't exist in our setup
 - `trimui_inputd` grab signaling (`/tmp/trimui_inputd/grab`) may not work if `trimui_inputd` isn't configured for it
+
+Previously listed issues, since fixed:
+
+- ~~Missing `set.sh` for `static_temperature`/`static_cpu_freq`~~ — no-op stubs shipped in the skeleton
+- ~~Fan level widget references `/tmp/system/set_fanlevel`~~ — replaced with an `osdctl`-based script driving NextUI's fan control
+- ~~WiFi/BT toggles not reflected in Settings, hangs when toggling while Settings open~~ — apps now read live radio state (sysfs/HCI ioctl) instead of cached config, `bluetoothctl` shell-outs are timeout-killed, and `CFG_sync()` re-captures radio state so it can't clobber the OSD's `minuisettings.txt` edits
 
 ## Future Work
 
-- Custom `osdlayout.json` with NextUI-specific widgets
-- Custom widget scripts for NextUI settings integration
 - Potentially build our own OSD daemon using the same DRM plane approach for full control

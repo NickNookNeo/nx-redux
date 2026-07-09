@@ -41,6 +41,10 @@
 #define NOUI_PATH "/tmp/noui"
 #define EMULIST_CACHE_PATH "/tmp/emulist_cache.txt"
 #define ROMINDEX_CACHE_PATH "/tmp/romindex_cache.txt"
+// Owned by the OSD LED toggle (osd/widgets/toggle_led/set.sh): while this file
+// exists, LEDS_setProfile forces LIGHT_PROFILE_OFF so app startup and profile
+// changes (charging, sleep, ambient) don't relight LEDs the user switched off.
+#define LEDS_DISABLED_PATH "/tmp/leds_disabled" // transient
 
 #define TRIAD_WHITE 0xff, 0xff, 0xff
 #define TRIAD_BLACK 0x00, 0x00, 0x00
@@ -84,13 +88,10 @@
 #define BUTTON_PADDING 10
 #define SETTINGS_SIZE 4
 #define SETTINGS_WIDTH 80
+#define HW_INDICATOR_WIDTH (PILL_SIZE + SETTINGS_WIDTH + 10 + 4) // pill drawn by GFX_blitHardwareIndicator
 
 #ifndef MAIN_ROW_COUNT
 #define MAIN_ROW_COUNT 6 // FIXED_HEIGHT / (PILL_SIZE * FIXED_SCALE) - 2 (floor and subtract 1 if not an integer)
-#endif
-
-#ifndef QUICK_SWITCHER_COUNT
-#define QUICK_SWITCHER_COUNT 3
 #endif
 
 #ifndef PADDING

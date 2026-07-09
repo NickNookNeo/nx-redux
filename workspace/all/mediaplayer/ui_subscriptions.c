@@ -5,10 +5,12 @@
 #include <SDL2/SDL_image.h>
 
 #include "api.h"
-#include "ui_components.h"
+#include "ui_buttonhintbar.h"
+#include "ui_emptystate.h"
+#include "ui_menubar.h"
 #include "ui_subscriptions.h"
 #include "ui_fonts.h"
-#include "ui_utils.h"
+#include "utils.h"
 #include "subscriptions.h"
 
 // Avatar thumbnail cache (in-memory)

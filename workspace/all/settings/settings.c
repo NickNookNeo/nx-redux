@@ -19,7 +19,11 @@
 #include "settings_input.h"
 #include "settings_clock.h"
 #include "settings_bootlogo.h"
-#include "ui_components.h"
+#include "ui_menubar.h"
+#include "ui_quitrequest.h"
+#include "ui_splash.h"
+#include "ui_pindialog.h"
+#include "ui_buttonhintbar.h"
 #include "display_helper.h"
 
 #include <stdio.h>
@@ -238,9 +242,9 @@ static const char* ra_sort_labels[] = {
 #define RA_SORT_LABEL_COUNT 11
 
 /* Default view */
-static int default_view_values[] = {SCREEN_GAMELIST, SCREEN_GAMESWITCHER, SCREEN_QUICKMENU};
-static const char* default_view_labels[] = {"Content List", "Game Switcher", "Quick Menu"};
-#define DEFAULT_VIEW_COUNT 3
+static int default_view_values[] = {SCREEN_GAMELIST, SCREEN_GAMESWITCHER};
+static const char* default_view_labels[] = {"Content List", "Game Switcher"};
+#define DEFAULT_VIEW_COUNT 2
 
 /* Save format */
 static int save_format_values[] = {SAVE_FORMAT_SAV, SAVE_FORMAT_SRM, SAVE_FORMAT_SRM_UNCOMPRESSED, SAVE_FORMAT_GEN};
@@ -667,17 +671,6 @@ static void set_roms_use_folder_bg(int v) {
 }
 static void reset_roms_use_folder_bg(void) {
 	CFG_setRomsUseFolderBackground(CFG_DEFAULT_ROMSUSEFOLDERBACKGROUND);
-}
-
-/* Show Quickswitcher UI */
-static int get_show_quickswitcher(void) {
-	return CFG_getShowQuickswitcherUI() ? 1 : 0;
-}
-static void set_show_quickswitcher(int v) {
-	CFG_setShowQuickswitcherUI(v != 0);
-}
-static void reset_show_quickswitcher(void) {
-	CFG_setShowQuickswitcherUI(CFG_DEFAULT_SHOWQUICKWITCHERUI);
 }
 
 // ============================================
@@ -1324,7 +1317,7 @@ static void init_about_info(void) {
 #define MAX_NOTIFY_ITEMS 8
 #define MAX_RA_ITEMS 15
 #define MAX_ABOUT_ITEMS 8
-#define MAX_SIMPLE_MODE_ITEMS 4
+#define MAX_SIMPLE_MODE_ITEMS 2
 #define MAX_MAIN_ITEMS 15
 
 static SettingItem appearance_items[MAX_APPEARANCE_ITEMS];
@@ -1354,6 +1347,71 @@ static SettingsPage* bt_page_ptr = NULL;
 static SettingsPage* led_page_ptr = NULL;
 static SettingsPage* dev_page_ptr = NULL;
 
+static SDL_Surface* g_screen = NULL;
+
+// Blocking PIN dialog on g_screen. Returns true and fills pin_out (5 bytes)
+// on confirm, false on cancel.
+static bool run_pin_dialog(const char* title, const char* error, char* pin_out) {
+	if (!g_screen)
+		return false;
+
+	PinDialog_init(title);
+	PinDialog_setError(error);
+
+	bool confirmed = false;
+	while (!app_quit) {
+		GFX_startFrame();
+		PAD_poll();
+		PinDialogResult r = PinDialog_handleInput();
+		if (r.action == PINDIALOG_CONFIRMED) {
+			strcpy(pin_out, r.pin);
+			confirmed = true;
+			break;
+		}
+		if (r.action == PINDIALOG_CANCEL)
+			break;
+		PinDialog_render(g_screen);
+		GFX_flip(g_screen);
+	}
+	PinDialog_quit();
+	PAD_poll();
+	PAD_reset(); // don't leak the confirm/cancel press to the menu underneath
+	return confirmed;
+}
+
+// Blocking full-screen help for Simple Mode. B closes.
+static void show_simple_mode_help(void) {
+	if (!g_screen)
+		return;
+
+	char* help_text =
+		"Simple Mode hides Tools and replaces\n"
+		"Options with Reset in-game.\n"
+		"\n"
+		"Settings stays on the home screen,\n"
+		"protected by a PIN set when enabling\n"
+		"Simple Mode.\n"
+		"\n"
+		"Forgot the PIN? On the SD card, delete:\n"
+		".userdata/shared/enable-simple-mode";
+
+	while (!app_quit) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_B))
+			break;
+		GFX_clear(g_screen);
+		UI_renderMenuBar(g_screen, "Settings | Simple Mode");
+		GFX_blitMessage(font.small, help_text, g_screen,
+						&(SDL_Rect){SCALE1(PADDING), 0,
+									g_screen->w - SCALE1(PADDING * 2), g_screen->h});
+		UI_renderButtonHintBar(g_screen, (char*[]){"B", "CLOSE", NULL});
+		GFX_flip(g_screen);
+	}
+	PAD_poll();
+	PAD_reset(); // don't leak the close press to the menu underneath
+}
+
 // ============================================
 // Simple Mode callbacks
 // ============================================
@@ -1362,10 +1420,26 @@ static int get_simple_mode(void) {
 	return exists((char*)SIMPLE_MODE_PATH) ? 1 : 0;
 }
 static void set_simple_mode(int v) {
-	if (v)
-		touch((char*)SIMPLE_MODE_PATH);
-	else
+	if (v) {
+		if (exists((char*)SIMPLE_MODE_PATH))
+			return; // already on
+
+		char pin[PINDIALOG_PIN_LEN + 1];
+		char confirm[PINDIALOG_PIN_LEN + 1];
+		const char* error = NULL;
+		while (1) {
+			if (!run_pin_dialog("Set Settings PIN", error, pin))
+				return; // cancelled: leave Simple Mode off
+			if (!run_pin_dialog("Confirm Settings PIN", NULL, confirm))
+				return;
+			if (strcmp(pin, confirm) == 0)
+				break;
+			error = "PINs did not match. Try again.";
+		}
+		putFile((char*)SIMPLE_MODE_PATH, pin);
+	} else {
 		unlink(SIMPLE_MODE_PATH);
+	}
 }
 static void reset_simple_mode(void) {
 	unlink(SIMPLE_MODE_PATH);
@@ -1405,8 +1479,6 @@ static void refresh_emulist(void) {
 // ============================================
 // Input Tester
 // ============================================
-
-static SDL_Surface* g_screen = NULL;
 
 static void launch_input_tester(void) {
 	if (g_screen)
@@ -1509,9 +1581,6 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	appearance_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
 		"Use folder background for ROMs", "If enabled, used the emulator background image.",
 		on_off_labels, 2, on_off_values, get_roms_use_folder_bg, set_roms_use_folder_bg, reset_roms_use_folder_bg);
-	appearance_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-		"Show Quickswitcher UI", "Show/hide Quickswitcher UI elements.",
-		on_off_labels, 2, on_off_values, get_show_quickswitcher, set_show_quickswitcher, reset_show_quickswitcher);
 	appearance_items[idx++] = (SettingItem)ITEM_BUTTON_INIT(
 		"Bootlogo", "Change the device boot logo.",
 		launch_bootlogo);
@@ -1762,12 +1831,9 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	simple_mode_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
 		"Simple Mode", "Enable simplified menu for children or casual users.",
 		on_off_labels, 2, on_off_values, get_simple_mode, set_simple_mode, reset_simple_mode);
-	simple_mode_items[idx++] = (SettingItem)ITEM_STATIC_INIT(
-		"Hides Tools and replaces Options with Reset in-game.", "", NULL);
-	simple_mode_items[idx++] = (SettingItem)ITEM_STATIC_INIT(
-		"Settings is hidden in Quick Menu when enabled.", "", NULL);
-	simple_mode_items[idx++] = (SettingItem)ITEM_STATIC_INIT(
-		"To access settings: In Quick Menu, press L2+R2.", "", NULL);
+	simple_mode_items[idx++] = (SettingItem)ITEM_BUTTON_INIT(
+		"How it works", "Explains Simple Mode and PIN recovery.",
+		show_simple_mode_help);
 	init_page(&simple_mode_page, "Settings | Simple Mode", simple_mode_items, idx, 0);
 
 	// ============================

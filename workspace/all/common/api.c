@@ -1,6 +1,5 @@
 #include "defines.h"
 #include "api.h"
-#include "ui_components.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -1709,7 +1708,7 @@ int GFX_blitHardwareIndicator(SDL_Surface* dst, int x, int y, IndicatorType indi
 	int setting_max;
 	int asset;
 
-	int ow = SCALE1(PILL_SIZE + SETTINGS_WIDTH + 10 + 4);
+	int ow = SCALE1(HW_INDICATOR_WIDTH);
 	int ox = x;
 	int oy = y;
 
@@ -1777,7 +1776,7 @@ int GFX_blitHardwareGroup(SDL_Surface* dst, IndicatorType show_setting) {
 
 	if (show_setting && !GetHDMI()) {
 		// Use the helper function to render the indicator at the standard position
-		ow = SCALE1(PILL_SIZE + SETTINGS_WIDTH + 10 + 4);
+		ow = SCALE1(HW_INDICATOR_WIDTH);
 		ox = dst->w - SCALE1(PADDING) - ow;
 		GFX_blitHardwareIndicator(dst, ox, 0, (IndicatorType)show_setting);
 	} else {
@@ -3094,11 +3093,6 @@ int PAD_longPressedMenu(uint32_t now) {
 	return 0;
 }
 
-int PAD_quickMenuPressed(uint32_t now) {
-	(void)now;
-	return 0; // Quick menu handled by trimui_osdd via keymon on all platforms
-}
-
 ///////////////////////////////
 static struct VIB_Context {
 	int initialized;
@@ -3606,6 +3600,11 @@ FALLBACK_IMPLEMENTATION void PLAT_setLedEffectSpeed(LightSettings* led) {}
 void LEDS_setProfile(int profile) {
 	if (lights_initialized == 0)
 		return;
+
+	// The OSD LED toggle owns this flag: while it exists the user has
+	// explicitly switched the LEDs off, so no profile may relight them.
+	if (profile != LIGHT_PROFILE_OFF && access(LEDS_DISABLED_PATH, F_OK) == 0)
+		profile = LIGHT_PROFILE_OFF;
 
 	LightSettings* new_lights = NULL;
 	bool indicator = true;
