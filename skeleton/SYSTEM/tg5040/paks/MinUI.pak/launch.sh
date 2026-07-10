@@ -110,8 +110,11 @@ if [ "$TRIMUI_MODEL" = "Trimui Brick" ]; then
 	echo 0 > /sys/class/led_anim/max_scale_f1f2
 fi
 
-# start stock gpio input daemon
-trimui_inputd &
+# start the device's own stock gpio input daemon, by absolute path: Smart Pro
+# and Brick wire their buttons differently, so a single vendored inputd can't
+# serve both (v1.2.0 shipped one and broke all Smart Pro buttons). The tg5040
+# OSD trigger is keymon's MENU long-press, which the stock inputd fully covers.
+/usr/trimui/bin/trimui_inputd &
 
 echo schedutil > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 echo 408000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
