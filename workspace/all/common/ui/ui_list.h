@@ -236,6 +236,7 @@ typedef struct {
 	MenuItemBadgeCallback render_badge;		// Optional: render right-side badge
 	MenuItemIconCallback get_icon;			// Optional: get icon for item
 	MenuItemCustomTextCallback render_text; // Optional: custom text rendering
+	bool hide_controls_hint;				// Optional: omit START/CONTROLS from hint bar
 } SimpleMenuConfig;
 
 // Render a simple menu with optional customization callbacks

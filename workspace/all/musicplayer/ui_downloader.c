@@ -246,7 +246,6 @@ void render_downloader_queue(SDL_Surface* screen, IndicatorType show_setting,
 	if (qcount == 0) {
 		downloader_queue_clear_scroll();
 		UI_renderEmptyState(screen, "Queue is empty", "Search and add songs to download", NULL);
-		UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", NULL});
 		return;
 	}
 
@@ -371,12 +370,8 @@ void render_downloader_queue(SDL_Surface* screen, IndicatorType show_setting,
 	// Scroll indicators
 	UI_renderScrollIndicators(screen, *queue_scroll, layout.items_per_page, qcount);
 
-	// Button hints
-	if (qcount > 0) {
-		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "X", "REMOVE", "B", "BACK", NULL});
-	} else {
-		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", NULL});
-	}
+	// Button hints (queue is non-empty here; empty case returned above)
+	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "X", "REMOVE", "B", "BACK", NULL});
 }
 
 // Check if YouTube results list has active scrolling (for refresh optimization)

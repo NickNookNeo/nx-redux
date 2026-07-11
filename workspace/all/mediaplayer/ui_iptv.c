@@ -54,9 +54,7 @@ void render_iptv_empty(SDL_Surface* screen, IndicatorType show_setting) {
 	GFX_clear(screen);
 	UI_renderMenuBar(screen, "Online TV");
 	UI_renderEmptyState(screen, "No channels saved",
-						"Press Y to manage channels", NULL);
-
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "Y", "MANAGE", "B", "BACK", NULL});
+						"Press Y to manage channels", "MANAGE");
 }
 
 // Render curated country list for browsing

@@ -1,5 +1,5 @@
 ---
-name: Release NextUI
+name: Release NX Redux
 
 # yamllint disable-line rule:truthy
 on:

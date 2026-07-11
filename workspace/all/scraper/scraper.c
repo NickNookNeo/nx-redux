@@ -739,6 +739,7 @@ static void renderMainMenu(void) {
 		.get_label = NULL,
 		.get_icon = NULL,
 		.render_text = NULL,
+		.hide_controls_hint = true,
 	};
 	UI_renderSimpleMenu(screen, menu_selected, &config);
 	GFX_flip(screen);
