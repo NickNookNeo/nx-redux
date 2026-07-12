@@ -480,6 +480,12 @@ void GameList_runContextAction(int id) {
 		Content_invalidateEmulist();
 		reloadDirectoryAt(0, root_sel);
 		break;
+	case 2: { // Tools (root)
+		char tools_path[MAX_PATH];
+		snprintf(tools_path, sizeof(tools_path), "%s/Tools/%s", SDCARD_PATH, PLATFORM);
+		openDirectory(tools_path, 0);
+		break;
+	}
 	case 10: // Remove Game (Recently Played)
 		if (entry) {
 			Recents_removeAt(sel);
@@ -546,6 +552,14 @@ GameListResult GameList_handleInput(unsigned long now, int currentScreen,
 			strncpy(items[idx].label, "Refresh Roms", CONTEXTMENU_MAX_TEXT);
 			items[idx].id = 1;
 			idx++;
+			// Tools must stay reachable here even when "Show Tools" is off:
+			// Settings.pak lives inside Tools, so hiding Tools would
+			// otherwise lock the user out of re-enabling it.
+			if (!gl_simple_mode && hasTools()) {
+				strncpy(items[idx].label, "Tools", CONTEXTMENU_MAX_TEXT);
+				items[idx].id = 2;
+				idx++;
+			}
 		} else if (exactMatch(top->path, FAUX_RECENT_PATH)) {
 			// Recently Played
 			if (entry) {
