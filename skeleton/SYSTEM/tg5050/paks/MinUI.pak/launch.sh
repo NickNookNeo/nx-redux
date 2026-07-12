@@ -136,16 +136,24 @@ keymon.elf & # &> $SDCARD_PATH/keymon.txt &
 # card is the source of truth for the OSD (daemon binary, assets, toast
 # scripts, every widget). trimui_osdd has /usr/trimui/osd hardcoded in the
 # closed-source binary, so it can't read from the SD card directly; instead
-# the tree (~1MB) is copied over at every boot, which also makes updates
-# take effect automatically. regular.ttf (16MB CJK font) is deliberately not
-# shipped — the firmware's copy is used (files are only overwritten, never
-# deleted).
+# the tree (~1MB) is copied over, so SD updates take effect on the next
+# boot. regular.ttf (16MB CJK font) is deliberately not shipped — the
+# firmware's copy is used (files are only overwritten, never deleted).
 mount -o remount,rw /
 OSD_DST="/usr/trimui/osd"
 OSD_SRC="$SYSTEM_PATH/osd"
-cp -r "$OSD_SRC/." "$OSD_DST/"
-chmod +x "$OSD_DST/trimui_osdd" "$OSD_DST"/*.sh \
-    "$OSD_DST"/widgets/*/*.sh "$OSD_DST"/widgets/app_music/pic2argb 2>/dev/null
+# Only copy when the SD tree actually changed: hash the source tree (file
+# contents + paths) and compare against the stamp left by the previous sync.
+# An empty hash (md5sum unavailable) falls back to copying every boot and
+# never writes a stamp.
+OSD_STAMP="$OSD_DST/.nx_osd_stamp"
+OSD_HASH=$(find "$OSD_SRC" -type f | sort | xargs md5sum 2>/dev/null | md5sum | cut -d' ' -f1)
+if [ -z "$OSD_HASH" ] || [ "$OSD_HASH" != "$(cat "$OSD_STAMP" 2>/dev/null)" ]; then
+	cp -r "$OSD_SRC/." "$OSD_DST/"
+	chmod +x "$OSD_DST/trimui_osdd" "$OSD_DST"/*.sh \
+	    "$OSD_DST"/widgets/*/*.sh "$OSD_DST"/widgets/app_music/pic2argb 2>/dev/null
+	[ -n "$OSD_HASH" ] && echo "$OSD_HASH" > "$OSD_STAMP"
+fi
 
 # Start OSD overlay daemon (system-wide quick menu)
 cd "$OSD_DST" && ./trimui_osdd &
