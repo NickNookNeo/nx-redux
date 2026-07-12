@@ -24,10 +24,10 @@
 
 // Network info structure for scan results
 typedef struct {
-    char ssid[WIFI_DIRECT_SSID_MAX];
-    int rssi;           // Signal strength (negative dBm, e.g., -50 is strong, -90 is weak)
-    bool is_secured;    // true if WPA/WPA2/WEP
-    bool has_saved_creds; // true if we have saved credentials for this network
+	char ssid[WIFI_DIRECT_SSID_MAX];
+	int rssi;			  // Signal strength (negative dBm, e.g., -50 is strong, -90 is weak)
+	bool is_secured;	  // true if WPA/WPA2/WEP
+	bool has_saved_creds; // true if we have saved credentials for this network
 } WIFI_direct_network_t;
 
 //////////////////////////////////

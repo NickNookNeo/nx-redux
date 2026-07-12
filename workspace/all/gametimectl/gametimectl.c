@@ -1,9 +1,7 @@
 // heavily modified from the Onion original: https://github.com/OnionUI/Onion/blob/main/src/playActivity/playActivity.c
 #include <stdio.h>
 
-#include "defines.h"
 #include "api.h"
-#include "utils.h"
 
 #include <sqlite3.h>
 #include <gametimedb.h>

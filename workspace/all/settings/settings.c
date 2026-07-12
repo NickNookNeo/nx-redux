@@ -8,6 +8,7 @@
 #include "msettings.h"
 #include "defines.h"
 #include "api.h"
+#include "config.h"
 #include "utils.h"
 #include "settings_menu.h"
 #include "settings_wifi.h"

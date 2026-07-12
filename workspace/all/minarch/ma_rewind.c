@@ -1,6 +1,5 @@
 #include "ma_internal.h"
 #include "ma_rewind.h"
-#include "ma_saves.h"
 #include <lz4.h>
 
 // rewind implementation constants

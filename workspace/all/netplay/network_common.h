@@ -16,21 +16,21 @@
 
 // Configuration for TCP socket setup
 typedef struct {
-    int buffer_size;           // SO_SNDBUF/SO_RCVBUF size (bytes)
-    int recv_timeout_us;       // SO_RCVTIMEO in microseconds (0 = none)
-    bool enable_keepalive;     // SO_KEEPALIVE
+	int buffer_size;	   // SO_SNDBUF/SO_RCVBUF size (bytes)
+	int recv_timeout_us;   // SO_RCVTIMEO in microseconds (0 = none)
+	bool enable_keepalive; // SO_KEEPALIVE
 } NET_TCPConfig;
 
 // Configuration for hotspot SSID generation
 typedef struct {
-    const char* prefix;        // Use LINK_HOTSPOT_SSID_PREFIX for all link types
-    uint32_t seed;             // Random seed (typically game_crc ^ time)
+	const char* prefix; // Use LINK_HOTSPOT_SSID_PREFIX for all link types
+	uint32_t seed;		// Random seed (typically game_crc ^ time)
 } NET_HotspotConfig;
 
 // Rate-limited broadcast timer
 typedef struct {
-    struct timeval last_broadcast;
-    int interval_us;
+	struct timeval last_broadcast;
+	int interval_us;
 } NET_BroadcastTimer;
 
 // Maximum game name length for discovery
@@ -42,21 +42,21 @@ typedef struct {
 
 // Generic discovery packet (wire format)
 typedef struct __attribute__((packed)) {
-    uint32_t magic;
-    uint32_t protocol_version;
-    uint32_t game_crc;
-    uint16_t port;
-    char game_name[NET_MAX_GAME_NAME];
-    char link_mode[NET_MAX_LINK_MODE];  // Link mode for compatibility check (e.g., "mul_poke", "rfu")
+	uint32_t magic;
+	uint32_t protocol_version;
+	uint32_t game_crc;
+	uint16_t port;
+	char game_name[NET_MAX_GAME_NAME];
+	char link_mode[NET_MAX_LINK_MODE]; // Link mode for compatibility check (e.g., "mul_poke", "rfu")
 } NET_DiscoveryPacket;
 
 // Generic host info (for discovered hosts list)
 typedef struct {
-    char game_name[NET_MAX_GAME_NAME];
-    char host_ip[16];
-    uint16_t port;
-    uint32_t game_crc;
-    char link_mode[NET_MAX_LINK_MODE];  // Host's link mode for compatibility check
+	char game_name[NET_MAX_GAME_NAME];
+	char host_ip[16];
+	uint16_t port;
+	uint32_t game_crc;
+	char link_mode[NET_MAX_LINK_MODE]; // Host's link mode for compatibility check
 } NET_HostInfo;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -162,9 +162,9 @@ bool NET_shouldBroadcast(NET_BroadcastTimer* timer);
  * @param link_mode Link mode string (e.g., "mul_poke", "rfu") - can be NULL
  */
 void NET_sendDiscoveryBroadcast(int udp_fd, uint32_t magic, uint32_t protocol_version,
-                                 uint32_t game_crc, uint16_t tcp_port,
-                                 uint16_t discovery_port, const char* game_name,
-                                 const char* link_mode);
+								uint32_t game_crc, uint16_t tcp_port,
+								uint16_t discovery_port, const char* game_name,
+								const char* link_mode);
 
 /**
  * Receive and deduplicate discovery responses
@@ -176,7 +176,7 @@ void NET_sendDiscoveryBroadcast(int udp_fd, uint32_t magic, uint32_t protocol_ve
  * @return Updated host count
  */
 int NET_receiveDiscoveryResponses(int udp_fd, uint32_t expected_magic,
-                                   NET_HostInfo* hosts, int* current_count,
-                                   int max_hosts);
+								  NET_HostInfo* hosts, int* current_count,
+								  int max_hosts);
 
 #endif /* NETWORK_COMMON_H */

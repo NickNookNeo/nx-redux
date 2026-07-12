@@ -13,23 +13,19 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
-#include "minarch.h"
-#include "netplay.h"
-#include "gbalink.h"
-#include "gblink.h"
 
 // Link type enum for unified handling of all link types
 typedef enum {
-    LINK_TYPE_NETPLAY,
-    LINK_TYPE_GBALINK,
-    LINK_TYPE_GBLINK
+	LINK_TYPE_NETPLAY,
+	LINK_TYPE_GBALINK,
+	LINK_TYPE_GBLINK
 } LinkType;
 
 // Result of checking core link support capabilities
 typedef struct {
-    bool show_netplay;   // true if any link type is supported
-    bool has_netpacket;  // true if GBALink (netpacket interface) is supported
-    bool has_gblink;     // true if GBLink (gambatte network) is supported
+	bool show_netplay;	// true if any link type is supported
+	bool has_netpacket; // true if GBALink (netpacket interface) is supported
+	bool has_gblink;	// true if GBLink (gambatte network) is supported
 } CoreLinkSupport;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -246,14 +242,13 @@ void showTimedConfirmation(const char* message, int duration_ms);
  * Format and display link status message
  */
 void showLinkStatusMessage(
-    const char* title,
-    const char* mode_str,
-    const char* conn_str,
-    const char* state_str,
-    const char* code,        // NULL if not hotspot host
-    const char* local_ip,
-    const char* status_msg
-);
+	const char* title,
+	const char* mode_str,
+	const char* conn_str,
+	const char* state_str,
+	const char* code, // NULL if not hotspot host
+	const char* local_ip,
+	const char* status_msg);
 
 /**
  * Render link menu UI
@@ -264,12 +259,11 @@ void showLinkStatusMessage(
  * @param getHint Optional hint function, can be NULL
  */
 void renderLinkMenuUI(
-    const char* title,
-    char** items,
-    int item_count,
-    int selected,
-    const char* (*getHint)(void)
-);
+	const char* title,
+	char** items,
+	int item_count,
+	int selected,
+	const char* (*getHint)(void));
 
 //////////////////////////////////////////////////////////////////////////////
 // Status & Menu Functions

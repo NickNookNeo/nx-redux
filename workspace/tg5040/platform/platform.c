@@ -16,9 +16,9 @@
 #include "defines.h"
 #include "platform.h"
 #include "api.h"
+#include "config.h"
 #include "utils.h"
 
-#include "scaler.h"
 #include <time.h>
 #include <pthread.h>
 
@@ -150,16 +150,6 @@ static struct WIFI_connection connection = {
 	.ip = {0},
 	.ssid = {0},
 };
-
-static inline void connection_reset(struct WIFI_connection* connection_info) {
-	connection_info->valid = false;
-	connection_info->freq = -1;
-	connection_info->link_speed = -1;
-	connection_info->noise = -1;
-	connection_info->rssi = -1;
-	*connection_info->ip = '\0';
-	*connection_info->ssid = '\0';
-}
 
 static bool bluetoothConnected = false;
 
@@ -521,7 +511,7 @@ void PLAT_initLeds(LightSettings* lights) {
 				uint32_t temp_color;
 				char filename[255];
 
-				if (sscanf(line, "filename=%s", &filename) == 1) {
+				if (sscanf(line, "filename=%254s", filename) == 1) {
 					strncpy(lights[current_light].filename, filename, 255 - 1);
 					continue;
 				}

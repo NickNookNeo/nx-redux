@@ -750,13 +750,13 @@ static void render_screen(void) {
 	case PM_STATE_INSTALL_DONE:
 		UI_renderMenuBar(screen, "PortMaster");
 		UI_renderCenteredMessage(screen, "Installation complete!");
-		UI_renderButtonHintBar(screen, (char*[]){"A", "LAUNCH", "B", "BACK", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "LAUNCH", NULL});
 		break;
 
 	case PM_STATE_INSTALL_FAILED:
 		UI_renderMenuBar(screen, "PortMaster");
 		UI_renderCenteredMessage(screen, "Installation failed. Check WiFi and try again.");
-		UI_renderButtonHintBar(screen, (char*[]){"A", "RETRY", "B", "BACK", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "RETRY", NULL});
 		break;
 
 	case PM_STATE_INSTALLED:
@@ -780,9 +780,9 @@ static void render_screen(void) {
 
 		bool is_layout = (menu_selected == MENU_LAYOUT);
 		UI_renderButtonHintBar(screen, (char*[]){
+										   "B", "EXIT",
 										   is_layout ? "LEFT/RIGHT" : "A",
 										   is_layout ? "CHANGE" : "OPEN",
-										   "B", "EXIT",
 										   NULL});
 		break;
 	}

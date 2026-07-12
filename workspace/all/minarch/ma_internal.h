@@ -14,8 +14,6 @@
 #include "libretro.h"
 #include "defines.h"
 #include "api.h"
-#include "config.h"
-#include "utils.h"
 
 struct Core {
 	int initialized;

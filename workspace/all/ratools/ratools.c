@@ -8,7 +8,6 @@
 #include "defines.h"
 #include "api.h"
 #include "config.h"
-#include "utils.h"
 #include "settings_menu.h"
 #include "ui_list.h"
 #include "ui_splash.h"
@@ -116,7 +115,9 @@ static const char* get_lastsync_display(void) {
 	return lastsync_buf;
 }
 
-static void on_prefetch(void) { RATPrefetch_run(g_screen); }
+static void on_prefetch(void) {
+	RATPrefetch_run(g_screen);
+}
 
 // Blocking confirm dialog: A confirms, B cancels. Returns true on confirm.
 static bool ra_confirm(const char* title, const char* subtitle) {
@@ -124,8 +125,14 @@ static bool ra_confirm(const char* title, const char* subtitle) {
 	while (1) {
 		GFX_startFrame();
 		PAD_poll();
-		if (PAD_justPressed(BTN_A)) { PAD_reset(); return true; }
-		if (PAD_justPressed(BTN_B)) { PAD_reset(); return false; }
+		if (PAD_justPressed(BTN_A)) {
+			PAD_reset();
+			return true;
+		}
+		if (PAD_justPressed(BTN_B)) {
+			PAD_reset();
+			return false;
+		}
 		if (dirty) {
 			GFX_clear(g_screen);
 			UI_renderConfirmDialog(g_screen, title, subtitle);
@@ -154,9 +161,15 @@ static void on_reset_all(void) {
 // ============================================
 // RA settings callbacks (moved from settings.c)
 // ============================================
-static int get_ra_enable(void) { return CFG_getRAEnable() ? 1 : 0; }
-static void set_ra_enable(int v) { CFG_setRAEnable(v != 0); }
-static void reset_ra_enable(void) { CFG_setRAEnable(CFG_DEFAULT_RA_ENABLE); }
+static int get_ra_enable(void) {
+	return CFG_getRAEnable() ? 1 : 0;
+}
+static void set_ra_enable(int v) {
+	CFG_setRAEnable(v != 0);
+}
+static void reset_ra_enable(void) {
+	CFG_setRAEnable(CFG_DEFAULT_RA_ENABLE);
+}
 
 // Hardcore mode is deliberately not offered: nx-redux is not an
 // RA-approved hardcore-compliant emulator, so hardcore unlocks are
@@ -216,21 +229,45 @@ static const char* get_ra_status(void) {
 	return "Not authenticated";
 }
 
-static int get_ra_show_notifications(void) { return CFG_getRAShowNotifications() ? 1 : 0; }
-static void set_ra_show_notifications(int v) { CFG_setRAShowNotifications(v != 0); }
-static void reset_ra_show_notifications(void) { CFG_setRAShowNotifications(CFG_DEFAULT_RA_SHOW_NOTIFICATIONS); }
+static int get_ra_show_notifications(void) {
+	return CFG_getRAShowNotifications() ? 1 : 0;
+}
+static void set_ra_show_notifications(int v) {
+	CFG_setRAShowNotifications(v != 0);
+}
+static void reset_ra_show_notifications(void) {
+	CFG_setRAShowNotifications(CFG_DEFAULT_RA_SHOW_NOTIFICATIONS);
+}
 
-static int get_ra_notify_duration(void) { return CFG_getRANotificationDuration(); }
-static void set_ra_notify_duration(int val) { CFG_setRANotificationDuration(val); }
-static void reset_ra_notify_duration(void) { CFG_setRANotificationDuration(CFG_DEFAULT_RA_NOTIFICATION_DURATION); }
+static int get_ra_notify_duration(void) {
+	return CFG_getRANotificationDuration();
+}
+static void set_ra_notify_duration(int val) {
+	CFG_setRANotificationDuration(val);
+}
+static void reset_ra_notify_duration(void) {
+	CFG_setRANotificationDuration(CFG_DEFAULT_RA_NOTIFICATION_DURATION);
+}
 
-static int get_ra_progress_duration(void) { return CFG_getRAProgressNotificationDuration(); }
-static void set_ra_progress_duration(int val) { CFG_setRAProgressNotificationDuration(val); }
-static void reset_ra_progress_duration(void) { CFG_setRAProgressNotificationDuration(CFG_DEFAULT_RA_PROGRESS_NOTIFICATION_DURATION); }
+static int get_ra_progress_duration(void) {
+	return CFG_getRAProgressNotificationDuration();
+}
+static void set_ra_progress_duration(int val) {
+	CFG_setRAProgressNotificationDuration(val);
+}
+static void reset_ra_progress_duration(void) {
+	CFG_setRAProgressNotificationDuration(CFG_DEFAULT_RA_PROGRESS_NOTIFICATION_DURATION);
+}
 
-static int get_ra_sort_order(void) { return CFG_getRAAchievementSortOrder(); }
-static void set_ra_sort_order(int val) { CFG_setRAAchievementSortOrder(val); }
-static void reset_ra_sort_order(void) { CFG_setRAAchievementSortOrder(CFG_DEFAULT_RA_ACHIEVEMENT_SORT_ORDER); }
+static int get_ra_sort_order(void) {
+	return CFG_getRAAchievementSortOrder();
+}
+static void set_ra_sort_order(int val) {
+	CFG_setRAAchievementSortOrder(val);
+}
+static void reset_ra_sort_order(void) {
+	CFG_setRAAchievementSortOrder(CFG_DEFAULT_RA_ACHIEVEMENT_SORT_ORDER);
+}
 
 static void reset_ra_page(void) {
 	reset_ra_enable();

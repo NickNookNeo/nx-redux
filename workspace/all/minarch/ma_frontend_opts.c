@@ -1,4 +1,5 @@
 #include "ma_internal.h"
+#include "utils.h"
 #include "ma_frontend_opts.h"
 #include "notification.h"
 #include "ui_buttonhintbar.h"
@@ -9,11 +10,7 @@
 #include "ma_config.h"
 #include "ma_options.h"
 #include "ma_cheats.h"
-#include "ma_saves.h"
-#include "ma_video.h"
 #include "ma_shaders.h"
-#include "ma_input.h"
-#include "ma_rewind.h"
 
 int Menu_messageWithFont(char* message, char** pairs, TTF_Font* f) {
 	GFX_setMode(MODE_MAIN);

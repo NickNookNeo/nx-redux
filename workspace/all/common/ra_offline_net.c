@@ -11,7 +11,7 @@ typedef struct {
 	const char* token;
 	RA_SyncProgressFn user_progress;
 	void* user_userdata;
-	uint32_t last_score;          // freshest totals seen in award responses
+	uint32_t last_score;		  // freshest totals seen in award responses
 	uint32_t last_softcore_score; // (0/0 = server never reported them)
 } RA_NetSyncCtx;
 

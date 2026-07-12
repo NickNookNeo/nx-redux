@@ -80,16 +80,20 @@ static void test_cache_classification(void) {
 }
 
 static int stub_submit_ok(const RA_PendingUnlock* e, uint32_t secs, void* ud) {
-	(void)e; (void)ud;
+	(void)e;
+	(void)ud;
 	assert(secs >= 1);
 	return 0;
 }
 static int stub_submit_fail_777(const RA_PendingUnlock* e, uint32_t secs, void* ud) {
-	(void)secs; (void)ud;
+	(void)secs;
+	(void)ud;
 	return (e->achievement_id == 777) ? -1 : 0;
 }
 static int stub_submit_fail_all(const RA_PendingUnlock* e, uint32_t secs, void* ud) {
-	(void)e; (void)secs; (void)ud;
+	(void)e;
+	(void)secs;
+	(void)ud;
 	return -1;
 }
 
@@ -105,7 +109,9 @@ static void test_offline_handling(void) {
 	const char* sess = "{\"Success\":true,\"Unlocks\":[{\"ID\":1,\"When\":1000}],\"HardcoreUnlocks\":[]}";
 	RA_Offline_cacheResponse("r=startsession&u=bob&t=tok&g=1446", sess, strlen(sess));
 
-	char* body; size_t len; int status;
+	char* body;
+	size_t len;
+	int status;
 
 	// online mode: never handles
 	assert(!RA_Offline_handleRequest("r=ping&u=bob", &body, &len, &status));
@@ -160,8 +166,8 @@ static void test_offline_handling(void) {
 
 	// startsession: cached body merged with journaled unlock
 	assert(RA_Offline_handleRequest("r=startsession&u=bob&t=tok&g=1446", &body, &len, &status));
-	assert(strstr(body, "\"ID\":777"));        // journaled entry injected
-	assert(strstr(body, "\"ID\":1"));          // original server unlock kept
+	assert(strstr(body, "\"ID\":777")); // journaled entry injected
+	assert(strstr(body, "\"ID\":1"));	// original server unlock kept
 	free(body);
 	// startsession with no cache at all -> valid synthesized body w/ journal merge
 	// (different game: no journal entries for it either)
@@ -169,7 +175,7 @@ static void test_offline_handling(void) {
 	free(body); // sets current hash to bbbb2222 (cache miss -> failure body, still tracks hash)
 	assert(RA_Offline_handleRequest("r=startsession&u=bob&t=tok&g=555", &body, &len, &status));
 	assert(strstr(body, "\"Success\":true"));
-	assert(!strstr(body, "\"ID\":777"));   // game 555's session must not inherit game aaaa1111's journal entry
+	assert(!strstr(body, "\"ID\":777")); // game 555's session must not inherit game aaaa1111's journal entry
 	free(body);
 
 	// unhandled request kinds -> synthesized failure
@@ -184,12 +190,18 @@ static void test_offline_handling(void) {
 static void test_sync(void) {
 	reset_root();
 	RA_Offline_setMode(RA_NET_OFFLINE);
-	char* body; size_t len; int status;
+	char* body;
+	size_t len;
+	int status;
 	// three pending unlocks: two for bob, one for alice
-	RA_Offline_handleRequest("r=achievementsets&u=bob&t=tok&m=cccc3333", &body, &len, &status); free(body);
-	RA_Offline_handleRequest("r=awardachievement&u=bob&t=tok&a=777&h=0&m=cccc3333", &body, &len, &status); free(body);
-	RA_Offline_handleRequest("r=awardachievement&u=bob&t=tok&a=888&h=0&m=cccc3333", &body, &len, &status); free(body);
-	RA_Offline_handleRequest("r=awardachievement&u=alice&t=tok&a=999&h=0&m=cccc3333", &body, &len, &status); free(body);
+	RA_Offline_handleRequest("r=achievementsets&u=bob&t=tok&m=cccc3333", &body, &len, &status);
+	free(body);
+	RA_Offline_handleRequest("r=awardachievement&u=bob&t=tok&a=777&h=0&m=cccc3333", &body, &len, &status);
+	free(body);
+	RA_Offline_handleRequest("r=awardachievement&u=bob&t=tok&a=888&h=0&m=cccc3333", &body, &len, &status);
+	free(body);
+	RA_Offline_handleRequest("r=awardachievement&u=alice&t=tok&a=999&h=0&m=cccc3333", &body, &len, &status);
+	free(body);
 	RA_Offline_setMode(RA_NET_ONLINE);
 	assert(RA_Offline_pendingCount() == 3);
 	assert(RA_Offline_lastSyncTime() == 0);
@@ -217,8 +229,8 @@ static void test_sync(void) {
 	RA_Offline_setMode(RA_NET_ONLINE);
 	assert(RA_Offline_pendingCount() == 2); // alice's 999 + bob's new 555
 	assert(RA_Offline_sync("bob", now + 30, stub_submit_fail_all, NULL, NULL) == 0);
-	assert(RA_Offline_pendingCount() == 2);          // nothing dropped
-	assert(RA_Offline_lastSyncTime() == now + 20);   // lastsync NOT advanced
+	assert(RA_Offline_pendingCount() == 2);		   // nothing dropped
+	assert(RA_Offline_lastSyncTime() == now + 20); // lastsync NOT advanced
 
 	// unparseable journal lines survive a rewrite verbatim
 	{
@@ -273,7 +285,9 @@ static void test_corrupt_cache(void) {
 	}
 
 	RA_Offline_setMode(RA_NET_OFFLINE);
-	char* body; size_t len; int status;
+	char* body;
+	size_t len;
+	int status;
 
 	// corrupt login.json -> "no cached login" failure, not the garbage
 	assert(RA_Offline_handleRequest("r=login2&u=bob&t=tok", &body, &len, &status));
@@ -303,7 +317,9 @@ static void test_confirmed(void) {
 	reset_root();
 
 	RA_Offline_setMode(RA_NET_OFFLINE);
-	char* body; size_t len; int status;
+	char* body;
+	size_t len;
+	int status;
 	// sets ra_current_hash = dddd4444 (cache miss -> failure body, side effect only)
 	RA_Offline_handleRequest("r=achievementsets&u=carol&t=tok&m=dddd4444", &body, &len, &status);
 	free(body);

@@ -15,10 +15,10 @@
 /////////////////////////////////////////////////////////////////////////////////////////
 
 #include "defines.h"
-#include "platform.h"
 #include "api.h"
-#include "utils.h"
+#include "config.h"
 
+#include <msettings.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <errno.h>

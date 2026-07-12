@@ -1,5 +1,4 @@
 #include "http.h"
-#include "defines.h"
 
 #include <stdio.h>
 #include <stdlib.h>

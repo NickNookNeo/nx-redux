@@ -25,44 +25,44 @@
 
 // Stall/timeout constants - extended for reliability on lossy networks
 // Pokemon games can pause 2+ seconds during save operations
-#define NETPLAY_STALL_TIMEOUT_FRAMES 180      // 3 seconds at 60fps (was 30 frames/500ms)
-#define NETPLAY_STALL_WARNING_FRAMES 60       // 1 second warning before disconnect
-#define NETPLAY_KEEPALIVE_INTERVAL_FRAMES 30  // Send keepalive every 500ms during stall
+#define NETPLAY_STALL_TIMEOUT_FRAMES 180	 // 3 seconds at 60fps (was 30 frames/500ms)
+#define NETPLAY_STALL_WARNING_FRAMES 60		 // 1 second warning before disconnect
+#define NETPLAY_KEEPALIVE_INTERVAL_FRAMES 30 // Send keepalive every 500ms during stall
 
 // Hotspot SSID prefix - use unified prefix for all link types
 #define NETPLAY_HOTSPOT_SSID_PREFIX LINK_HOTSPOT_SSID_PREFIX
 
 typedef enum {
-    NETPLAY_CONN_WIFI = 0,
-    NETPLAY_CONN_HOTSPOT
+	NETPLAY_CONN_WIFI = 0,
+	NETPLAY_CONN_HOTSPOT
 } NetplayConnMethod;
 
 // Input latency frames (to hide network jitter)
 #define NETPLAY_INPUT_LATENCY_FRAMES 2
 
 typedef enum {
-    NETPLAY_OFF = 0,
-    NETPLAY_HOST,
-    NETPLAY_CLIENT
+	NETPLAY_OFF = 0,
+	NETPLAY_HOST,
+	NETPLAY_CLIENT
 } NetplayMode;
 
 typedef enum {
-    NETPLAY_STATE_IDLE = 0,
-    NETPLAY_STATE_WAITING,      // Host waiting for client
-    NETPLAY_STATE_CONNECTING,   // Client connecting to host
-    NETPLAY_STATE_SYNCING,      // Exchanging initial state
-    NETPLAY_STATE_PLAYING,      // Active gameplay
-    NETPLAY_STATE_STALLED,      // Waiting for remote input
-    NETPLAY_STATE_PAUSED,       // Local or remote player has paused (menu open)
-    NETPLAY_STATE_DISCONNECTED,
-    NETPLAY_STATE_ERROR
+	NETPLAY_STATE_IDLE = 0,
+	NETPLAY_STATE_WAITING,	  // Host waiting for client
+	NETPLAY_STATE_CONNECTING, // Client connecting to host
+	NETPLAY_STATE_SYNCING,	  // Exchanging initial state
+	NETPLAY_STATE_PLAYING,	  // Active gameplay
+	NETPLAY_STATE_STALLED,	  // Waiting for remote input
+	NETPLAY_STATE_PAUSED,	  // Local or remote player has paused (menu open)
+	NETPLAY_STATE_DISCONNECTED,
+	NETPLAY_STATE_ERROR
 } NetplayState;
 
 typedef struct {
-    char game_name[NETPLAY_MAX_GAME_NAME];
-    char host_ip[16];
-    uint16_t port;
-    uint32_t game_crc;
+	char game_name[NETPLAY_MAX_GAME_NAME];
+	char host_ip[16];
+	uint16_t port;
+	uint32_t game_crc;
 } NetplayHostInfo;
 
 // Initialize/cleanup
@@ -79,7 +79,7 @@ bool Netplay_checkCoreSupport(const char* core_name);
 int Netplay_startHost(const char* game_name, uint32_t game_crc, const char* hotspot_ip);
 int Netplay_stopHost(void);
 int Netplay_stopHostFast(void);
-void Netplay_stopBroadcast(void);  // Stop UDP broadcast but keep session active
+void Netplay_stopBroadcast(void); // Stop UDP broadcast but keep session active
 int Netplay_connectToHost(const char* ip, uint16_t port);
 void Netplay_disconnect(void);
 
@@ -130,10 +130,10 @@ bool Netplay_needsStateSync(void);
 void Netplay_completeStateSync(void);
 
 // Pause/resume for menu (keeps connection alive)
-void Netplay_pause(void);           // Called when entering menu
-void Netplay_resume(void);          // Called when exiting menu
+void Netplay_pause(void);			// Called when entering menu
+void Netplay_resume(void);			// Called when exiting menu
 void Netplay_pollWhilePaused(void); // Call periodically during menu to maintain connection
-bool Netplay_isPaused(void);        // Check if paused
+bool Netplay_isPaused(void);		// Check if paused
 
 // Main loop update - handles state sync and frame synchronization
 // Returns: 1 = run frame, 0 = skip frame (stalled/syncing)
@@ -143,8 +143,8 @@ typedef bool (*Netplay_SerializeFn)(void* data, size_t size);
 typedef bool (*Netplay_UnserializeFn)(const void* data, size_t size);
 
 int Netplay_update(uint16_t local_input,
-                   Netplay_SerializeSizeFn serialize_size_fn,
-                   Netplay_SerializeFn serialize_fn,
-                   Netplay_UnserializeFn unserialize_fn);
+				   Netplay_SerializeSizeFn serialize_size_fn,
+				   Netplay_SerializeFn serialize_fn,
+				   Netplay_UnserializeFn unserialize_fn);
 
 #endif /* NETPLAY_H */

@@ -4,7 +4,6 @@
 #include "api.h"
 #include "defines.h"
 #include <string.h>
-#include <math.h>
 
 static ContextMenuItem cm_items[CONTEXTMENU_MAX_ITEMS];
 static int cm_count;

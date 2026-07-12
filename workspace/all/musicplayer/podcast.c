@@ -11,7 +11,6 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
-#include <locale.h>
 #include <ctype.h>
 
 #include "defines.h"

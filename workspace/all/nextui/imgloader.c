@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include "defines.h"
 #include "api.h"
-#include "utils.h"
 #include "config.h"
 #include "imgloader.h"
 #include "ui_image.h"

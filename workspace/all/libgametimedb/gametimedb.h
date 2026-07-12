@@ -1,6 +1,8 @@
 #ifndef __gametime_db_h__
 #define __gametime_db_h__
 
+#include <sqlite3.h>
+
 typedef struct ROM ROM;
 typedef struct PlayActivity PlayActivity;
 typedef struct PlayActivities PlayActivities;

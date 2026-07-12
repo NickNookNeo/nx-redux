@@ -1,7 +1,8 @@
 #include "ma_internal.h"
+#include "utils.h"
+#include "netplay.h"
 #include "ma_input.h"
 #include "ma_menu.h"
-#include "ma_saves.h"
 #include "ma_rewind.h"
 #include "ma_config.h"
 #include "netplay_helper.h"
@@ -331,4 +332,6 @@ void Input_init(const struct retro_input_descriptor* vars) {
 }
 
 // Expose the current local button bitmask (netplay input sync in minarch.c).
-uint32_t Input_getButtons(void) { return buttons; }
+uint32_t Input_getButtons(void) {
+	return buttons;
+}

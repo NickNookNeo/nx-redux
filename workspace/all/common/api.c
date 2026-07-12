@@ -2738,7 +2738,7 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void) {
 				id = BTN_ID_HOME;
 			}
 		} else if (event.type == SDL_JOYBUTTONDOWN || event.type == SDL_JOYBUTTONUP) {
-			uint8_t joy = event.jbutton.button;
+			int joy = event.jbutton.button;
 			pressed = event.type == SDL_JOYBUTTONDOWN;
 			// LOG_info("joy event: %i (%i)\n", joy,pressed);
 			if (joy == JOY_UP) {
@@ -2965,7 +2965,7 @@ FALLBACK_IMPLEMENTATION int PLAT_shouldWake(void) {
 				return 1;
 			}
 		} else if (event.type == SDL_JOYBUTTONUP) {
-			uint8_t joy = event.jbutton.button;
+			int joy = event.jbutton.button;
 			if ((BTN_WAKE == BTN_POWER && joy == JOY_POWER) || (BTN_WAKE == BTN_MENU && (joy == JOY_MENU || joy == JOY_MENU_ALT))) {
 				// ignore input while lid is closed
 				if (lid.has_lid && !lid.is_open)
@@ -3719,11 +3719,6 @@ void LEDS_updateLeds(bool indicator_only) {
 
 void LEDS_initLeds() {
 	PLAT_initLeds(lightsDefault);
-
-	if (!lightsDefault) {
-		LOG_error("LEDS_initLeds called but lightsDefault is NULL\n");
-		return;
-	}
 
 	int lightsize = sizeof(lightsDefault) / sizeof(LightSettings);
 	for (int i = 0; i < lightsize; i++) {

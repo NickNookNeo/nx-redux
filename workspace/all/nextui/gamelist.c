@@ -816,12 +816,12 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 			}
 		} else {
 			if (resume.can_resume) {
-				right_pairs[p++] = "X";
-				right_pairs[p++] = "RESUME";
 				if (stack->count > 1) {
 					right_pairs[p++] = "B";
 					right_pairs[p++] = "BACK";
 				}
+				right_pairs[p++] = "X";
+				right_pairs[p++] = "RESUME";
 				right_pairs[p++] = "A";
 				right_pairs[p++] = "OPEN";
 			} else if (stack->count > 1) {

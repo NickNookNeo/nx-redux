@@ -799,7 +799,7 @@ static void renderSystemList(void) {
 	}
 
 	UI_renderScrollIndicators(screen, system_scroll, layout.items_per_page, system_count);
-	UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "OPEN", "Y", "QUEUE ALL", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "Y", "QUEUE ALL", "A", "OPEN", NULL});
 	GFX_flip(screen);
 }
 
@@ -844,7 +844,7 @@ static void renderROMList(void) {
 	}
 
 	UI_renderSettingsPage(screen, &layout, items, rom_count, rom_selected, &rom_scroll, NULL);
-	UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "QUEUE", "Y", "QUEUE ALL", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "Y", "QUEUE ALL", "A", "QUEUE", NULL});
 	GFX_flip(screen);
 }
 

@@ -3,7 +3,6 @@
 
 #include "defines.h"
 #include "types.h"
-#include "content.h"
 #include <stdbool.h>
 
 // Globals shared between launcher and main loop

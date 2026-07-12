@@ -24,7 +24,6 @@
 #include "imgloader.h"
 #include "launcher.h"
 #include "search.h"
-#include "ui_list.h"
 #include "ui_contextmenu.h"
 #include "recents.h"
 #include "types.h"
@@ -176,8 +175,15 @@ int main(int argc, char* argv[]) {
 				startgame = true;
 			if (gsr.screen != SCREEN_GAMESWITCHER) {
 				currentScreen = gsr.screen;
-				if (currentScreen == SCREEN_GAMELIST)
+				if (currentScreen == SCREEN_GAMELIST) {
 					animationdirection = SLIDE_DOWN;
+					// the switcher's readyResume clobbered the shared resume
+					// state; recompute it for the list's own selection so the
+					// hint bar doesn't show a stale RESUME
+					readyResume(top->entries->count > 0
+									? top->entries->items[top->selected]
+									: NULL);
+				}
 			}
 			gsanimdir = gsr.gsanimdir;
 		} else if (currentScreen == SCREEN_SEARCH) {

@@ -399,18 +399,41 @@ void RAT_sortAchievements(RAT_Achievement* achs, int count) {
 
 	int (*compare)(const void*, const void*) = NULL;
 	switch (CFG_getRAAchievementSortOrder()) {
-	case RA_SORT_UNLOCKED_FIRST: compare = rats_cmp_unlocked_first; break;
-	case RA_SORT_DISPLAY_ORDER_FIRST: compare = rats_cmp_display_first; break;
-	case RA_SORT_DISPLAY_ORDER_LAST: compare = rats_cmp_display_last; break;
-	case RA_SORT_WON_BY_MOST: compare = rats_cmp_won_by_most; break;
-	case RA_SORT_WON_BY_LEAST: compare = rats_cmp_won_by_least; break;
-	case RA_SORT_POINTS_MOST: compare = rats_cmp_points_most; break;
-	case RA_SORT_POINTS_LEAST: compare = rats_cmp_points_least; break;
-	case RA_SORT_TITLE_AZ: compare = rats_cmp_title_az; break;
-	case RA_SORT_TITLE_ZA: compare = rats_cmp_title_za; break;
-	case RA_SORT_TYPE_ASC: compare = rats_cmp_type_asc; break;
-	case RA_SORT_TYPE_DESC: compare = rats_cmp_type_desc; break;
-	default: return;
+	case RA_SORT_UNLOCKED_FIRST:
+		compare = rats_cmp_unlocked_first;
+		break;
+	case RA_SORT_DISPLAY_ORDER_FIRST:
+		compare = rats_cmp_display_first;
+		break;
+	case RA_SORT_DISPLAY_ORDER_LAST:
+		compare = rats_cmp_display_last;
+		break;
+	case RA_SORT_WON_BY_MOST:
+		compare = rats_cmp_won_by_most;
+		break;
+	case RA_SORT_WON_BY_LEAST:
+		compare = rats_cmp_won_by_least;
+		break;
+	case RA_SORT_POINTS_MOST:
+		compare = rats_cmp_points_most;
+		break;
+	case RA_SORT_POINTS_LEAST:
+		compare = rats_cmp_points_least;
+		break;
+	case RA_SORT_TITLE_AZ:
+		compare = rats_cmp_title_az;
+		break;
+	case RA_SORT_TITLE_ZA:
+		compare = rats_cmp_title_za;
+		break;
+	case RA_SORT_TYPE_ASC:
+		compare = rats_cmp_type_asc;
+		break;
+	case RA_SORT_TYPE_DESC:
+		compare = rats_cmp_type_desc;
+		break;
+	default:
+		return;
 	}
 	qsort(achs, count, sizeof(RAT_Achievement), compare);
 }

@@ -1,4 +1,5 @@
 #include "gameswitcher.h"
+#include "api.h"
 #include "config.h"
 #include "defines.h"
 #include "imgloader.h"
@@ -164,10 +165,7 @@ void GameSwitcher_render(int lastScreen, SDL_Surface* blackBG,
 		Recents_entryFromRecent(Recents_at(switcher_selected));
 	readyResume(selectedEntry);
 
-	if (resume.can_resume)
-		UI_renderButtonHintBar(screen, (char*[]){"Y", "REMOVE", "A", "RESUME", "B", "BACK", NULL});
-	else
-		UI_renderButtonHintBar(screen, (char*[]){"Y", "REMOVE", "A", "RESUME", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "Y", "REMOVE", "A", "RESUME", NULL});
 
 	if (resume.has_preview) {
 		SDL_Surface* bmp = gs_get_cached_image(resume.preview_path);

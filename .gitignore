@@ -59,3 +59,4 @@ skeleton/EXTRAS/Emus/shared/PortMaster/files/.DS_Store
 docs/
 docs/plans/
 workspace/all/common/tests/build/
+.clangd-shim

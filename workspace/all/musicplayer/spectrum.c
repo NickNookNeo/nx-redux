@@ -2,6 +2,7 @@
 #include "player.h"
 #include "defines.h"
 #include "api.h"
+#include "config.h"
 #include "audio/kiss_fftr.h"
 #include <math.h>
 #include <string.h>

@@ -4,11 +4,13 @@
 #if defined(USE_SDL2)
 
 ///////////////////////////////
+// IWYU pragma: begin_exports
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
 #include <SDL2/SDL_opengl_glext.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
+// IWYU pragma: end_exports
 
 ///////////////////////////////
 
@@ -39,9 +41,11 @@
 
 ///////////////////////////////
 
+// IWYU pragma: begin_exports
 #include <SDL/SDL.h>
 #include <SDL/SDL_image.h>
 #include <SDL/SDL_ttf.h>
+// IWYU pragma: end_exports
 
 ///////////////////////////////
 

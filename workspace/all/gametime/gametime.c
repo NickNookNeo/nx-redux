@@ -4,6 +4,7 @@
 #include <msettings.h>
 
 #include "defines.h"
+#include "config.h"
 #include "api.h"
 #include "ui_buttonhintbar.h"
 #include "ui_confirmdialog.h"

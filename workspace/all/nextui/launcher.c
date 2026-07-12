@@ -9,7 +9,6 @@
 #include "defines.h"
 #include "api.h"
 #include "utils.h"
-#include "config.h"
 #include "types.h"
 #include "recents.h"
 #include "content.h"

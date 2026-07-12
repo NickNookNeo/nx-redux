@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include "utils.h"
 #include "recents.h"
 #include "api.h"
 

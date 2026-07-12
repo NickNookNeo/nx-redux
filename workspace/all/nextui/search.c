@@ -1,4 +1,5 @@
 #include "search.h"
+#include "utils.h"
 #include "config.h"
 #include "content.h"
 #include "defines.h"

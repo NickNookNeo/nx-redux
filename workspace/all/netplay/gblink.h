@@ -29,25 +29,25 @@
 #define GBLINK_MAX_HOSTS 8
 
 typedef enum {
-    GBLINK_OFF = 0,
-    GBLINK_HOST,
-    GBLINK_CLIENT
+	GBLINK_OFF = 0,
+	GBLINK_HOST,
+	GBLINK_CLIENT
 } GBLinkMode;
 
 typedef enum {
-    GBLINK_STATE_IDLE = 0,
-    GBLINK_STATE_WAITING,      // Host waiting for client
-    GBLINK_STATE_CONNECTING,   // Client connecting to host
-    GBLINK_STATE_CONNECTED,    // Connected
-    GBLINK_STATE_DISCONNECTED,
-    GBLINK_STATE_ERROR
+	GBLINK_STATE_IDLE = 0,
+	GBLINK_STATE_WAITING,	 // Host waiting for client
+	GBLINK_STATE_CONNECTING, // Client connecting to host
+	GBLINK_STATE_CONNECTED,	 // Connected
+	GBLINK_STATE_DISCONNECTED,
+	GBLINK_STATE_ERROR
 } GBLinkState;
 
 typedef struct {
-    char game_name[GBLINK_MAX_GAME_NAME];
-    char host_ip[16];
-    uint16_t port;
-    uint32_t game_crc;
+	char game_name[GBLINK_MAX_GAME_NAME];
+	char host_ip[16];
+	uint16_t port;
+	uint32_t game_crc;
 } GBLinkHostInfo;
 
 // Initialize/cleanup
@@ -64,7 +64,7 @@ bool GBLink_checkCoreSupport(const char* core_name);
 int GBLink_startHost(const char* game_name, uint32_t game_crc, const char* hotspot_ip);
 int GBLink_stopHost(void);
 int GBLink_stopHostFast(void);
-void GBLink_stopBroadcast(void);  // Stop UDP broadcast but keep host session active
+void GBLink_stopBroadcast(void); // Stop UDP broadcast but keep host session active
 
 // Client mode (sets gambatte_gb_link_mode = "Network Client" + IP options)
 int GBLink_connectToHost(const char* ip, uint16_t port);
@@ -108,8 +108,5 @@ void GBLink_notifyConnectionFromCore(bool connected);
 // menu/wait loops. Called lazily from GBLink_getState()/GBLink_isConnected() and
 // once per frame from minarch's main loop for in-game disconnect detection.
 void GBLink_pollConnectionState(void);
-
-// Minarch accessor and utility functions
-#include "minarch.h"
 
 #endif /* GBLINK_H */

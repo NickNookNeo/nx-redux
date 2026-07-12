@@ -6,9 +6,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <math.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <signal.h>
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/time.h>

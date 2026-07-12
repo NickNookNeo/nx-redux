@@ -1,8 +1,7 @@
 #include "ma_internal.h"
+#include "utils.h"
 #include "ma_config.h"
 #include "ma_options.h"
-#include "ma_video.h"
-#include "ma_shaders.h"
 #include "ma_rewind.h"
 #include <glob.h>
 #include <dirent.h>
@@ -838,7 +837,7 @@ static int Config_getValue(char* cfg, const char* key, char* out_value, int* loc
 		if ((line_start == cfg || *(line_start - 1) == '\n') && !strncmp(tmp, " = ", 3)) {
 			if (lock != NULL && locked)
 				*lock = 1; // prefixed with a `-` means lock
-			break; // matched
+			break;		   // matched
 		}
 	};
 	if (!tmp)

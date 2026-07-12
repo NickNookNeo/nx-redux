@@ -193,6 +193,35 @@ format:
 
 compile-commands:
 	@echo "Generating compile_commands.json..."
+	# clangd shim: the device build installs rcheevos headers into the
+	# toolchain prefix as <rcheevos/*.h>; recreate that layout with symlinks
+	@mkdir -p .clangd-shim/rcheevos
+	@for h in workspace/all/minarch/rcheevos/src/include/*.h workspace/all/minarch/rcheevos/src/src/rc_libretro.h; do \
+		[ -f "$$h" ] && ln -sf "$(CURDIR)/$$h" .clangd-shim/rcheevos/ || true; \
+	done
+	# clangd shim: Linux-only headers (dbus, libudev, kernel uapi) only exist
+	# in the ARM toolchain sysroot; extract once from the docker image.
+	# Hand-written stubs for glibc APIs live in scripts/clangd/include.
+	@if [ ! -f .clangd-shim/.sysroot-extracted ] && command -v docker >/dev/null 2>&1; then \
+		mkdir -p .clangd-shim/dbus; \
+		docker run --rm -v "$(CURDIR)/.clangd-shim":/out ghcr.io/loveretro/tg5050-toolchain:latest /bin/bash -c \
+			'SYSROOT=/opt/aarch64-nextui-linux-gnu/aarch64-nextui-linux-gnu/libc/usr; \
+			 cp $$SYSROOT/include/dbus-1.0/dbus/*.h /out/dbus/ && \
+			 cp $$SYSROOT/lib/dbus-1.0/include/dbus/dbus-arch-deps.h /out/dbus/ && \
+			 cp $$SYSROOT/include/libudev.h /out/ && \
+			 cp -r $$SYSROOT/include/linux $$SYSROOT/include/asm $$SYSROOT/include/asm-generic $$SYSROOT/include/tinyalsa /out/' \
+			2>/dev/null; \
+		chmod -R u+w .clangd-shim 2>/dev/null; \
+		[ -f .clangd-shim/linux/input.h ] && touch .clangd-shim/.sysroot-extracted || true; \
+	fi
+	# clangd shim: GLES3 headers for emu_overlay_sdl.c (not shipped by any
+	# toolchain or the macOS SDK); fetched from the Khronos registry
+	@if [ ! -f .clangd-shim/GLES3/gl3.h ] && command -v curl >/dev/null 2>&1; then \
+		mkdir -p .clangd-shim/GLES3 .clangd-shim/KHR; \
+		curl -sf --max-time 30 https://registry.khronos.org/OpenGL/api/GLES3/gl3.h -o .clangd-shim/GLES3/gl3.h || true; \
+		curl -sf --max-time 30 https://registry.khronos.org/OpenGL/api/GLES3/gl3platform.h -o .clangd-shim/GLES3/gl3platform.h || true; \
+		curl -sf --max-time 30 https://registry.khronos.org/EGL/api/KHR/khrplatform.h -o .clangd-shim/KHR/khrplatform.h || true; \
+	fi
 	@echo '[' > compile_commands.json
 	@first=1; \
 	git ls-files '*.c' | \
@@ -203,9 +232,16 @@ compile-commands:
 		grep -v 'nextui-music-player' | \
 		grep -v 'nextui-video-player' | \
 		grep -v 'nextui-netplay' | \
+		grep -v 'mediaplayer/include/ffplay' | \
 	while read -r file; do \
 		extra_flags=""; \
 		case "$$file" in \
+			workspace/all/include/*) \
+				extra_flags="\"-I$(CURDIR)/workspace/all/include\", \"-I$(CURDIR)/workspace/all/include/mbedtls_lib\", \"-DMBEDTLS_CONFIG_FILE=<mbedtls_config.h>\", "; \
+				;; \
+			workspace/all/musicplayer/include/libopus/*) \
+				extra_flags="\"-I$(CURDIR)/workspace/all/musicplayer/include/libopus\", \"-I$(CURDIR)/workspace/all/musicplayer/include/libopus/include\", \"-I$(CURDIR)/workspace/all/musicplayer/include/libopus/src\", \"-I$(CURDIR)/workspace/all/musicplayer/include/libopus/celt\", \"-I$(CURDIR)/workspace/all/musicplayer/include/libopus/silk\", \"-I$(CURDIR)/workspace/all/musicplayer/include/libopus/silk/float\", \"-I$(CURDIR)/workspace/all/musicplayer/include/libogg\", \"-DOPUS_BUILD\", \"-DVAR_ARRAYS\", \"-DHAVE_LRINTF\", "; \
+				;; \
 			workspace/all/musicplayer/*) \
 				extra_flags="\"-I$(CURDIR)/workspace/all/musicplayer\", \"-I$(CURDIR)/workspace/all/musicplayer/include\", \"-I$(CURDIR)/workspace/all/musicplayer/include/fdk_aac\", \"-I$(CURDIR)/workspace/all/musicplayer/include/yxml\", \"-I$(CURDIR)/workspace/all/musicplayer/include/libogg\", \"-I$(CURDIR)/workspace/all/musicplayer/include/libopus/include\", \"-I$(CURDIR)/workspace/all/musicplayer/include/opusfile/include\", \"-I$(CURDIR)/workspace/all/include\", \"-I$(CURDIR)/workspace/all/include/mbedtls_lib\", \"-I$(CURDIR)/workspace/all/musicplayer/audio\", \"-DMBEDTLS_CONFIG_FILE=<mbedtls_config.h>\", \"-DOPUS_BUILD\", \"-DHAVE_LRINTF\", \"-DOP_DISABLE_HTTP\", \"-DOP_DISABLE_FLOAT_API\", "; \
 				;; \
@@ -214,10 +250,10 @@ compile-commands:
 				;; \
 		esac; \
 		if [ "$$first" = "1" ]; then first=0; else echo ',' >> compile_commands.json; fi; \
-		printf '  {"directory": "%s", "file": "%s/%s", "arguments": ["clang", "-std=gnu99", "-DUSE_SDL2", "-DUSE_GLES", "-DGL_GLEXT_PROTOTYPES", "-DPLATFORM=\\"tg5040\\"", %s"-I%s/workspace/all/common", "-I%s/workspace/all/common/ui", "-I%s/workspace/all/nextui", "-I%s/workspace/all/minarch", "-I%s/workspace/all/minarch/libretro-common/include", "-I%s/workspace/tg5040/platform", "-I%s/workspace/tg5050/platform", "-I%s/workspace/desktop/platform", "-I%s/workspace/tg5040/libmsettings", "-I%s/workspace/tg5050/libmsettings", "-I%s/workspace/desktop/libmsettings", "-I/opt/homebrew/include", "-c", "%s/%s"]}' \
+		printf '  {"directory": "%s", "file": "%s/%s", "arguments": ["clang", "-std=gnu99", "-DUSE_SDL2", "-DUSE_GLES", "-DGL_GLEXT_PROTOTYPES", "-DPLATFORM=\\"tg5040\\"", "-DHAS_CHEEVOS", "-DRC_CLIENT_SUPPORTS_HASH", "-DRC_DISABLE_LUA", "-DBUILD_DATE=\\"dev\\"", "-DBUILD_HASH=\\"dev\\"", %s"-I%s/workspace/all/common", "-I%s/workspace/all/common/ui", "-I%s/workspace/all/nextui", "-I%s/workspace/all/minarch", "-I%s/workspace/all/minarch/libretro-common/include", "-I%s/workspace/all/netplay", "-I%s/workspace/all/settings", "-I%s/workspace/all/libgametimedb", "-I%s/.clangd-shim", "-I%s/scripts/clangd/include", "-I%s/workspace/tg5040/platform", "-I%s/workspace/tg5050/platform", "-I%s/workspace/desktop/platform", "-I%s/workspace/tg5040/libmsettings", "-I%s/workspace/tg5050/libmsettings", "-I%s/workspace/desktop/libmsettings", "-I/opt/homebrew/include", "-c", "%s/%s"]}' \
 			"$(CURDIR)" "$(CURDIR)" "$$file" \
 			"$$extra_flags" \
-			"$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" \
+			"$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" "$(CURDIR)" \
 			"$(CURDIR)" "$$file" >> compile_commands.json; \
 	done
 	@echo '' >> compile_commands.json

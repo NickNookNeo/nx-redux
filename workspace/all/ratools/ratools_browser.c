@@ -10,7 +10,7 @@
 
 #include "api.h"
 #include "defines.h"
-#include "ra_badges.h" // RA_BADGE_CACHE_DIR only (no ra_badges.c linked)
+#include "ra_badges.h"	// RA_BADGE_CACHE_DIR only (no ra_badges.c linked)
 #include "ra_offline.h" // RA_Offline_getGameRomPath
 #include "ratools_data.h"
 #include "ui_buttonhintbar.h"
@@ -243,10 +243,17 @@ static void rat_show_achievement_detail(SDL_Surface* screen, RAT_Achievement* ac
 
 			const char* type_str = NULL;
 			switch (a->type) {
-			case RC_ACHIEVEMENT_TYPE_MISSABLE: type_str = "[Missable]"; break;
-			case RC_ACHIEVEMENT_TYPE_PROGRESSION: type_str = "[Progression]"; break;
-			case RC_ACHIEVEMENT_TYPE_WIN: type_str = "[Win Condition]"; break;
-			default: break;
+			case RC_ACHIEVEMENT_TYPE_MISSABLE:
+				type_str = "[Missable]";
+				break;
+			case RC_ACHIEVEMENT_TYPE_PROGRESSION:
+				type_str = "[Progression]";
+				break;
+			case RC_ACHIEVEMENT_TYPE_WIN:
+				type_str = "[Win Condition]";
+				break;
+			default:
+				break;
 			}
 			if (type_str)
 				rat_detail_meta_line(canvas, type_str, &content_y);
@@ -325,17 +332,26 @@ static void rat_show_achievements(SDL_Surface* screen, const RAT_Game* game) {
 		PAD_poll();
 
 		// wrap around at both ends, like every other list in the firmware
-		if (PAD_justRepeated(BTN_DOWN) && count > 0) { selected = (selected + 1) % count; dirty = true; }
-		if (PAD_justRepeated(BTN_UP) && count > 0) { selected = (selected - 1 + count) % count; dirty = true; }
-		if (PAD_justPressed(BTN_B)) quit = true;
+		if (PAD_justRepeated(BTN_DOWN) && count > 0) {
+			selected = (selected + 1) % count;
+			dirty = true;
+		}
+		if (PAD_justRepeated(BTN_UP) && count > 0) {
+			selected = (selected - 1 + count) % count;
+			dirty = true;
+		}
+		if (PAD_justPressed(BTN_B))
+			quit = true;
 		if (PAD_justPressed(BTN_A) && count > 0) {
 			rat_show_achievement_detail(screen, achs, count, selected);
 			PAD_reset(); // the B that closed the detail view is still latched
 			dirty = true;
 		}
 
-		if (selected < scroll) scroll = selected;
-		if (selected >= scroll + rows_visible) scroll = selected - rows_visible + 1;
+		if (selected < scroll)
+			scroll = selected;
+		if (selected >= scroll + rows_visible)
+			scroll = selected - rows_visible + 1;
 
 		if (dirty) {
 			GFX_clear(screen);
@@ -348,11 +364,11 @@ static void rat_show_achievements(SDL_Surface* screen, const RAT_Game* game) {
 				bool has_image = (badges && badges[i] != NULL);
 
 				const char* state_txt =
-					achs[i].state == RAT_ACH_UNLOCKED ? "Unlocked" :
-					achs[i].state == RAT_ACH_PENDING ? "Pending sync" : "Locked";
+					achs[i].state == RAT_ACH_UNLOCKED ? "Unlocked" : achs[i].state == RAT_ACH_PENDING ? "Pending sync"
+																									  : "Locked";
 				SDL_Color state_col =
-					achs[i].state == RAT_ACH_UNLOCKED ? col_state_unlocked :
-					achs[i].state == RAT_ACH_PENDING ? col_state_pending : col_state_locked;
+					achs[i].state == RAT_ACH_UNLOCKED ? col_state_unlocked : achs[i].state == RAT_ACH_PENDING ? col_state_pending
+																											  : col_state_locked;
 				char sub[64];
 				snprintf(sub, sizeof(sub), "%s - %u pts", state_txt, achs[i].points);
 
@@ -446,16 +462,25 @@ void RATBrowser_run(SDL_Surface* screen) {
 		PAD_poll();
 
 		// wrap around at both ends, like every other list in the firmware
-		if (PAD_justRepeated(BTN_DOWN) && count > 0) { selected = (selected + 1) % count; dirty = true; }
-		if (PAD_justRepeated(BTN_UP) && count > 0) { selected = (selected - 1 + count) % count; dirty = true; }
-		if (PAD_justPressed(BTN_B)) quit = true;
+		if (PAD_justRepeated(BTN_DOWN) && count > 0) {
+			selected = (selected + 1) % count;
+			dirty = true;
+		}
+		if (PAD_justRepeated(BTN_UP) && count > 0) {
+			selected = (selected - 1 + count) % count;
+			dirty = true;
+		}
+		if (PAD_justPressed(BTN_B))
+			quit = true;
 		if (PAD_justPressed(BTN_A) && count > 0) {
 			rat_show_achievements(screen, &games[selected]);
 			dirty = true;
 		}
 
-		if (selected < scroll) scroll = selected;
-		if (selected >= scroll + rows_visible) scroll = selected - rows_visible + 1;
+		if (selected < scroll)
+			scroll = selected;
+		if (selected >= scroll + rows_visible)
+			scroll = selected - rows_visible + 1;
 
 		if (dirty) {
 			GFX_clear(screen);

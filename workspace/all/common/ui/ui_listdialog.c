@@ -7,7 +7,6 @@
 #include "defines.h"
 #include <string.h>
 #include <stdio.h>
-#include <math.h>
 
 static char dialog_title[128];
 static char dialog_status[128];

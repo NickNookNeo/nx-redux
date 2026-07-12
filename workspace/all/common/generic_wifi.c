@@ -15,13 +15,21 @@
 /////////////////////////////////////////////////////////////////////////////////////////
 
 #include "defines.h"
-#include "platform.h"
 #include "api.h"
+#include "config.h"
 #include "utils.h"
+
+#include <unistd.h>
 
 bool PLAT_hasWifi() {
 	return true;
 }
+
+// Normally defined by the including platform.c before this file; fallback
+// keeps this file parseable standalone (clangd) and matches both platforms.
+#ifndef WIFI_SOCK_DIR
+#define WIFI_SOCK_DIR "/etc/wifi/sockets"
+#endif
 
 #define WIFI_INTERFACE "wlan0"
 #define WPA_CLI_CMD "wpa_cli -p " WIFI_SOCK_DIR " -i " WIFI_INTERFACE

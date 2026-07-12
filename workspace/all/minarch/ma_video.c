@@ -1,6 +1,5 @@
 #include "ma_internal.h"
 #include "ma_video.h"
-#include "scaler.h"
 
 static const char* bitmap_font[] = {
 	['0'] =

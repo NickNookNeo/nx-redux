@@ -3,8 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "defines.h"
-#include "api.h"
+#include "sdl.h"
 
 // Scrolling text state for marquee animation
 typedef struct {

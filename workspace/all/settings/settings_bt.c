@@ -8,6 +8,7 @@
 #include "settings_bt.h"
 #include "defines.h"
 #include "api.h"
+#include "config.h"
 #include "ui_list.h"
 #include "ui_loadingoverlay.h"
 

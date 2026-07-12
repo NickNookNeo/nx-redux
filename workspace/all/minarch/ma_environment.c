@@ -1,11 +1,9 @@
 #include "ma_internal.h"
+#include "utils.h"
 #include "ma_environment.h"
-#include "ma_game.h"
 #include "ma_input.h"
 #include "ma_config.h"
 #include "ma_options.h"
-#include "ma_video.h"
-#include "ma_core.h"
 #include "ra_integration.h"
 #include "gbalink.h"
 

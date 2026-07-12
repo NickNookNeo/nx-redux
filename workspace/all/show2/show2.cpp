@@ -21,9 +21,7 @@
 #include <iostream>
 #include <string>
 #include <map>
-#include <memory>
 #include <cstring>
-#include <cmath>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>

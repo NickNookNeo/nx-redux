@@ -1,7 +1,7 @@
 #include "ma_internal.h"
+#include "utils.h"
 #include "ma_shaders.h"
 #include "ma_config.h"
-#include "ma_options.h"
 
 void readShadersPreset(int i) {
 	char shaderspath[MAX_PATH] = {0};

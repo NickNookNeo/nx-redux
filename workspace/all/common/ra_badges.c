@@ -2,7 +2,6 @@
 #include "http.h"
 #include "defines.h"
 #include "api.h"
-#include "sdl.h"
 #include "notification.h"
 
 #include <stdio.h>

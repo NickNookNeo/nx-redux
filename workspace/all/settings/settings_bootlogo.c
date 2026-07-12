@@ -1,6 +1,7 @@
 #include "settings_bootlogo.h"
 #include "defines.h"
 #include "api.h"
+#include "config.h"
 #include "ui_buttonhintbar.h"
 #include "ui_menubar.h"
 #include "utils.h"
@@ -136,7 +137,7 @@ void bootlogo_run(SDL_Surface* screen) {
 			}
 
 			UI_renderMenuBar(screen, "Bootlogo");
-			UI_renderButtonHintBar(screen, (char*[]){"A", "SET", "B", "BACK", "L/R", "SCROLL", NULL});
+			UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "SET", "L/R", "SCROLL", NULL});
 
 			GFX_flip(screen);
 			dirty = false;

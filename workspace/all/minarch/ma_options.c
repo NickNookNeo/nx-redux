@@ -1,4 +1,5 @@
 #include "ma_internal.h"
+#include "utils.h"
 #include "ma_options.h"
 
 int Option_getValueIndex(Option* item, const char* value) {

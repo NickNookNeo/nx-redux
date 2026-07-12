@@ -17,7 +17,6 @@
 #include "module_player.h"
 #include "module_iptv.h"
 #include "display_helper.h"
-#include "ffplay_engine.h"
 #include "settings.h"
 #include "iptv.h"
 #include "iptv_curated.h"

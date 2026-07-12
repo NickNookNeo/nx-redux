@@ -1,18 +1,17 @@
 #include "ma_internal.h"
+#include "netplay.h"
+#include "utils.h"
+#include "config.h"
 #include "ui_list.h"
 #include "ui_buttonhintbar.h"
 #include "ui_menubar.h"
 #include "ma_menu.h"
 #include "ma_frontend_opts.h"
 #include "ma_saves.h"
-#include "ma_cheats.h"
-#include "ma_core.h"
 #include "ma_game.h"
 #include "ma_config.h"
-#include "ma_options.h"
 #include "ma_video.h"
 #include "ma_rewind.h"
-#include "ma_shaders.h"
 #include "minarch.h"
 #include "ra_integration.h"
 #include "ra_badges.h"
@@ -166,7 +165,9 @@ static struct {
 
 // Accessor for external modules (netplay) that need the paused-menu backdrop.
 // Lives here because `menu` is file-static; prototype is in minarch.h.
-SDL_Surface* minarch_getMenuBitmap(void) { return menu.bitmap; }
+SDL_Surface* minarch_getMenuBitmap(void) {
+	return menu.bitmap;
+}
 
 void Menu_init(void) {
 	menu.overlay = SDL_CreateRGBSurfaceWithFormat(SDL_SWSURFACE,
@@ -514,7 +515,7 @@ static int OptionAchievements_showDetail(MenuList* list, int i) {
 			}
 
 			// Button hints - update based on current mute state
-			char* hints[] = {"X", is_muted ? "UNMUTE" : "MUTE", "B", "BACK", NULL};
+			char* hints[] = {"B", "BACK", "X", is_muted ? "UNMUTE" : "MUTE", NULL};
 			UI_renderButtonHintBar(screen, hints);
 			GFX_flip(screen);
 			dirty = false;
@@ -1170,7 +1171,7 @@ int Menu_options(MenuList* list) {
 
 			// Bottom bar
 			if (type == MENU_INPUT)
-				UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "SET", "X", "CLEAR", NULL});
+				UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "X", "CLEAR", "A", "SET", NULL});
 			else
 				UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "OKAY", NULL});
 

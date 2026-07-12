@@ -17,7 +17,6 @@
 #include "defines.h"
 #include "platform.h"
 #include "api.h"
-#include "utils.h"
 #include <stdlib.h>
 #include <pthread.h>
 #include <stdint.h>

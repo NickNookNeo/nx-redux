@@ -7,6 +7,7 @@
 
 #include "defines.h"
 #include "api.h"
+#include "config.h"
 #include "ui_buttonhintbar.h"
 #include "ui_menubar.h"
 #include "ui_splash.h"
@@ -135,7 +136,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			UI_renderMenuBar(screen, "Bootlogo");
-			UI_renderButtonHintBar(screen, (char*[]){"A", "SET", "B", "BACK", "L/R", "SCROLL", NULL});
+			UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "SET", "L/R", "SCROLL", NULL});
 
 			GFX_flip(screen);
 			dirty = false;

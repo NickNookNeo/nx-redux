@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <pthread.h>
 #include <arpa/inet.h>
@@ -868,7 +869,7 @@ static void render_screen(void) {
 		break;
 
 	case STATE_READY: {
-		UI_renderButtonHintBar(screen, (char*[]){"B", "EXIT", "A", "START", "X", sync_roms ? "ROMS: ON" : "ROMS: OFF", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"B", "EXIT", "X", sync_roms ? "ROMS: ON" : "ROMS: OFF", "A", "START", NULL});
 		int max_w = screen->w - SCALE1(PADDING * 2);
 		int ll = TTF_FontLineSkip(font.large);
 		int sl = TTF_FontLineSkip(font.small);
@@ -985,7 +986,7 @@ static void render_screen(void) {
 					 &(SDL_Rect){SCALE1(PADDING), bottom_y + SCALE1(PADDING),
 								 screen->w - SCALE1(PADDING * 2), SCALE1(FONT_LARGE)});
 	}
-		UI_renderButtonHintBar(screen, (char*[]){"A", "RETRY", "B", "EXIT", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"B", "EXIT", "A", "RETRY", NULL});
 		break;
 
 	case STATE_DONE: {
@@ -998,7 +999,7 @@ static void render_screen(void) {
 					 &(SDL_Rect){SCALE1(PADDING), bottom_y + SCALE1(PADDING),
 								 screen->w - SCALE1(PADDING * 2), SCALE1(FONT_LARGE)});
 	}
-		UI_renderButtonHintBar(screen, (char*[]){"A", "SYNC AGAIN", "B", "EXIT", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"B", "EXIT", "A", "SYNC AGAIN", NULL});
 		break;
 	}
 

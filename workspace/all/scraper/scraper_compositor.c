@@ -1,6 +1,5 @@
 #include "scraper_compositor.h"
 #include "utils.h"
-#include "api.h"
 #include <stdio.h>
 #include <string.h>
 

@@ -3,7 +3,12 @@
 #include <stdbool.h>
 #include <SDL2/SDL_ttf.h>
 
-typedef struct MenuList MenuList; // forward declaration (full def in ma_frontend_opts.h)
+// Forward declaration (full def in ma_frontend_opts.h); guarded because C99
+// forbids repeating a typedef and both headers may land in the same TU.
+#ifndef MENULIST_TYPEDEF_DEFINED
+#define MENULIST_TYPEDEF_DEFINED
+typedef struct MenuList MenuList;
+#endif
 
 void MSG_init(void);
 void MSG_quit(void);

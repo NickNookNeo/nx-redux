@@ -1,12 +1,12 @@
 #include "ma_internal.h"
+#include "utils.h"
+#include "config.h"
 #include "ma_saves.h"
 #include "notification.h"
 #include "ra_integration.h"
 #include <errno.h>
 #include <string.h>
 #include "ma_rewind.h"
-#include "ma_video.h"
-#include "ma_menu.h"
 #ifdef HAS_SRM
 #include "streams/rzip_stream.h"
 #include "streams/file_stream.h"

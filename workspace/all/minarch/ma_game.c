@@ -1,7 +1,7 @@
 #include "ma_internal.h"
+#include "utils.h"
+#include "config.h"
 #include "ma_game.h"
-#include "ma_core.h"
-#include "ma_saves.h"
 #include <zip.h>
 #include <errno.h>
 #include <fcntl.h>

@@ -1,4 +1,6 @@
 #include "ma_internal.h"
+#include "utils.h"
+#include "config.h"
 #include "ma_cheats.h"
 #include <glob.h>
 #include <string.h>

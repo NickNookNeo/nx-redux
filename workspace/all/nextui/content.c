@@ -1,9 +1,12 @@
 #include <dirent.h>
+#include "recents.h"
+#include "defines.h"
+#include "utils.h"
+#include <stdbool.h>
 #include <ctype.h>
 #include <unistd.h>
 #include "content.h"
 #include "shortcuts.h"
-#include "api.h"
 #include "config.h"
 
 static bool _simple_mode = false;
@@ -852,4 +855,3 @@ Array* getEntries(char* path) {
 	EntryArray_sort(entries);
 	return entries;
 }
-

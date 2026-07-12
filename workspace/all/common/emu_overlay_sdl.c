@@ -25,11 +25,8 @@
 // GLES3 VAO function pointers — loaded via SDL_GL_GetProcAddress to avoid
 // symbol conflicts with emulators that define these as stub function pointers
 // (e.g. PPSSPP's gl3stub.c shadows libGLESv2 symbols).
+// The PFNGL*PROC typedefs come from GLES3/gl3.h.
 // ---------------------------------------------------------------------------
-typedef void(GL_APIENTRY* PFNGLBINDVERTEXARRAYPROC)(GLuint array);
-typedef void(GL_APIENTRY* PFNGLDELETEVERTEXARRAYSPROC)(GLsizei n, const GLuint* arrays);
-typedef void(GL_APIENTRY* PFNGLGENVERTEXARRAYSPROC)(GLsizei n, GLuint* arrays);
-
 static PFNGLBINDVERTEXARRAYPROC pfn_glBindVertexArray = NULL;
 static PFNGLDELETEVERTEXARRAYSPROC pfn_glDeleteVertexArrays = NULL;
 static PFNGLGENVERTEXARRAYSPROC pfn_glGenVertexArrays = NULL;

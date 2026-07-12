@@ -25,23 +25,18 @@
 #include "defines.h"
 #include "api.h"
 #include "audio_manager.h"
-#include "ui_list.h"
 #include "utils.h"
-#include "scaler.h"
 #include "notification.h"
 #include "config.h"
 #include "ra_integration.h"
-#include "ra_badges.h"
 #include "ma_internal.h"
 #include "ma_game.h"
-#include "ma_cheats.h"
 #include "ma_saves.h"
 #include "ma_rewind.h"
 #include "ma_config.h"
 #include "ma_shaders.h"
 #include "ma_options.h"
 #include "ma_input.h"
-#include "ma_environment.h"
 #include "ma_video.h"
 #include "ma_audio.h"
 #include "ma_core.h"
@@ -522,16 +517,30 @@ finish:
 //////////////////////////////////////////////////////////////////////////////
 
 // Screen/display accessors
-SDL_Surface* minarch_getScreen(void) { return screen; }
-int minarch_getDeviceWidth(void) { return DEVICE_WIDTH; }
-int minarch_getDeviceHeight(void) { return DEVICE_HEIGHT; }
+SDL_Surface* minarch_getScreen(void) {
+	return screen;
+}
+int minarch_getDeviceWidth(void) {
+	return DEVICE_WIDTH;
+}
+int minarch_getDeviceHeight(void) {
+	return DEVICE_HEIGHT;
+}
 // minarch_getMenuBitmap() is defined next to the menu state, which is file-static.
 
 // Game state accessors
-const char* minarch_getCoreTag(void) { return core.tag; }
-const char* minarch_getGameName(void) { return game.name; }
-void* minarch_getGameData(void) { return game.data; }
-size_t minarch_getGameSize(void) { return game.size; }
+const char* minarch_getCoreTag(void) {
+	return core.tag;
+}
+const char* minarch_getGameName(void) {
+	return game.name;
+}
+void* minarch_getGameData(void) {
+	return game.data;
+}
+size_t minarch_getGameSize(void) {
+	return game.size;
+}
 
 // Core option accessors
 char* minarch_getCoreOptionValue(const char* key) {
@@ -542,17 +551,27 @@ void minarch_setCoreOptionValue(const char* key, const char* value) {
 }
 
 // Sleep state accessors
-void minarch_beforeSleep(void) { Menu_beforeSleep(); }
-void minarch_afterSleep(void) { Menu_afterSleep(); }
+void minarch_beforeSleep(void) {
+	Menu_beforeSleep();
+}
+void minarch_afterSleep(void) {
+	Menu_afterSleep();
+}
 
 // Platform accessors
-void minarch_hdmimon(void) { hdmimon(); }
+void minarch_hdmimon(void) {
+	hdmimon();
+}
 
 // Menu accessors
-int minarch_menuMessage(char* message, char** pairs) { return Menu_message(message, pairs); }
+int minarch_menuMessage(char* message, char** pairs) {
+	return Menu_message(message, pairs);
+}
 
 // Save current config to file (used before core reset to preserve option changes)
-void minarch_saveConfig(void) { Config_write(CONFIG_WRITE_ALL); }
+void minarch_saveConfig(void) {
+	Config_write(CONFIG_WRITE_ALL);
+}
 
 void minarch_beginOptionsBatch(void) {
 	option_batch_mode = 1;

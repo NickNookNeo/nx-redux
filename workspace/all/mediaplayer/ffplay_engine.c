@@ -8,6 +8,7 @@
 #include <time.h>
 #include "vp_defines.h"
 #include "api.h"
+#include "config.h"
 #include "msettings.h"
 #include "audio_manager.h"
 #include "display_helper.h"

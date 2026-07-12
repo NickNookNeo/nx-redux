@@ -1,4 +1,5 @@
 #include "ma_internal.h"
+#include "utils.h"
 #include "ma_runframe.h"
 #include "ma_input.h"
 #include "ma_rewind.h"

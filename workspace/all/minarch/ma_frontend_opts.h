@@ -1,12 +1,17 @@
 #pragma once
 
-#include "ma_internal.h"
+#include "sdl.h"
 
 // -----------------------------------------------------------------------
 // Menu type system
 // -----------------------------------------------------------------------
 
+// Guarded like MENU_CALLBACK_CODES_DEFINED below: ma_menu.h forward-declares
+// the same typedef, and C99 forbids repeating a typedef.
+#ifndef MENULIST_TYPEDEF_DEFINED
+#define MENULIST_TYPEDEF_DEFINED
 typedef struct MenuList MenuList;
+#endif
 typedef struct MenuItem MenuItem;
 // MENU_CALLBACK_* codes come from minarch.h (guarded there so the netplay
 // module sees the same values without pulling in this file's statics).
@@ -19,7 +24,7 @@ enum {
 };
 #endif
 typedef int (*MenuList_callback_t)(MenuList* list, int i);
-typedef struct MenuItem {
+struct MenuItem {
 	char* name;
 	char* desc;
 	char** values;
@@ -29,7 +34,7 @@ typedef struct MenuItem {
 	MenuList* submenu;
 	MenuList_callback_t on_confirm;
 	MenuList_callback_t on_change;
-} MenuItem;
+};
 
 enum {
 	MENU_LIST,	// eg. save and main menu
@@ -37,7 +42,7 @@ enum {
 	MENU_FIXED, // eg. emulator
 	MENU_INPUT, // eg. renders like but MENU_VAR but handles input differently
 };
-typedef struct MenuList {
+struct MenuList {
 	int type;
 	int max_width; // cached on first draw
 	char* desc;
@@ -45,10 +50,7 @@ typedef struct MenuList {
 	MenuItem* items;
 	MenuList_callback_t on_confirm;
 	MenuList_callback_t on_change;
-} MenuList;
-
-// Functions defined in ma_menu.c
-#include "ma_menu.h"
+};
 
 // Public API: functions defined in ma_frontend_opts.c
 int Menu_message(char* message, char** pairs);

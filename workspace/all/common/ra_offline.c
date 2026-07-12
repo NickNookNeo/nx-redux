@@ -841,8 +841,12 @@ static void ra_off_journal_rewrite(const RA_PendingUnlock* entries, const bool* 
 	FILE* in = fopen(path, "r");
 	FILE* out = fopen(tmp, "w");
 	if (!in || !out) {
-		if (in) fclose(in);
-		if (out) { fclose(out); remove(tmp); }
+		if (in)
+			fclose(in);
+		if (out) {
+			fclose(out);
+			remove(tmp);
+		}
 		pthread_mutex_unlock(&ra_off_mutex);
 		return;
 	}

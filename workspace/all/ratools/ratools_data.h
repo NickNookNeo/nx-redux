@@ -18,8 +18,8 @@ typedef struct {
 	char description[256];
 	char badge_name[32];
 	RAT_AchState state;
-	uint32_t type;      // RC_ACHIEVEMENT_TYPE_* (standard/missable/progression/win)
-	float rarity;       // % of players who unlocked it (0 = unknown)
+	uint32_t type;		// RC_ACHIEVEMENT_TYPE_* (standard/missable/progression/win)
+	float rarity;		// % of players who unlocked it (0 = unknown)
 	time_t unlock_time; // server or journal unlock time; 0 while locked
 } RAT_Achievement;
 

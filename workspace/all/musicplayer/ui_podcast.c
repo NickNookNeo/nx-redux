@@ -866,13 +866,13 @@ void render_podcast_main_page(SDL_Surface* screen, IndicatorType show_setting,
 	// Button hints — context dependent
 	if (has_downloads_item && selected == cl_count + sub_count) {
 		// Downloads item selected
-		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "OPEN", "Y", "MANAGE", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "Y", "MANAGE", "A", "OPEN", NULL});
 	} else if (selected < cl_count) {
 		// Continue listening item selected
-		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "PLAY", "Y", "MANAGE", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "Y", "MANAGE", "A", "PLAY", NULL});
 	} else {
 		// Subscription item selected
-		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "SELECT", "Y", "MANAGE", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "Y", "MANAGE", "A", "SELECT", NULL});
 	}
 
 	// Toast
@@ -1467,7 +1467,7 @@ void render_podcast_episodes(SDL_Surface* screen, IndicatorType show_setting,
 			? "CANCEL"
 		: selected_is_downloaded ? (selected_is_resumable ? "RESUME" : "PLAY")
 								 : "DOWNLOAD";
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", (char*)action_label, "Y", "REFRESH", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "Y", "REFRESH", "A", (char*)action_label, NULL});
 
 	// Toast notification
 	UI_renderToast(screen, toast_message, toast_time);
@@ -1654,14 +1654,14 @@ void render_podcast_download_queue(SDL_Surface* screen, IndicatorType show_setti
 
 	char* hint_pairs[16];
 	int h = 0;
+	hint_pairs[h++] = "START";
+	hint_pairs[h++] = "CONTROLS";
+	hint_pairs[h++] = "B";
+	hint_pairs[h++] = "BACK";
 	if (queue_count > 0) {
 		hint_pairs[h++] = "X";
 		hint_pairs[h++] = "REMOVE";
 	}
-	hint_pairs[h++] = "B";
-	hint_pairs[h++] = "BACK";
-	hint_pairs[h++] = "START";
-	hint_pairs[h++] = "CONTROLS";
 	hint_pairs[h] = NULL;
 	UI_renderButtonHintBar(screen, hint_pairs);
 

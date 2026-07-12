@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <signal.h>
 
 extern volatile bool app_quit;
 void sig_handler(int sig);

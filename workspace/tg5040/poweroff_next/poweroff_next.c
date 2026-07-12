@@ -23,10 +23,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "defines.h"
+#include "platform.h"
 #include "config.h"
 
-#define SDCARD_PREFIX SDCARD_PATH
 #define I2C_DEVICE "/dev/i2c-6"
 #define AXP2202_ADDR 0x34
 #define LOG_FILE "/root/powerofflog.txt"
@@ -183,7 +182,7 @@ static void kill_sdcard_users(void) {
 				continue;
 
 			target[len] = '\0';
-			if (strncmp(target, SDCARD_PREFIX, strlen(SDCARD_PREFIX)) == 0) {
+			if (strncmp(target, SDCARD_PATH, strlen(SDCARD_PATH)) == 0) {
 				kill(pid, SIGKILL);
 				break;
 			}
@@ -205,7 +204,7 @@ static bool is_sdcard_mounted(void) {
 
 	struct mntent* ent;
 	while ((ent = getmntent(fp)) != NULL) {
-		if (strcmp(ent->mnt_dir, SDCARD_PREFIX) == 0) {
+		if (strcmp(ent->mnt_dir, SDCARD_PATH) == 0) {
 			mounted = true;
 			break;
 		}
@@ -217,7 +216,7 @@ static bool is_sdcard_mounted(void) {
 
 static bool unmount_sdcard_with_retries(void) {
 	for (int attempt = 0; attempt < 3; ++attempt) {
-		safe_umount(SDCARD_PREFIX, MNT_FORCE | MNT_DETACH);
+		safe_umount(SDCARD_PATH, MNT_FORCE | MNT_DETACH);
 
 		struct timespec wait = {.tv_sec = 0, .tv_nsec = 800000000};
 		nanosleep(&wait, NULL);
@@ -230,7 +229,7 @@ static bool unmount_sdcard_with_retries(void) {
 	}
 
 	if (is_sdcard_mounted()) {
-		log_msg("poweroff_next: Failed to unmount %s after retries.\n", SDCARD_PREFIX);
+		log_msg("poweroff_next: Failed to unmount %s after retries.\n", SDCARD_PATH);
 		return false;
 	}
 

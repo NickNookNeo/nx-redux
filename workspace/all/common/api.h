@@ -3,7 +3,6 @@
 #include "sdl.h"
 #include "platform.h"
 #include "scaler.h"
-#include "config.h"
 #include "defines.h"
 #include <stdbool.h>
 
@@ -510,9 +509,9 @@ static inline int PAD_navigateMenu(int* selected, int count) {
 	return 0;
 }
 
-int PAD_tappedMenu(uint32_t now);		// special case, returns 1 on release of BTN_MENU within 250ms if BTN_PLUS/BTN_MINUS haven't been pressed
-int PAD_tappedSelect(uint32_t now);		// special case, returns 1 on release of BTN_SELECT within 250ms if BTN_PLUS/BTN_MINUS haven't been pressed
-int PAD_longPressedMenu(uint32_t now);	// returns 1 once when BTN_MENU held >= 500ms without BTN_PLUS/BTN_MINUS
+int PAD_tappedMenu(uint32_t now);	   // special case, returns 1 on release of BTN_MENU within 250ms if BTN_PLUS/BTN_MINUS haven't been pressed
+int PAD_tappedSelect(uint32_t now);	   // special case, returns 1 on release of BTN_SELECT within 250ms if BTN_PLUS/BTN_MINUS haven't been pressed
+int PAD_longPressedMenu(uint32_t now); // returns 1 once when BTN_MENU held >= 500ms without BTN_PLUS/BTN_MINUS
 
 ///////////////////////////////
 #define VIB_sleepStrength 4
@@ -792,6 +791,16 @@ struct WIFI_connection {
 	int link_speed;
 	int noise;
 };
+
+static inline void connection_reset(struct WIFI_connection* connection_info) {
+	connection_info->valid = false;
+	connection_info->freq = -1;
+	connection_info->link_speed = -1;
+	connection_info->noise = -1;
+	connection_info->rssi = -1;
+	*connection_info->ip = '\0';
+	*connection_info->ssid = '\0';
+}
 
 // initializes our wifi context and synchronizes it with the current system state
 void PLAT_wifiInit();

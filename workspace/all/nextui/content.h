@@ -2,7 +2,7 @@
 #define CONTENT_H
 
 #include "types.h"
-#include "recents.h"
+#include <stdbool.h>
 
 // Set simple_mode for content functions
 void Content_setSimpleMode(bool mode);

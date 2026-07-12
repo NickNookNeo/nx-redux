@@ -11,7 +11,6 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <math.h>
 #include <string.h>
 
 // Define KISS_FFT_SHARED macro to properly export symbols

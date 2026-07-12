@@ -1,7 +1,7 @@
 #ifndef IMGLOADER_H
 #define IMGLOADER_H
 
-#include "api.h"
+#include "sdl.h"
 #include <stdbool.h>
 
 // Animation direction enum
