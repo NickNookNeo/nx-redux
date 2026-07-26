@@ -1385,6 +1385,41 @@ void Menu_screenshot(void) {
 		Notification_push(NOTIFICATION_SETTING, "Screenshot saved", NULL);
 	}
 }
+// Every plain Quit auto-saves to the hidden auto-resume slot with a switcher
+// screenshot and repoints the .minui slot file at it, so RESUME always returns
+// to the exact quit moment (parity with DC.pak's quit behavior). Without this,
+// a bare quit leaves the switcher pointing at a stale (or no) state.
+static void Menu_autosaveQuit(void) {
+	// Block save states during multiplayer - causes connection breaks
+	if (Multiplayer_isActive())
+		return;
+	if (!core.serialize_size || !core.serialize_size())
+		return; // core cannot save states
+
+	// disc path marker for multi-disc games, matching Menu_saveState
+	if (menu.total_discs && menu.disc >= 0) {
+		char txt_path[MAX_PATH];
+		snprintf(txt_path, sizeof(txt_path), "%s/%s.%d.txt", menu.minui_dir, game.name, AUTO_RESUME_SLOT);
+		char* disc_path = menu.disc_paths[menu.disc];
+		putFile(txt_path, disc_path + strlen(menu.base_path));
+	}
+
+	// switcher screenshot for the auto slot; the menu is open, so menu.bitmap
+	// holds the frame the user quit on
+	if (menu.bitmap) {
+		char bmp_path[MAX_PATH];
+		snprintf(bmp_path, sizeof(bmp_path), "%s/%s.%d.bmp", menu.minui_dir, game.name, AUTO_RESUME_SLOT);
+		SDL_RWops* rw = SDL_RWFromFile(bmp_path, "wb");
+		IMG_SavePNG_RW(menu.bitmap, rw, 1);
+	}
+
+	// only repoint RESUME at the auto slot if the state actually wrote —
+	// minarch exits right after this, so state_slot needs no restoring
+	state_slot = AUTO_RESUME_SLOT;
+	if (State_write())
+		putInt(menu.slot_path, AUTO_RESUME_SLOT);
+}
+
 void Menu_saveState(void) {
 	// Block save states during multiplayer - causes connection breaks
 	if (Multiplayer_isActive())
@@ -1650,6 +1685,9 @@ void Menu_loop(void) {
 				dirty = true;
 			} break;
 			case ITEM_QUIT:
+				// before Netplay_quitAll so the netplay guard inside can skip
+				// the autosave while a session is live
+				Menu_autosaveQuit();
 				Netplay_quitAll();
 				status = STATUS_QUIT;
 				show_menu = 0;

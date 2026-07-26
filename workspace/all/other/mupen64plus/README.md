@@ -82,6 +82,12 @@ on the first rendered frame after overlay init, `emu_ovl_consume_resume_slot()` 
 and unlinks `/tmp/resume_slot.txt` (written by nextui on every launch; slot 0-7 only
 on a game-switcher resume) and auto-loads that slot via `M64CMD_STATE_SET_SLOT` +
 `M64CMD_STATE_LOAD` — the standalone equivalent of minarch's `State_resume()`.
+And the quit side of the handshake (parity with DC.pak / minarch): overlay Quit
+auto-saves to the hidden auto-resume slot (9) + writes the slot-9 switcher screenshot
+and repoints the `.minui` txt, then issues `M64CMD_STOP` **3 frames later** —
+`M64CMD_STATE_SAVE` is a queued job serviced at the next interrupt on the emu thread
+(`gen_interrupt`, `device/r4300/interrupt.c`), so stopping in the same breath could
+tear the loop down before the state is written.
 
 **`src/CMakeLists.txt`** — Added overlay source files from `workspace/all/common/`.
 Note: `include_directories(${OVERLAY_COMMON_DIR})` must come AFTER `include_directories(. inc)`

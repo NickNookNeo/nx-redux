@@ -25,9 +25,10 @@ echo 200 >/proc/sys/vm/vfs_cache_pressure 2>/dev/null
 sync
 echo 3 >/proc/sys/vm/drop_caches 2>/dev/null
 
-# User data directory (saves, cache — shared across devices)
+# User data directory, shared across devices (saves via XDG_DATA_HOME below;
+# config stays per-device in subdirs)
 USERDATA_DIR="$SHARED_USERDATA_PATH/N64-mupen64plus"
-mkdir -p "$USERDATA_DIR/save"
+mkdir -p "$USERDATA_DIR"
 
 # Device-specific config directory and resolution
 if [ "$DEVICE" = "brick" ]; then
@@ -54,6 +55,23 @@ if [ ! -f "$DEVICE_CONFIG_DIR/.initialized" ]; then
 fi
 
 export HOME="$USERDATA_PATH"
+# Saves/states genuinely shared across devices: mupen64plus writes .st*/.eep/
+# .mpk/.sra under $XDG_DATA_HOME/mupen64plus/save (defaulting to the per-device
+# $HOME/.local/share), so point the data home into the shared dir. HOME itself
+# stays per-device on purpose — shader/texture caches must not cross devices.
+export XDG_DATA_HOME="$USERDATA_DIR/data"
+# Migrate saves that older builds wrote under the per-device $HOME. Existing
+# shared files win; unmigrated originals stay put for manual recovery.
+OLD_SAVE_DIR="$USERDATA_PATH/.local/share/mupen64plus/save"
+NEW_SAVE_DIR="$XDG_DATA_HOME/mupen64plus/save"
+mkdir -p "$NEW_SAVE_DIR"
+if [ -d "$OLD_SAVE_DIR" ]; then
+    for f in "$OLD_SAVE_DIR"/*; do
+        [ -e "$f" ] || continue
+        [ -e "$NEW_SAVE_DIR/$(basename "$f")" ] || mv "$f" "$NEW_SAVE_DIR/"
+    done
+    rmdir "$OLD_SAVE_DIR" 2>/dev/null
+fi
 export LD_LIBRARY_PATH="$PAK_DIR:$EMU_DIR:$SDCARD_PATH/.system/tg5040/lib:/usr/trimui/lib:$LD_LIBRARY_PATH"
 export LD_PRELOAD="libEGL.so"
 

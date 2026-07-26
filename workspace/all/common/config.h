@@ -151,6 +151,9 @@ typedef struct
 	int raProgressNotificationDuration; // Duration for progress notifications (0-5 seconds, 0 = disabled)
 	int raAchievementSortOrder;			// Sort order for achievements list (RA_SORT_* enum)
 
+	// Power
+	bool keepAwakeUSB; // block screen-off/deep-sleep while an active USB gadget
+
 	// Developer
 	bool disableSleep;
 	bool sshOnBoot;
@@ -216,6 +219,8 @@ typedef struct
 #define CFG_DEFAULT_RA_NOTIFICATION_DURATION 3
 #define CFG_DEFAULT_RA_PROGRESS_NOTIFICATION_DURATION 1
 #define CFG_DEFAULT_RA_ACHIEVEMENT_SORT_ORDER RA_SORT_UNLOCKED_FIRST
+
+#define CFG_DEFAULT_KEEP_AWAKE_USB false
 
 // Developer defaults
 #define CFG_DEFAULT_DISABLE_SLEEP false
@@ -372,6 +377,12 @@ int CFG_getRAProgressNotificationDuration(void);
 void CFG_setRAProgressNotificationDuration(int seconds);
 int CFG_getRAAchievementSortOrder(void);
 void CFG_setRAAchievementSortOrder(int sortOrder);
+
+// Keep the device awake (no screen-off / deep sleep) while connected to a
+// host as an active USB gadget — a full battery would otherwise let the
+// device sleep and drop the data link.
+bool CFG_getKeepAwakeUSB(void);
+void CFG_setKeepAwakeUSB(bool enable);
 
 // Developer settings
 bool CFG_getDisableSleep(void);

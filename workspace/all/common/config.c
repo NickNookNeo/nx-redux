@@ -12,6 +12,10 @@
 extern bool PLAT_wifiEnabled(void) __attribute__((weak));
 extern bool PLAT_bluetoothEnabled(void) __attribute__((weak));
 
+// True while CFG_init is parsing the settings file; CFG_sync no-ops then,
+// because init loads values through the public setters and every setter syncs.
+static bool cfg_loading = false;
+
 NextUISettings settings = {0};
 
 // deprecated
@@ -97,6 +101,7 @@ void CFG_defaults(NextUISettings* cfg) {
 		.raProgressNotificationDuration = CFG_DEFAULT_RA_PROGRESS_NOTIFICATION_DURATION,
 		.raAchievementSortOrder = CFG_DEFAULT_RA_ACHIEVEMENT_SORT_ORDER,
 
+		.keepAwakeUSB = CFG_DEFAULT_KEEP_AWAKE_USB,
 		.disableSleep = CFG_DEFAULT_DISABLE_SLEEP,
 		.sshOnBoot = CFG_DEFAULT_SSH_ON_BOOT,
 	};
@@ -109,6 +114,7 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb) {
 	settings.onFontChange = cb;
 	settings.onColorSet = ccb;
 	bool fontLoaded = false;
+	cfg_loading = true; // loading must never write the file it is reading
 
 	char settingsPath[MAX_PATH];
 	sprintf(settingsPath, "%s/minuisettings.txt", SHARED_USERDATA_PATH);
@@ -357,6 +363,10 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb) {
 				CFG_setSSHOnBoot((bool)temp_value);
 				continue;
 			}
+			if (sscanf(line, "keepAwakeUSB=%i", &temp_value) == 1) {
+				CFG_setKeepAwakeUSB((bool)temp_value);
+				continue;
+			}
 		}
 		fclose(file);
 	}
@@ -372,6 +382,13 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb) {
 	// avoid reloading the font if not neccessary
 	if (!fontLoaded)
 		CFG_setFontId(CFG_getFontId());
+
+	cfg_loading = false;
+	// One merge-aware sync now that loading is done: materializes the file on
+	// fresh installs and appends newly-added keys (the OSD toggle scripts sed
+	// wifi=/bluetooth= lines and need them present). A file that is already
+	// complete and current is left untouched.
+	CFG_sync();
 }
 
 int CFG_getFontId(void) {
@@ -894,6 +911,15 @@ void CFG_setRAAchievementSortOrder(int sortOrder) {
 	CFG_sync();
 }
 
+bool CFG_getKeepAwakeUSB(void) {
+	return settings.keepAwakeUSB;
+}
+
+void CFG_setKeepAwakeUSB(bool enable) {
+	settings.keepAwakeUSB = enable;
+	CFG_sync();
+}
+
 bool CFG_getDisableSleep(void) {
 	return settings.disableSleep;
 }
@@ -991,6 +1017,8 @@ void CFG_get(const char* key, char* value) {
 		sprintf(value, "%i", (int)(CFG_getNTP()));
 	} else if (strcmp(key, "currentTimezone") == 0) {
 		sprintf(value, "%i", CFG_getCurrentTimezone());
+	} else if (strcmp(key, "keepAwakeUSB") == 0) {
+		sprintf(value, "%i", (int)(CFG_getKeepAwakeUSB()));
 	} else if (strcmp(key, "disableSleep") == 0) {
 		sprintf(value, "%i", (int)(CFG_getDisableSleep()));
 	} else if (strcmp(key, "sshOnBoot") == 0) {
@@ -1010,21 +1038,107 @@ void CFG_get(const char* key, char* value) {
 	}
 }
 
+// Render the canonical serialization of every known setting into buf.
+// Returns the length, or -1 if it did not fit.
+static int CFG_serialize(char* buf, size_t cap) {
+	size_t off = 0;
+#define EMIT(...)                                            \
+	do {                                                     \
+		int n = snprintf(buf + off, cap - off, __VA_ARGS__); \
+		if (n < 0 || (size_t)n >= cap - off)                 \
+			return -1;                                       \
+		off += (size_t)n;                                    \
+	} while (0)
+	EMIT("font=%i\n", settings.font);
+	EMIT("color1=0x%06X\n", settings.color1_255);
+	EMIT("color2=0x%06X\n", settings.color2_255);
+	EMIT("color3=0x%06X\n", settings.color3_255);
+	EMIT("color4=0x%06X\n", settings.color4_255);
+	EMIT("color5=0x%06X\n", settings.color5_255);
+	EMIT("color6=0x%06X\n", settings.color6_255);
+	EMIT("color7=0x%06X\n", settings.color7_255);
+	EMIT("radius=%i\n", settings.thumbRadius);
+	EMIT("showclock=%i\n", settings.showClock);
+	EMIT("clock24h=%i\n", settings.clock24h);
+	EMIT("batteryperc=%i\n", settings.showBatteryPercent);
+	EMIT("menuanim=%i\n", settings.showMenuAnimations);
+	EMIT("menutransitions=%i\n", settings.showMenuTransitions);
+	EMIT("recents=%i\n", settings.showRecents);
+	EMIT("tools=%i\n", settings.showTools);
+	EMIT("collections=%i\n", settings.showCollections);
+	EMIT("emulators=%i\n", settings.showEmulators);
+	EMIT("gameart=%i\n", settings.showGameArt);
+	EMIT("showfoldernamesatroot=%i\n", settings.showFolderNamesAtRoot);
+	EMIT("screentimeout=%i\n", settings.screenTimeoutSecs);
+	EMIT("suspendTimeout=%i\n", settings.suspendTimeoutSecs);
+	EMIT("powerOffProtection=%i\n", settings.powerOffProtection);
+	EMIT("switcherscale=%i\n", settings.gameSwitcherScaling);
+	EMIT("switcherresumableonly=%i\n", settings.gameSwitcherResumableOnly);
+	EMIT("haptics=%i\n", settings.haptics);
+	EMIT("romfolderbg=%i\n", settings.romsUseFolderBackground);
+	EMIT("saveFormat=%i\n", settings.saveFormat);
+	EMIT("stateFormat=%i\n", settings.stateFormat);
+	EMIT("useExtractedFileName=%i\n", settings.useExtractedFileName);
+	EMIT("muteLeds=%i\n", settings.muteLeds);
+	EMIT("artWidth=%i\n", (int)(settings.gameArtWidth * 100));
+	EMIT("wifi=%i\n", settings.wifi);
+	EMIT("defaultView=%i\n", settings.defaultView);
+	EMIT("wifiDiagnostics=%i\n", settings.wifiDiagnostics);
+	EMIT("bluetooth=%i\n", settings.bluetooth);
+	EMIT("btDiagnostics=%i\n", settings.bluetoothDiagnostics);
+	EMIT("btMaxRate=%i\n", settings.bluetoothSamplerateLimit);
+	EMIT("ntp=%i\n", settings.ntp);
+	EMIT("currentTimezone=%i\n", settings.currentTimezone);
+	EMIT("notifyManualSave=%i\n", settings.notifyManualSave);
+	EMIT("notifyLoad=%i\n", settings.notifyLoad);
+	EMIT("notifyScreenshot=%i\n", settings.notifyScreenshot);
+	EMIT("notifyAdjustments=%i\n", settings.notifyAdjustments);
+	EMIT("notifyDuration=%i\n", settings.notifyDuration);
+	EMIT("raEnable=%i\n", settings.raEnable);
+	EMIT("raUsername=%s\n", settings.raUsername);
+	EMIT("raPassword=%s\n", settings.raPassword);
+	EMIT("raHardcoreMode=%i\n", settings.raHardcoreMode);
+	EMIT("raToken=%s\n", settings.raToken);
+	EMIT("raAuthenticated=%i\n", settings.raAuthenticated);
+	EMIT("raShowNotifications=%i\n", settings.raShowNotifications);
+	EMIT("raNotificationDuration=%i\n", settings.raNotificationDuration);
+	EMIT("raProgressNotificationDuration=%i\n", settings.raProgressNotificationDuration);
+	EMIT("raAchievementSortOrder=%i\n", settings.raAchievementSortOrder);
+	EMIT("keepAwakeUSB=%i\n", settings.keepAwakeUSB);
+	EMIT("disableSleep=%i\n", settings.disableSleep);
+	EMIT("sshOnBoot=%i\n", settings.sshOnBoot);
+#undef EMIT
+	return (int)off;
+}
+
+// Length of the key portion ("key=...") of a line, or -1 if it has none.
+static int CFG_lineKeyLen(const char* line, size_t len) {
+	for (size_t i = 0; i < len; i++) {
+		if (line[i] == '=')
+			return (int)i;
+		if (line[i] == '\n')
+			break;
+	}
+	return -1;
+}
+
+#define CFG_MAX_LINES 96
+#define CFG_FILE_MAX 16384
+
 void CFG_sync(void) {
-	// write to file
+	// CFG_init loads the file through the public setters, each of which calls
+	// CFG_sync — never write while it is mid-parse (it used to rewrite the file
+	// it was reading once per parsed key).
+	if (cfg_loading)
+		return;
+
 	char settingsPath[MAX_PATH];
 	const char* shared_userdata = getenv("SHARED_USERDATA_PATH");
 	if (!shared_userdata || !shared_userdata[0]) {
 		printf("[CFG] SHARED_USERDATA_PATH is not set!\n");
 		return;
 	}
-
 	snprintf(settingsPath, sizeof(settingsPath), "%s/minuisettings.txt", shared_userdata);
-	FILE* file = fopen(settingsPath, "w");
-	if (file == NULL) {
-		printf("[CFG] Unable to open settings file, cant write\n");
-		return;
-	}
 
 	// WiFi/BT can be toggled outside this process (e.g. the OSD overlay), so
 	// re-capture the live radio state — otherwise a sync for an unrelated
@@ -1035,65 +1149,121 @@ void CFG_sync(void) {
 	if (PLAT_bluetoothEnabled)
 		settings.bluetooth = PLAT_bluetoothEnabled();
 
-	fprintf(file, "font=%i\n", settings.font);
-	fprintf(file, "color1=0x%06X\n", settings.color1_255);
-	fprintf(file, "color2=0x%06X\n", settings.color2_255);
-	fprintf(file, "color3=0x%06X\n", settings.color3_255);
-	fprintf(file, "color4=0x%06X\n", settings.color4_255);
-	fprintf(file, "color5=0x%06X\n", settings.color5_255);
-	fprintf(file, "color6=0x%06X\n", settings.color6_255);
-	fprintf(file, "color7=0x%06X\n", settings.color7_255);
-	fprintf(file, "radius=%i\n", settings.thumbRadius);
-	fprintf(file, "showclock=%i\n", settings.showClock);
-	fprintf(file, "clock24h=%i\n", settings.clock24h);
-	fprintf(file, "batteryperc=%i\n", settings.showBatteryPercent);
-	fprintf(file, "menuanim=%i\n", settings.showMenuAnimations);
-	fprintf(file, "menutransitions=%i\n", settings.showMenuTransitions);
-	fprintf(file, "recents=%i\n", settings.showRecents);
-	fprintf(file, "tools=%i\n", settings.showTools);
-	fprintf(file, "collections=%i\n", settings.showCollections);
-	fprintf(file, "emulators=%i\n", settings.showEmulators);
-	fprintf(file, "gameart=%i\n", settings.showGameArt);
-	fprintf(file, "showfoldernamesatroot=%i\n", settings.showFolderNamesAtRoot);
-	fprintf(file, "screentimeout=%i\n", settings.screenTimeoutSecs);
-	fprintf(file, "suspendTimeout=%i\n", settings.suspendTimeoutSecs);
-	fprintf(file, "powerOffProtection=%i\n", settings.powerOffProtection);
-	fprintf(file, "switcherscale=%i\n", settings.gameSwitcherScaling);
-	fprintf(file, "switcherresumableonly=%i\n", settings.gameSwitcherResumableOnly);
-	fprintf(file, "haptics=%i\n", settings.haptics);
-	fprintf(file, "romfolderbg=%i\n", settings.romsUseFolderBackground);
-	fprintf(file, "saveFormat=%i\n", settings.saveFormat);
-	fprintf(file, "stateFormat=%i\n", settings.stateFormat);
-	fprintf(file, "useExtractedFileName=%i\n", settings.useExtractedFileName);
-	fprintf(file, "muteLeds=%i\n", settings.muteLeds);
-	fprintf(file, "artWidth=%i\n", (int)(settings.gameArtWidth * 100));
-	fprintf(file, "wifi=%i\n", settings.wifi);
-	fprintf(file, "defaultView=%i\n", settings.defaultView);
-	fprintf(file, "wifiDiagnostics=%i\n", settings.wifiDiagnostics);
-	fprintf(file, "bluetooth=%i\n", settings.bluetooth);
-	fprintf(file, "btDiagnostics=%i\n", settings.bluetoothDiagnostics);
-	fprintf(file, "btMaxRate=%i\n", settings.bluetoothSamplerateLimit);
-	fprintf(file, "ntp=%i\n", settings.ntp);
-	fprintf(file, "currentTimezone=%i\n", settings.currentTimezone);
-	fprintf(file, "notifyManualSave=%i\n", settings.notifyManualSave);
-	fprintf(file, "notifyLoad=%i\n", settings.notifyLoad);
-	fprintf(file, "notifyScreenshot=%i\n", settings.notifyScreenshot);
-	fprintf(file, "notifyAdjustments=%i\n", settings.notifyAdjustments);
-	fprintf(file, "notifyDuration=%i\n", settings.notifyDuration);
-	fprintf(file, "raEnable=%i\n", settings.raEnable);
-	fprintf(file, "raUsername=%s\n", settings.raUsername);
-	fprintf(file, "raPassword=%s\n", settings.raPassword);
-	fprintf(file, "raHardcoreMode=%i\n", settings.raHardcoreMode);
-	fprintf(file, "raToken=%s\n", settings.raToken);
-	fprintf(file, "raAuthenticated=%i\n", settings.raAuthenticated);
-	fprintf(file, "raShowNotifications=%i\n", settings.raShowNotifications);
-	fprintf(file, "raNotificationDuration=%i\n", settings.raNotificationDuration);
-	fprintf(file, "raProgressNotificationDuration=%i\n", settings.raProgressNotificationDuration);
-	fprintf(file, "raAchievementSortOrder=%i\n", settings.raAchievementSortOrder);
-	fprintf(file, "disableSleep=%i\n", settings.disableSleep);
-	fprintf(file, "sshOnBoot=%i\n", settings.sshOnBoot);
+	static char ours[CFG_FILE_MAX];
+	if (CFG_serialize(ours, sizeof(ours)) < 0) {
+		printf("[CFG] settings serialization overflow, not writing\n");
+		return;
+	}
 
+	// Read what's on disk so we can merge and detect no-op syncs.
+	static char old_buf[CFG_FILE_MAX];
+	size_t old_len = 0;
+	FILE* rf = fopen(settingsPath, "r");
+	if (rf) {
+		old_len = fread(old_buf, 1, sizeof(old_buf) - 1, rf);
+		fclose(rf);
+	}
+	old_buf[old_len] = '\0';
+
+	// Merge: known keys take our current value (kept in their on-disk order),
+	// unknown keys and non-key lines are preserved verbatim, known keys the
+	// file lacks are appended. Other tools park their own keys in this file
+	// (and older binaries read files written by newer ones), so a sync must
+	// never strip keys it doesn't recognize. If the file is too large to merge
+	// safely, fall back to the canonical serialization alone.
+	static char merged[CFG_FILE_MAX];
+	const char* out = ours;
+	size_t out_len = strlen(ours);
+	if (old_len < sizeof(old_buf) - 1) {
+		const char* olines[CFG_MAX_LINES];
+		size_t olens[CFG_MAX_LINES];
+		bool used[CFG_MAX_LINES] = {false};
+		int ocount = 0;
+		for (const char* q = ours; *q && ocount < CFG_MAX_LINES; q += olens[ocount - 1]) {
+			const char* nl = strchr(q, '\n');
+			olines[ocount] = q;
+			olens[ocount] = nl ? (size_t)(nl - q) + 1 : strlen(q);
+			ocount++;
+		}
+
+		size_t moff = 0;
+		bool overflow = false;
+		for (const char* p = old_buf; *p && !overflow;) {
+			const char* nl = strchr(p, '\n');
+			size_t len = nl ? (size_t)(nl - p) + 1 : strlen(p);
+			int klen = CFG_lineKeyLen(p, len);
+			int match = -1;
+			if (klen > 0) {
+				for (int i = 0; i < ocount; i++) {
+					if (CFG_lineKeyLen(olines[i], olens[i]) == klen && strncmp(p, olines[i], (size_t)klen) == 0) {
+						match = i;
+						break;
+					}
+				}
+			}
+			if (match >= 0) {
+				if (!used[match]) { // duplicate known keys collapse to one
+					used[match] = true;
+					if (moff + olens[match] < sizeof(merged)) {
+						memcpy(merged + moff, olines[match], olens[match]);
+						moff += olens[match];
+					} else
+						overflow = true;
+				}
+			} else {
+				if (moff + len + 1 < sizeof(merged)) {
+					memcpy(merged + moff, p, len);
+					moff += len;
+					if (merged[moff - 1] != '\n') // keep appended lines off this one
+						merged[moff++] = '\n';
+				} else
+					overflow = true;
+			}
+			p += len;
+		}
+		for (int i = 0; i < ocount && !overflow; i++) {
+			if (used[i])
+				continue;
+			if (moff + olens[i] < sizeof(merged)) {
+				memcpy(merged + moff, olines[i], olens[i]);
+				moff += olens[i];
+			} else
+				overflow = true;
+		}
+		if (!overflow) {
+			merged[moff] = '\0';
+			out = merged;
+			out_len = moff;
+		}
+	}
+
+	// Settings changes are rare; skip the write (and the flash wear) when the
+	// file already holds exactly this content.
+	if (out_len == old_len && memcmp(out, old_buf, old_len) == 0)
+		return;
+
+	// Write atomically: external readers/writers (OSD toggle scripts, pak
+	// launch scripts) must never observe a truncated file.
+	char tmpPath[MAX_PATH];
+	snprintf(tmpPath, sizeof(tmpPath), "%s.tmp", settingsPath);
+	FILE* file = fopen(tmpPath, "w");
+	if (file == NULL) {
+		printf("[CFG] Unable to open settings file, cant write\n");
+		return;
+	}
+	if (fwrite(out, 1, out_len, file) != out_len) {
+		printf("[CFG] Short write, keeping previous settings file\n");
+		fclose(file);
+		unlink(tmpPath);
+		return;
+	}
+	fflush(file);
+	fsync(fileno(file));
 	fclose(file);
+	if (rename(tmpPath, settingsPath) != 0) {
+		printf("[CFG] Unable to replace settings file\n");
+		unlink(tmpPath);
+	}
 }
 
 void CFG_print(void) {
@@ -1137,6 +1307,7 @@ void CFG_print(void) {
 	printf("\t\"btMaxRate\": %i,\n", settings.bluetoothSamplerateLimit);
 	printf("\t\"ntp\": %i,\n", settings.ntp);
 	printf("\t\"currentTimezone\": %i,\n", settings.currentTimezone);
+	printf("\t\"keepAwakeUSB\": %i,\n", settings.keepAwakeUSB);
 	printf("\t\"disableSleep\": %i,\n", settings.disableSleep);
 	printf("\t\"sshOnBoot\": %i,\n", settings.sshOnBoot);
 

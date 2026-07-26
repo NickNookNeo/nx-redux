@@ -21,11 +21,12 @@
 // Developer settings page
 // ============================================
 
-#define DEV_ITEM_COUNT 4
+#define DEV_ITEM_COUNT 5
 #define DEV_IDX_DISABLE_SLEEP 0
-#define DEV_IDX_SSH_TOGGLE 1
-#define DEV_IDX_SSH_ON_BOOT 2
-#define DEV_IDX_CLEAN_DOTFILES 3
+#define DEV_IDX_KEEP_AWAKE_USB 1
+#define DEV_IDX_SSH_TOGGLE 2
+#define DEV_IDX_SSH_ON_BOOT 3
+#define DEV_IDX_CLEAN_DOTFILES 4
 
 static const char* on_off_labels[] = {"Off", "On"};
 static int on_off_values[] = {0, 1};
@@ -50,6 +51,22 @@ static void dev_set_disable_sleep(int v) {
 
 static void dev_reset_disable_sleep(void) {
 	CFG_setDisableSleep(CFG_DEFAULT_DISABLE_SLEEP);
+}
+
+// ============================================
+// Keep awake over USB
+// ============================================
+
+static int dev_get_keep_awake_usb(void) {
+	return CFG_getKeepAwakeUSB() ? 1 : 0;
+}
+
+static void dev_set_keep_awake_usb(int v) {
+	CFG_setKeepAwakeUSB(v != 0);
+}
+
+static void dev_reset_keep_awake_usb(void) {
+	CFG_setKeepAwakeUSB(CFG_DEFAULT_KEEP_AWAKE_USB);
 }
 
 // ============================================
@@ -312,6 +329,11 @@ SettingsPage* developer_page_create(DevicePlatform dev_platform) {
 		"Disable sleep", "Prevent deep sleep mode. Useful for ADB debugging.",
 		on_off_labels, 2, on_off_values,
 		dev_get_disable_sleep, dev_set_disable_sleep, dev_reset_disable_sleep);
+
+	items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
+		"Keep awake over USB", "Keep the screen on and block sleep while connected to a computer over USB.",
+		on_off_labels, 2, on_off_values,
+		dev_get_keep_awake_usb, dev_set_keep_awake_usb, dev_reset_keep_awake_usb);
 
 	items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
 		"Enable SSH", dev_get_ssh_desc(),

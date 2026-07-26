@@ -180,6 +180,43 @@ void PLAT_getBatteryStatusFine(int* is_charging, int* charge) {
 	}
 }
 
+int PLAT_isUSBConnected(void) {
+	// An active USB gadget link. Two conditions, BOTH required:
+	// - VBUS present (axp2202-usb/online, the node battery status keys off) —
+	//   it drops to 0 the moment the cable is pulled. Needed because on this
+	//   hardware /sys/class/udc/<name>/state LATCHES at "configured" forever
+	//   after the first host connection (verified on tg5050 2026-07-27: state
+	//   stayed "configured" through a 30 s unplug while online tracked the
+	//   cable) — the state node alone would keep the device awake forever.
+	// - gadget state "configured" (a host actually enumerated us), so a dumb
+	//   wall charger before any host session doesn't count as connected.
+	// Accepted edge: a charger plugged in AFTER a host session in the same
+	// boot still reads as connected (latched state + VBUS). Harmless — the
+	// device is on external power, and charging already defers deep sleep.
+	if (getInt("/sys/class/power_supply/axp2202-usb/online") != 1)
+		return 0;
+	DIR* dir = opendir("/sys/class/udc");
+	if (!dir)
+		return 0;
+	int connected = 0;
+	struct dirent* entry;
+	while (!connected && (entry = readdir(dir)) != NULL) {
+		if (entry->d_name[0] == '.')
+			continue;
+		char path[512];
+		snprintf(path, sizeof(path), "/sys/class/udc/%s/state", entry->d_name);
+		FILE* file = fopen(path, "r");
+		if (!file)
+			continue;
+		char state[32] = {0};
+		if (fgets(state, sizeof(state), file) && strncmp(state, "configured", 10) == 0)
+			connected = 1;
+		fclose(file);
+	}
+	closedir(dir);
+	return connected;
+}
+
 void PLAT_enableBacklight(int enable) {
 	if (enable) {
 		if (is_brick || is_brickpro)

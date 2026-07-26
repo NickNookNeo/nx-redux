@@ -52,29 +52,22 @@ void SRAM_read(void) {
 	void* sram = core.get_memory_data(RETRO_MEMORY_SAVE_RAM);
 
 #ifdef HAS_SRM
-	// TODO: rzipstream_open can also handle uncompressed, else branch is probably unnecessary
-	// srm, potentially compressed
-	if (CFG_getSaveFormat() == SAVE_FORMAT_SRM) {
-		rzipstream_t* sram_file = rzipstream_open(filename, RETRO_VFS_FILE_ACCESS_READ);
-		if (!sram_file)
-			return;
+	// Always read through rzipstream, regardless of the save-format setting: it
+	// detects the #RZIPv# magic and falls back to a raw read when absent, so it
+	// handles both compressed and uncompressed .srm files. Choosing the reader
+	// from the *setting* corrupted compressed saves read under an uncompressed
+	// setting (both formats share the same .srm filename) — and SRAM_write()
+	// then destroyed the original by rewriting it raw. The write side stays
+	// setting-driven on purpose: the first save after a format switch converts
+	// the file losslessly.
+	rzipstream_t* sram_file = rzipstream_open(filename, RETRO_VFS_FILE_ACCESS_READ);
+	if (!sram_file)
+		return;
 
-		if (!sram || rzipstream_read(sram_file, sram, sram_size) < 0)
-			LOG_error("rzipstream: Error reading SRAM data\n");
+	if (!sram || rzipstream_read(sram_file, sram, sram_size) < 0)
+		LOG_error("rzipstream: Error reading SRAM data\n");
 
-		rzipstream_close(sram_file);
-	}
-	// uncompressed
-	else {
-		RFILE* sram_file = filestream_open(filename, RETRO_VFS_FILE_ACCESS_READ, 0);
-		if (!sram_file)
-			return;
-
-		if (!sram || filestream_read(sram_file, sram, sram_size) < 0)
-			LOG_error("filestream: Error reading SRAM data\n");
-
-		filestream_close(sram_file);
-	}
+	rzipstream_close(sram_file);
 #else
 	FILE* sram_file = fopen(filename, "r");
 	if (!sram_file)

@@ -404,7 +404,7 @@ typedef struct SND_Frame {
 } SND_Frame;
 
 typedef struct {
-	SND_Frame* frames;
+	SND_Frame* frames; // malloc'd by resample_audio(); the caller owns it and must free() it
 	int frame_count;
 } ResampledFrames;
 
@@ -556,6 +556,7 @@ void PWR_enableAutosleep(void);
 int PWR_preventAutosleep(void);
 
 int PWR_isCharging(void);
+int PWR_isUSBConnected(void); // active USB gadget link (data), not mere charging
 int PWR_getBattery(void);
 
 int PWR_isOnline(void);
@@ -699,6 +700,7 @@ int PLAT_supportsOverscan(void);
 #define PWR_LOW_CHARGE 10
 void PLAT_getBatteryStatus(int* is_charging, int* charge);	   // 0,1 and 0,10,20,40,60,80,100
 void PLAT_getBatteryStatusFine(int* is_charging, int* charge); // 0,1 and 0-100
+int PLAT_isUSBConnected(void);								   // 1 while configured as a USB gadget by a host
 void PLAT_enableBacklight(int enable);
 int PLAT_supportsDeepSleep(void);
 int PLAT_deepSleep(void);

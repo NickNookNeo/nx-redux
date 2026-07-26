@@ -46,6 +46,10 @@ void PLAT_getBatteryStatusFine(int* is_charging, int* charge) {
 	*charge = 100;
 }
 
+int PLAT_isUSBConnected(void) {
+	return 0; // not a USB gadget
+}
+
 void PLAT_enableBacklight(int enable) {
 	// buh
 }

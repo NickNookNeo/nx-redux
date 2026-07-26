@@ -986,9 +986,11 @@ void Config_syncFrontend(char* key, int value) {
 			rewind_cfg_lz4_acceleration = parsed;
 			break;
 		}
-		// Only call Rewind_init if core is initialized; early config reads happen before
-		// the core is ready and will be followed by an explicit Rewind_init later
-		if (core.initialized) {
+		// Defer Rewind_init until after the explicit init in main(): early config
+		// reads happen before the core can serialize, and gating on the flag (not
+		// core.initialized) keeps startup reads from allocating the rewind buffers
+		// once per rewind key
+		if (rewind_init_ready) {
 			Rewind_init(core.serialize_size ? core.serialize_size() : 0);
 		}
 		if (i == FE_OPT_REWIND_ENABLE) {

@@ -14,6 +14,19 @@
 
 // rewind types live in ma_rewind.h
 RewindContext rewind_ctx = {0};
+
+// Snapshot of the config Rewind_init last applied. Config reads replay every
+// rewind option key through Config_syncFrontend and call Rewind_init once per
+// key (and Config_restore / SET_CORE_OPTIONS do it again at runtime), so
+// Rewind_init skips the full teardown + multi-MB calloc cycle when nothing
+// effective has changed. Invalidated by Rewind_free so an external free always
+// forces the next init to run for real.
+static struct {
+	int valid;
+	int result;
+	size_t state_size;
+	int enable, buf_mb, gran, audio, compress, accel;
+} rewind_last_init;
 static int rewind_warn_empty = 0;
 int last_rewind_pressed = 0;
 
@@ -77,6 +90,7 @@ void Rewind_free(void) {
 	}
 	memset(&rewind_ctx, 0, sizeof(rewind_ctx));
 	rewinding = 0;
+	rewind_last_init.valid = 0;
 }
 
 void Rewind_reset(void) {
@@ -285,7 +299,7 @@ static int Rewind_compress_state(const uint8_t* src, size_t* dest_len, int* is_k
 	return 0;
 }
 
-int Rewind_init(size_t state_size) {
+static int Rewind_init_apply(size_t state_size) {
 	Rewind_free();
 	// pull current option values directly
 	int enable = rewind_cfg_enable;
@@ -438,6 +452,30 @@ int Rewind_init(size_t state_size) {
 		rewind_ctx.worker_running = 1;
 	}
 	return 1;
+}
+
+int Rewind_init(size_t state_size) {
+	if (rewind_last_init.valid && state_size == rewind_last_init.state_size &&
+		rewind_cfg_enable == rewind_last_init.enable &&
+		rewind_cfg_buffer_mb == rewind_last_init.buf_mb &&
+		rewind_cfg_granularity == rewind_last_init.gran &&
+		rewind_cfg_audio == rewind_last_init.audio &&
+		rewind_cfg_compress == rewind_last_init.compress &&
+		rewind_cfg_lz4_acceleration == rewind_last_init.accel)
+		return rewind_last_init.result;
+
+	int result = Rewind_init_apply(state_size);
+	// record after applying: Rewind_free (called inside apply) clears .valid
+	rewind_last_init.valid = 1;
+	rewind_last_init.result = result;
+	rewind_last_init.state_size = state_size;
+	rewind_last_init.enable = rewind_cfg_enable;
+	rewind_last_init.buf_mb = rewind_cfg_buffer_mb;
+	rewind_last_init.gran = rewind_cfg_granularity;
+	rewind_last_init.audio = rewind_cfg_audio;
+	rewind_last_init.compress = rewind_cfg_compress;
+	rewind_last_init.accel = rewind_cfg_lz4_acceleration;
+	return result;
 }
 
 static void* Rewind_worker_thread(void* arg) {

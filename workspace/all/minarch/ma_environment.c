@@ -45,6 +45,15 @@ bool environment_callback(unsigned cmd, void* data) { // copied from picoarch in
 			LOG_info("%s\n", message->msg);
 		break;
 	}
+	case RETRO_ENVIRONMENT_SHUTDOWN: { /* 7 */
+		// A core's own quit path (e.g. Doom's quit menu, FBNeo's error screen)
+		// or a fatal init failure (VICE, PUAE, cap32) asking the frontend to
+		// exit. Without this the request is silently dropped and the main loop
+		// keeps running a core that has given up.
+		LOG_info("Core requested shutdown\n");
+		quit = 1;
+		break;
+	}
 	case RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL: { /* 8 */
 													// puts("RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL");
 													// TODO: used by fceumm at least

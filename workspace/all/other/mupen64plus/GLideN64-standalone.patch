@@ -479,7 +479,7 @@ index 701d27d2..e6ad4c80 100644
  
  #endif // DISPLAYLOADPROGRESS_H
 diff --git a/src/DisplayWindow.cpp b/src/DisplayWindow.cpp
-index 59725f62..a627d7ea 100644
+index 59725f62..3a3ad2a0 100644
 --- a/src/DisplayWindow.cpp
 +++ b/src/DisplayWindow.cpp
 @@ -1,5 +1,7 @@
@@ -490,7 +490,7 @@ index 59725f62..a627d7ea 100644
  #include "Config.h"
  #include "RSP.h"
  #include "VI.h"
-@@ -8,6 +10,278 @@
+@@ -8,6 +10,284 @@
  #include "PluginAPI.h"
  #include "FrameBuffer.h"
  
@@ -543,6 +543,12 @@ index 59725f62..a627d7ea 100644
 +static Uint8 s_prevHat = 0;
 +static Uint32 s_prevButtons = 0;
 +static bool s_resumeChecked = false;
++// Quit-with-autosave sequencing: M64CMD_STATE_SAVE is queued and serviced at
++// the next interrupt on the emu thread, so after requesting the auto-slot save
++// we let emulation run a few more frames before issuing M64CMD_STOP — stopping
++// in the same breath could tear the loop down before the save job runs.
++static bool s_quitPending = false;
++static int s_quitDelayFrames = 0;
 +
 +// ---------------------------------------------------------------------------
 +// Overlay helpers
@@ -769,7 +775,7 @@ index 59725f62..a627d7ea 100644
  bool DisplayWindow::start()
  {
  	if (!_start())
-@@ -48,6 +322,46 @@ void DisplayWindow::swapBuffers()
+@@ -48,6 +328,65 @@ void DisplayWindow::swapBuffers()
  {
  	m_drawer.drawOSD();
  	m_drawer.clearStatistics();
@@ -792,11 +798,30 @@ index 59725f62..a627d7ea 100644
 +			}
 +		}
 +
-+		if (s_overlayInitialized && check_menu_button()) {
-+			EmuOvlAction action = run_overlay_loop(*this);
-+			if (action == EMU_OVL_ACTION_QUIT) {
++		if (s_quitPending) {
++			// Auto-save requested by QUIT below: give the queued save job a
++			// few frames to be serviced, then stop for real.
++			if (--s_quitDelayFrames <= 0) {
++				s_quitPending = false;
 +				if (CoreDoCommand)
 +					CoreDoCommand(M64CMD_STOP, 0, nullptr);
++			}
++		} else if (s_overlayInitialized && check_menu_button()) {
++			EmuOvlAction action = run_overlay_loop(*this);
++			if (action == EMU_OVL_ACTION_QUIT) {
++				if (CoreDoCommand) {
++					// Auto-save to the hidden auto-resume slot so the game
++					// switcher always resumes at the exact quit moment —
++					// parity with DC.pak's quit and minarch's Menu_autosaveQuit.
++					// Screenshot + .minui slot-file repoint happen here; the
++					// state itself is written by the queued job a frame or
++					// two later, before the delayed M64CMD_STOP above.
++					CoreDoCommand(M64CMD_STATE_SET_SLOT, EMU_OVL_AUTO_SLOT, nullptr);
++					CoreDoCommand(M64CMD_STATE_SAVE, 1, nullptr);
++					emu_ovl_save_slot_screenshot(&s_overlay, EMU_OVL_AUTO_SLOT);
++					s_quitPending = true;
++					s_quitDelayFrames = 3;
++				}
 +			} else if (action == EMU_OVL_ACTION_SAVE_STATE) {
 +				int slot = emu_ovl_get_action_param(&s_overlay);
 +				if (CoreDoCommand) {

@@ -163,6 +163,7 @@ static struct PWR_Context {
 	pthread_t battery_pt;
 	SDL_atomic_t is_charging;
 	SDL_atomic_t charge;
+	SDL_atomic_t is_usb_connected; // active USB gadget link, not mere charging
 
 	SDL_atomic_t is_online;
 	SDL_atomic_t update_secs;
@@ -2416,7 +2417,7 @@ size_t SND_batchSamples_fixed_rate(const SND_Frame* frames, size_t frame_count) 
 		pthread_mutex_unlock(&audio_mutex);
 
 		total_consumed_frames += written_frames;
-		// No need to free - using static buffers
+		free(resampled.frames);
 	}
 
 	return total_consumed_frames;
@@ -3201,6 +3202,7 @@ static void PWR_updateBatteryStatus(void) {
 	PLAT_getBatteryStatusFine(&is_charging, &charge);
 	SDL_AtomicSet(&pwr.is_charging, is_charging);
 	SDL_AtomicSet(&pwr.charge, charge);
+	SDL_AtomicSet(&pwr.is_usb_connected, PLAT_isUSBConnected());
 
 	// this is technically redundant, but PWR_update() might not always be called to conserve battery and cycles
 	LEDS_applyRules();
@@ -3505,7 +3507,8 @@ static void PWR_waitForWake(void) {
 		SDL_Delay(200);
 		if (sleepDelay > 0) {
 			if (SDL_GetTicks() - sleep_ticks >= sleepDelay) { // increased to two minutes
-				if (SDL_AtomicGet(&pwr.is_charging)) {
+				if (SDL_AtomicGet(&pwr.is_charging) ||
+					(CFG_getKeepAwakeUSB() && SDL_AtomicGet(&pwr.is_usb_connected))) {
 					sleep_ticks += 60000; // check again in a minute
 					continue;
 				}
@@ -3573,12 +3576,16 @@ void PWR_enableAutosleep(void) {
 	pwr.can_autosleep = 1;
 }
 int PWR_preventAutosleep(void) {
-	return !pwr.can_autosleep || GetHDMI();
+	return !pwr.can_autosleep || GetHDMI() ||
+		   (CFG_getKeepAwakeUSB() && SDL_AtomicGet(&pwr.is_usb_connected));
 }
 
 // updated by PWR_updateBatteryStatus()
 int PWR_isCharging(void) {
 	return SDL_AtomicGet(&pwr.is_charging);
+}
+int PWR_isUSBConnected(void) {
+	return SDL_AtomicGet(&pwr.is_usb_connected);
 }
 int PWR_getBattery(void) { // 10-100 in 10-20% fragments
 	return SDL_AtomicGet(&pwr.charge);
