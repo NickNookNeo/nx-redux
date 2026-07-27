@@ -66,7 +66,7 @@ typedef enum {
 
 // Default radio stations
 static RadioStation default_stations[] = {
-	{"Hitz FM", "https://n10.rcs.revma.com/488kt4sbv4uvv/10_xn1quxmoht3902/playlist.m3u8", "Pop", "More the Hitz, One the Time"},
+	{"Hitz FM", "https://stream.rcs.revma.com/488kt4sbv4uvv", "Pop", "More the Hitz, One the Time"},
 };
 
 // Curated stations are now in radio_curated.c module
@@ -219,6 +219,20 @@ static void radio_configure_rate(int stream_rate, int channels) {
 static void radio_push_samples(const int16_t* samples, int total_samples, int channels) {
 	if (total_samples <= 0 || channels <= 0)
 		return;
+
+	// A sink hotplug can reopen the device at a different rate mid-stream
+	// (e.g. speaker 48k -> BT 44.1k). Track it, rebuild the resampler, and
+	// drop buffered old-rate samples so pitch stays correct.
+	int out_rate = Player_getOutputSampleRate();
+	if (out_rate > 0 && out_rate != radio.device_rate) {
+		radio.device_rate = out_rate;
+		radio_update_stream_rate(radio.stream_rate, channels);
+		pthread_mutex_lock(&radio.audio_mutex);
+		radio.audio_ring_read = radio.audio_ring_write;
+		radio.audio_ring_count = 0;
+		pthread_mutex_unlock(&radio.audio_mutex);
+	}
+
 	if (!radio.resampler) {
 		radio_ring_write(samples, total_samples);
 		return;

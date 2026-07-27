@@ -50,6 +50,11 @@ Improvements:
 - All standalone emulators now support USB-C and Bluetooth audio. 
 - All standalone emulators now include a custom in-game menu with UI styling consistent with the system.
 - All standalone emulators now support save states with screenshots.
+- Quitting a game now auto-saves to a hidden save slot (minarch cores, N64 and Dreamcast), so the `Game Switcher` always resumes exactly where you left off.
+- Sink-aware audio sample-rate negotiation across the whole system (music, radio, video and all emulators):
+    - The audio device opens at the rate the active output actually prefers — 48 kHz on the speaker, the negotiated Bluetooth rate, or a USB DAC's supported rates — with high-quality in-app resampling instead of silent low-quality system resampling.
+    - Hot-plugging a USB-C DAC or connecting Bluetooth mid-playback reroutes audio automatically, and a headphone icon appears in the status bar while an external output is active.
+    - New `Audio` page in `Settings`: current output device and rate, a `Force 48 kHz` escape hatch, and the Bluetooth max sample rate setting.
 - Added sleep by pressing power button support for all standalone emulator and Portmaster games. 
 - Added top and bottom scroll indicators to the all menu list.
 - Redesigned the `Game Tracker` tool with a cleaner play-stats list (total · average · play count per game).
@@ -58,6 +63,7 @@ Improvements:
 New Features:
 - Redesigned UI with consistent styling across the system.
 - Game art fallback for titles without save states in the game switcher
+- `Game Switcher` lists only resumable games by default — switch to `All recent games` in `Settings → System`.
 - Main menu shortcut for quick access to frequently used `Tools` and `Games`
 - Option to disable the emulator folders (ideal for users who prefer listing only selected games via shortcuts in the main menu)
 - Direct selection of Wi-Fi networks and Bluetooth devices from `Settings`.
@@ -96,12 +102,17 @@ New Features:
     - Power off button.
     - The entire OSD (layout, widgets, icons) ships on the SD card, so it stays consistent regardless of the stock firmware version.
 - Built-in [Music Player](https://github.com/mohammadsyuhada/nextui-music-player)
+    - Audio settings: sample-rate mode (`Device default` / `Follow source` for bit-exact hi-res playback on USB DACs), resampler quality and buffer size.
+    - Live sample-rate badge on the now-playing screen (e.g. `96kHz` when playing natively, `44.1→48kHz` when resampling).
+    - Internet radio streams through the same high-quality resampler, with cover art fetched for the currently playing song.
 - Built-in [Media Player](https://github.com/mohammadsyuhada/nextui-video-player)
 - Bundled `Drastic Nintendo DS` emulator.
 - Bundled `Mupen64Plus Nintendo 64` emulator.
     - Support for high resolution textures (with limitations due to 1GB RAM)
         - Place Rice-format texture packs in `Roms/Nintendo 64 (N64)/.hires_texture/<ROM NAME>/`, where `<ROM NAME>` is the ROM's **internal header name** (e.g. `MARIOKART64`), not its filename. To find it, run the game once and look for the `Core: Name:` line in `.userdata/<platform>/logs/N64.txt`.
         - On the game's first launch the pack is converted into a cache in `Roms/Nintendo 64 (N64)/.cache/` with an on-screen progress display — large packs take several minutes and need extra free space on the SD card (e.g. a 2.6 GB pack produces a ~450 MB cache). Later launches load straight from the cache and start fast.
+- Bundled `Flycast Sega Dreamcast` emulator.
+    - Runs out of the box without a BIOS (HLE boot); drop `dc_boot.bin` into `Bios/DC/` on the SD card to boot through the real BIOS instead.
 - Bundled `Portmaster` in the Tools.
     - Configured by default with Nintendo input layout (configurable)
 - Added [Netplay](https://github.com/mohammadsyuhada/nextui-netplay) for local wireless multiplayer, available from the in-game menu.

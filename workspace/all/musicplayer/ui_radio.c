@@ -180,8 +180,12 @@ void render_radio_playing(SDL_Surface* screen, IndicatorType show_setting, int r
 		info_y += SCALE1(18);
 	}
 
-	// Station name (extra large font) - white
-	const char* station_name = meta->station_name[0] ? meta->station_name : (current_station ? current_station->name : "Unknown Station");
+	// Station name (extra large font) - white. Prefer the user's configured
+	// name; fall back to the stream's ICY name only when we have none (some
+	// servers announce junk like the mount id, e.g. revma's "488kt4sbv4uvv")
+	const char* station_name = (current_station && current_station->name[0]) ? current_station->name
+							   : meta->station_name[0]						 ? meta->station_name
+																			 : "Unknown Station";
 	GFX_truncateText(font.xlarge, station_name, truncated, max_w_full, 0);
 	SDL_Surface* name_surf = TTF_RenderUTF8_Blended(font.xlarge, truncated, COLOR_WHITE);
 	if (name_surf) {

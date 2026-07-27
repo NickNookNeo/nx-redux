@@ -13,22 +13,9 @@ Move an entry from there to here once it compiles and needs hardware time.
 
 ## Upstream-port + fix round (built 2026-07-27)
 
-**Status:** ten DEV_TODO items implemented in one session 2026-07-27 (upstream ports
-#667/#697/#699/#728/#783 + SUPA affinity + CFG_sync rewrite + auto-save-on-quit for both
-minarch and the N64 overlay + N64 shared saves). Both device platforms build clean. Nothing
-committed. All changed elfs + the rebuilt GLideN64 `.so` + N64 launch.sh are **pushed to
-both cards** (Brick and Smart Pro S, md5-verified 2026-07-27).
-
-Already verified and removed from this list: **SUPA affinity fix** (crash reproduced on
-tg5050 — `PPUThreadAffinity: 0xc` → `MDFN_Error`; with the {0,1,4}-topology masks the game
-boots and plays, which itself proves the masks applied, since supafaust throws on any
-failed setaffinity); **Keep awake over USB** (incl. finding + fixing upstream #783's
-latched-udc-state probe bug; both devices verified — full story in the
-`PLAT_isUSBConnected()` comments and the device-deploy notes); **auto-save-on-quit,
-both halves** (minarch `Menu_autosaveQuit` + N64 GLideN64 overlay quit → hidden slot 9 +
-switcher screenshot + `.minui` repoint, incl. the overlay's deliberate 3-frame delayed
-`M64CMD_STOP` so the queued save lands) — user-verified on both Brick and Smart Pro S
-2026-07-27.
+**Status:** ten DEV_TODO items implemented 2026-07-27, committed as `1ccc1030`. All
+changed elfs + the rebuilt GLideN64 `.so` + N64 launch.sh are pushed to both cards
+(Brick and Smart Pro S, md5-verified 2026-07-27).
 
 Full deploy: `make all`, flash zip. Quick iterate: push the single rebuilt `.elf` (reboot required
 for nextui/minarch pushes — see Gotchas at the bottom of this file).
@@ -49,34 +36,6 @@ for nextui/minarch pushes — see Gotchas at the bottom of this file).
       left pointing at garbage for the PRBOOM quit (core dies before the menu's autosave —
       quit here goes through the env callback, not ITEM_QUIT, so no slot-9 autosave fires;
       confirm RESUME behaves sanely, i.e. falls back to previous state or START).
-- [ ] **CFG_sync rewrite** (`config.c`, upstream issue #789) — four of five checks
-      verified via adb on the Brick, 2026-07-27:
-      - [x] (a) no redundant writes — file bit-identical (mtime + md5) through a full
-            shutdown→boot cycle (nextui shutdown sync + 3× nextval + nextui boot sync).
-      - [x] (b) unknown keys survive a real merge write — planted `thirdparty_test=1`
-            AND deleted `sshOnBoot`; after reboot the foreign key was preserved in place
-            and the missing known key re-appended.
-      - [x] (d) materialization — deleted the file; first boot recreated it complete
-            (58 keys, defaults incl. `keepAwakeUSB=0`).
-      - [x] (e) no `.tmp` stragglers at any checkpoint.
-      - [ ] (c) OSD WiFi toggle → change an unrelated setting → WiFi state must not
-            clobber (needs physical OSD interaction).
-      **Found while testing (the #789 scenario, live):** the card's stale `nextval.elf`
-      (called 3× from `MinUI.pak/launch.sh` at every boot; its `CFG_init` used the old
-      rewrite-everything sync) was stripping `keepAwakeUSB` at every boot — the new
-      nextui then re-appended it as default 0, silently turning the keep-awake toggle
-      OFF each reboot. Fixed on the Brick (rebuilt `nextval.elf` pushed, both platforms
-      built). **The Smart Pro S card still has the old nextval** — its keep-awake toggle
-      resets to Off on every reboot until `workspace/all/nextval/build/tg5050/nextval.elf`
-      is pushed to `.system/tg5050/bin/`. Any other stale config.c-linking tool on a card
-      (mediaplayer, musicplayer, sync, scraper, portmaster, gametracker, bootlogo) does
-      the same when *launched*; a full flash resolves all of them at once.
-- [ ] **N64 shared saves** (`launch.sh` both platforms) — launch an N64 game: saves/states
-      must land under `.userdata/shared/N64-mupen64plus/data/mupen64plus/save/`; existing
-      per-device saves (`.userdata/<dev>/.local/share/mupen64plus/save/`) migrate on first
-      launch (existing shared files win). Then the real test: save state on Smart Pro S,
-      move the card to the Brick, RESUME must load it (this was the broken promise).
-      GLideN64 shader cache must remain per-device (`$HOME/.cache`).
 - [ ] **Rewind re-init fix** (upstream #728 + early-out) — enable rewind, play: rewind
       works; changing a rewind option mid-game still takes effect (buffer size change →
       re-init happens); in-game "Restore Defaults" no longer hitches for seconds with a
@@ -100,10 +59,9 @@ for nextui/minarch pushes — see Gotchas at the bottom of this file).
 
 ## Game Switcher resumable filter + standalone-emulator resume
 
-**Status:** merged to `main` 2026-07-26 (`13a4d3c4`, PR #54).
-Switcher filter + setting verified on Brick (tg5040) and Smart Pro S (tg5050). N64 resume
-handshake now verified on both Brick and Smart Pro S (tg5050 verified 2026-07-27, see
-`.superpowers/sdd/2026-07-26-flycast-dc-pak/n64-tg5050-report.md`).
+**Status:** merged to `main` 2026-07-26 (`13a4d3c4`, PR #54). Verified on Brick and
+Smart Pro S (filter, setting, N64 resume handshake, fresh-launch cold boot). Only the
+Brick Pro pass remains.
 
 Two related changes:
 
@@ -120,26 +78,6 @@ Two related changes:
 
 ### On-device verification
 
-- [x] **N64 resume on Smart Pro S** — done, 2026-07-27. `.so` and `N64.pak/` were
-      already in sync with the repo on this card (no push needed — see report).
-      User-verified end-to-end on real hardware (Mario Kart 64): saved to slot 0 via
-      overlay, quit, relaunched — log shows `Core Status: State loaded from:
-      Mario Kart 64 (U) [!]-3A67D998.st0` immediately after `[Overlay] Initialized
-      successfully`, with no menu button touched, confirming the
-      `/tmp/resume_slot.txt` handshake fired automatically. Matches Brick's
-      already-verified behavior. Full evidence:
-      `.superpowers/sdd/2026-07-26-flycast-dc-pak/n64-tg5050-report.md`.
-      Found (not fixed): N64 save-state/SRAM data is not actually shared across
-      devices despite `N64.pak/launch.sh`'s comment claiming it is — only the
-      `.minui/<rom>.txt` resume marker is genuinely shared; the real `.st0`/`.eep`/
-      `.mpk` files land under the per-device `$HOME` (`$USERDATA_PATH`), not
-      `$SHARED_USERDATA_PATH`. Not exercised by same-device testing but would
-      break resume across a physically-moved SD card. Fixed 2026-07-27 via
-      `XDG_DATA_HOME` — verify item in the fix-round section at the top of this file.
-- [x] **N64 fresh launch still cold-boots** on Smart Pro S — done, 2026-07-27.
-      Verified directly (`/tmp/resume_slot.txt`=8, fresh launch): file consumed
-      and unlinked, zero state/resume log lines, confirming
-      `emu_ovl_consume_resume_slot()`'s `slot >= EMU_OVL_MAX_SLOTS` guard holds.
 - [ ] **Brick Pro (pending hardware)** — switcher filter + setting, and N64 resume if the
       pak gains a tg4040 build.
 
@@ -151,20 +89,13 @@ The repo ships exactly three standalone (non-minarch) emulator paks; everything 
 | Pak | Emulator | Resume status |
 |---|---|---|
 | N64 | mupen64plus + GLideN64 overlay | **Works** (this change) |
-| DC | flycast + nx_overlay | **Works**, incl. auto-save-on-quit to hidden slot 9 (consumed via `/tmp/resume_slot.txt`) — same handshake as N64. Merged to `main` 2026-07-27 (`99985dec`, PR #56). User-verified on both physical target devices: Brick (tg5040) hardware 2026-07-26 (HLE boot, overlay menu, save/load slots, quit-to-slot-9, switcher resume) and Smart Pro S (tg5050) in a later full session (real-BIOS boot verified on both devices, needs only `dc_boot.bin`; controller mapping shipped; tg5050 fully verified). Honestly still pending: full RA session test (a live achievement unlock, not just login/HTTPS), and Brick Pro (tg4040) once that hardware arrives. See `workspace/all/other/flycast/README.md` for details. |
+| DC | flycast + nx_overlay | **Works**, incl. auto-save-on-quit to hidden slot 9 (`/tmp/resume_slot.txt`, same handshake as N64). Merged `99985dec` (PR #56), verified on Brick + Smart Pro S. Still pending: full RA session test (a live achievement unlock, not just login/HTTPS), and Brick Pro once hardware arrives. Details: `workspace/all/other/flycast/README.md`. |
 | NDS | DraStic (closed-source binary) | **No resume, by design.** No overlay integration and no `.minui/` slot files, so NDS games are hidden by the resumable-only filter and show `A START` in "All" mode — honest behavior. Baking resume in would need DraStic's own savestate CLI/auto-load hooks, if any exist; the emu_overlay approach is not available without source. |
 
 User-installed paks that are not part of this repo (e.g. a community PSP/PPSSPP pak) are
 in the same position as NDS unless they write `.minui/<EMU>/<rom>.txt` slot files — if one
 does, it must also consume `/tmp/resume_slot.txt` or the switcher's RESUME promise will be
 cosmetic (exactly the bug fixed for N64).
-
-### Deferred
-
-Auto-save-on-quit parity: **done** — both halves built 2026-07-27 (minarch
-`Menu_autosaveQuit` + N64 GLideN64 overlay) and user-verified on Brick and Smart Pro S
-the same day. Every resume-capable emulator now quits to the hidden auto slot the way
-DC does. NDS (DraStic) remains out of scope by design.
 
 ### Gotchas
 
@@ -296,10 +227,9 @@ widget tile. None of them block bring-up.
 ## Thread-pinning `taskset` now actually works — re-verify everything that uses it
 
 **Status:** fixed and merged to `main` 2026-07-27 (`99985dec`, PR #56 — task 11 fix round).
-tg5050 (Smart Pro S) is now fully verified: native `taskset`, PS.pak's affinity probe,
-DC.pak's pinning, and N64.pak's pinning (2026-07-27, once a game was installed) all
-confirmed on real hardware. tg5040 (Brick) N64.pak re-verification with pinning
-actually active is still pending.
+tg5050 (Smart Pro S) fully verified (native `taskset`, PS.pak probe, DC.pak + N64.pak
+pinning — evidence in `.superpowers/sdd/2026-07-26-flycast-dc-pak/n64-tg5050-report.md`).
+Only the Brick N64.pak re-verify remains.
 
 `skeleton/SYSTEM/shared/bin/taskset` — the binary every pak's `taskset` calls resolved
 to via `PATH` — was a `-static` build that aborted with `FATAL: kernel too old` on the
@@ -327,72 +257,3 @@ platform's `taskset` turns out to be broken on some device.
       "unrestricted" still lands it on the contended cores. The fix (pin unmatched threads
       to LITTLE by default) is written up in `DEV_TODO.md` and should land with this
       re-verify, so it ships measured rather than blind.
-- [x] **tg5050 `taskset` + PS.pak on Smart Pro S** — done. The tg5050 binary
-      (`skeleton/SYSTEM/tg5050/bin/taskset`) runs natively on real Smart Pro S
-      hardware (no "kernel too old" abort). PS.pak's `taskset -c 4,5` launch line
-      and its `pin_threads` calls (`skeleton/SYSTEM/tg5050/paks/Emus/PS.pak/launch.sh`)
-      were confirmed applying real affinity, not silently falling back to a bare
-      launch.
-- [x] **DC.pak on Smart Pro S** — done. Same taskset binary; DC.pak's dual-cluster
-      pinning was confirmed exact on real Smart Pro S hardware.
-- [x] **N64.pak on Smart Pro S** — done, 2026-07-27, once a game was installed.
-      All three bare `taskset` calls (`skeleton/EXTRAS/Emus/tg5050/N64.pak/launch.sh:87,95,114`)
-      confirmed applying real affinity on two independent sessions (my own launch +
-      a real user session): main thread → cpu4, video thread → cpu5, `m64pwq`/`mali-*`
-      helpers → cpu0-1, all correct. Known gap (measured, not fixed): a second,
-      unnamed `mupen64plus` thread is never pinned — see the Brick bullet above,
-      where the fix is recorded as prescribed follow-up. Full evidence + CPU% tables:
-      `.superpowers/sdd/2026-07-26-flycast-dc-pak/n64-tg5050-report.md`.
-
----
-
-## Audio output routing + rate negotiation (built 2026-07-27, partially verified)
-
-**Verified 2026-07-27 on BOTH devices:** boot state, USB probe/route/unplug-revert
-(BE02T dongle: rates=48000 96000; hw_params pass-through incl. Follow-source 96 k
-native + 44.1 k→48 k nearest-fallback), BT negotiated 44100 route + gapless playback +
-transport-loss revert to speaker, SIGUSR1 republish, buffer setting visible on direct
-hw (period 4096), rate badge + ext-audio status icon. Session fixes riding along:
-buffer-change reopen, MediaTransport1-driven BT routing (LE-only connect no longer
-routes), probe rate-window guard. NOTE Brick needs the final audiomon.elf pushed
-(tg5040 build ready; Smart Pro S already runs it).
-
-Ground truth for "no silent resample": `cat /proc/asound/card<X>/pcm0p/sub0/hw_params`
-during playback — rate shown must equal the app's open rate. For BT compare
-bluealsa's negotiated rate to `cat /tmp/nx_audio_sink`.
-
-Still to verify, per device (Brick + Smart Pro S):
-- [ ] Radio through pickRate + decode-thread resampler (built 2026-07-27, moved from
-      DEV_TODO): play an internet station on speaker — device must open 48000
-      (`hw_params`), audio clean (in-app SRC does stream→48 k, no ALSA plug resample);
-      over BT the device opens at the negotiated rate. HLS + direct, AAC + MP3 paths.
-      DEPLOY DEBT: radio-fixed musicplayer.elf not yet pushed to either device
-      (tg5040 + tg5050 builds ready); Brick also still needs the final audiomon.elf
-      (MediaTransport1-driven BT routing).
-- [ ] Media player through `-af aresample=<pickRate>` (built 2026-07-27): play a video
-      on speaker — `hw_params` shows 48000 (ffplay's swresample converts in-process, plug
-      passes through); over BT device opens at negotiated rate; sink hotplug mid-video
-      restarts ffplay at the new rate (existing restart path). Also confirms the vendored
-      ffplay binary accepts `-af` (it errors out immediately if the filter is missing).
-      DEPLOY DEBT: mediaplayer.elf both devices (builds ready).
-- [ ] USB+BT together — precedence unchanged from before (last-event-wins).
-- [ ] Music player: 44.1 kHz file over a 44.1-capable USB DAC reopens at 44100 in
-      Follow-source (the BE02T rejects 44100 — needs a different DAC, or accept the
-      48000-nearest result already verified).
-- [ ] flycast: over USB DAC that accepts 44100 → log shows "native 44.1 KHz output",
-      hw_params 44100; on speaker → unchanged 48 kHz resample path.
-- [ ] N64: with BT connected at 44.1 kHz → mupen log shows OUTPUT_FREQUENCY 44100
-      (`--set` override); speaker → no override, 48000.
-- [ ] minarch: PS core over 44.1-capable USB DAC opens 44100 (hw_params).
-      NOTE intentional change: sub-48k cores on SPEAKER now open 48000 (minarch sinc
-      resample) instead of core-rate + ALSA plug linear resample — verify no audio
-      regression on a 32 kHz SNES title.
-- [ ] Escape hatch: Settings → Audio → Rate negotiation = Force 48000 Hz →
-      /tmp/nx_audio_sink shows rates=48000 on every sink immediately (SIGUSR1 path)
-      (with Bluetooth max rate left at 48000; a 44100 cap still caps the published
-      BT rate — `btMaxRate` is applied to the BT sink after the force, by design),
-      all apps behave exactly as pre-change.
-- [ ] Settings → Audio "Output" row shows live sink + rate; BT max rate row moved
-      here (gone from Bluetooth page), still caps BT publish rate.
-- [ ] Regression: speaker/jack daily-driver flows (music, DC, N64, minarch) still
-      pass their existing checklist items.

@@ -1492,14 +1492,19 @@ static int reconfigure_audio_device(int new_sample_rate) {
 
 // Reopen audio device (called when audio sink changes, e.g., Bluetooth connect/disconnect)
 static void reopen_audio_device(void) {
-	// Remember current playback state
+	// Remember current playback state. player.state covers file playback;
+	// radio drives pause/resume manually, so also remember whether the device
+	// was actually running — otherwise a sink hotplug during radio reopens
+	// the device paused and playback silently stops.
 	PlayerState prev_state = player.state;
+	bool was_unpaused = false;
 
 	// Mute speaker amp to prevent pop during device switch
 	SND_overrideMute(1);
 
 	// Full SDL audio subsystem restart to clear stale ALSA state after device removal
 	if (player.audio_device > 0) {
+		was_unpaused = (SDL_GetAudioDeviceStatus(player.audio_device) == SDL_AUDIO_PLAYING);
 		SDL_PauseAudioDevice(player.audio_device, 1);
 		SDL_CloseAudioDevice(player.audio_device);
 		player.audio_device = 0;
@@ -1537,8 +1542,9 @@ static void reopen_audio_device(void) {
 			speaker_hpf_init(current_sample_rate, (float)bass_hz);
 	}
 
-	// Resume playback if it was playing
-	if (prev_state == PLAYER_STATE_PLAYING) {
+	// Resume playback if it was playing (file path) or the device was live
+	// before the switch (radio path)
+	if (prev_state == PLAYER_STATE_PLAYING || was_unpaused) {
 		SDL_PauseAudioDevice(player.audio_device, 0);
 	}
 

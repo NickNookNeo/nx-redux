@@ -360,7 +360,12 @@ SDL_Surface* album_art_get(void) {
 }
 
 bool album_art_is_fetching(void) {
-	return art_ctx.art_fetch_in_progress;
+	// "Fetching" must end once the background thread posts its result —
+	// consumers gate rendering (and their dirty flags) on this, and the flag
+	// itself is only fully cleared inside album_art_get(). Reporting
+	// in-progress until consumption deadlocks the radio screen: render waits
+	// for !fetching, while !fetching waits for a render to call get().
+	return art_ctx.art_fetch_in_progress && !art_ctx.result_ready;
 }
 
 // Fetch album art from iTunes Search API (truly async, non-blocking)
