@@ -20,9 +20,12 @@ typedef enum {
 #define SETTINGS_ITEM_SCREEN_OFF 0
 #define SETTINGS_ITEM_BASS_FILTER 1
 #define SETTINGS_ITEM_SOFT_LIMITER 2
-#define SETTINGS_ITEM_CLEAR_CACHE 3
-#define SETTINGS_ITEM_CLEAR_LYRICS 4
-#define SETTINGS_ITEM_COUNT 5
+#define SETTINGS_ITEM_SAMPLE_RATE 3
+#define SETTINGS_ITEM_RESAMPLER 4
+#define SETTINGS_ITEM_BUFFER 5
+#define SETTINGS_ITEM_CLEAR_CACHE 6
+#define SETTINGS_ITEM_CLEAR_LYRICS 7
+#define SETTINGS_ITEM_COUNT 8
 
 // Internal app state constants for controls help
 // These match the pattern used in ui_main.c
@@ -68,6 +71,15 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
 				} else if (menu_selected == SETTINGS_ITEM_SOFT_LIMITER) {
 					Settings_cycleSoftLimiterPrev();
 					dirty = 1;
+				} else if (menu_selected == SETTINGS_ITEM_SAMPLE_RATE) {
+					Settings_cycleRateModePrev();
+					dirty = 1;
+				} else if (menu_selected == SETTINGS_ITEM_RESAMPLER) {
+					Settings_cycleResamplerQualityPrev();
+					dirty = 1;
+				} else if (menu_selected == SETTINGS_ITEM_BUFFER) {
+					Settings_cycleBufferFramesPrev();
+					dirty = 1;
 				}
 			} else if (PAD_justPressed(BTN_RIGHT)) {
 				if (menu_selected == SETTINGS_ITEM_SCREEN_OFF) {
@@ -78,6 +90,15 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
 					dirty = 1;
 				} else if (menu_selected == SETTINGS_ITEM_SOFT_LIMITER) {
 					Settings_cycleSoftLimiterNext();
+					dirty = 1;
+				} else if (menu_selected == SETTINGS_ITEM_SAMPLE_RATE) {
+					Settings_cycleRateModeNext();
+					dirty = 1;
+				} else if (menu_selected == SETTINGS_ITEM_RESAMPLER) {
+					Settings_cycleResamplerQualityNext();
+					dirty = 1;
+				} else if (menu_selected == SETTINGS_ITEM_BUFFER) {
+					Settings_cycleBufferFramesNext();
 					dirty = 1;
 				}
 			} else if (PAD_justPressed(BTN_A)) {
@@ -93,6 +114,18 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
 					break;
 				case SETTINGS_ITEM_SOFT_LIMITER:
 					Settings_cycleSoftLimiterNext();
+					dirty = 1;
+					break;
+				case SETTINGS_ITEM_SAMPLE_RATE:
+					Settings_cycleRateModeNext();
+					dirty = 1;
+					break;
+				case SETTINGS_ITEM_RESAMPLER:
+					Settings_cycleResamplerQualityNext();
+					dirty = 1;
+					break;
+				case SETTINGS_ITEM_BUFFER:
+					Settings_cycleBufferFramesNext();
 					dirty = 1;
 					break;
 				case SETTINGS_ITEM_CLEAR_CACHE:

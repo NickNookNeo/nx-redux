@@ -23,6 +23,8 @@
 
 #include "defines.h"
 #include "api.h"
+#include "audio_manager.h"
+#include <samplerate.h>
 
 // SDL for rendering
 #include <SDL2/SDL.h>
@@ -161,9 +163,99 @@ typedef struct {
 
 	// Track if user has custom stations loaded
 	bool has_user_stations;
+
+	// Stream->device resampler (decode-thread side). The device opens at a
+	// sink-compatible rate (AudioMgr_pickRate) and the ring always holds
+	// device-rate samples, so ALSA plug never linear-resamples radio audio.
+	SRC_STATE* resampler;
+	double src_ratio;
+	int stream_rate; // rate the decoder currently produces
+	int device_rate; // rate the audio device is opened at
 } RadioContext;
 
 static RadioContext radio = {0};
+
+// Append device-rate samples to the ring (shared by all decode paths)
+static void radio_ring_write(const int16_t* samples, int count) {
+	pthread_mutex_lock(&radio.audio_mutex);
+	for (int s = 0; s < count; s++) {
+		if (radio.audio_ring_count < AUDIO_RING_SIZE) {
+			radio.audio_ring[radio.audio_ring_write] = samples[s];
+			radio.audio_ring_write = (radio.audio_ring_write + 1) % AUDIO_RING_SIZE;
+			radio.audio_ring_count++;
+		}
+	}
+	pthread_mutex_unlock(&radio.audio_mutex);
+}
+
+// Rebuild only the resampler (device stays open at its picked rate, so a
+// mid-stream rate change never causes a device reopen gap)
+static void radio_update_stream_rate(int stream_rate, int channels) {
+	radio.stream_rate = stream_rate;
+	if (radio.resampler) {
+		src_delete(radio.resampler);
+		radio.resampler = NULL;
+	}
+	if (radio.device_rate != stream_rate && stream_rate > 0 && channels > 0) {
+		int error = 0;
+		// Fixed FASTEST: live streams need predictable decode-thread CPU
+		radio.resampler = src_new(SRC_SINC_FASTEST, channels, &error);
+		radio.src_ratio = (double)radio.device_rate / (double)stream_rate;
+	}
+}
+
+// First decoded frame: pick a sink-compatible device rate for the stream,
+// open the device there, and set up stream->device resampling
+static void radio_configure_rate(int stream_rate, int channels) {
+	radio.device_rate = AudioMgr_pickRate(stream_rate);
+	radio_update_stream_rate(stream_rate, channels);
+	Player_setSampleRate(radio.device_rate);
+	Player_resumeAudio(); // Resume after reconfiguration
+}
+
+// Convert decoded stream-rate samples to device rate and push to the ring.
+// Runs on the decode thread; the SRC instance keeps filter state across
+// calls for a continuous signal.
+static void radio_push_samples(const int16_t* samples, int total_samples, int channels) {
+	if (total_samples <= 0 || channels <= 0)
+		return;
+	if (!radio.resampler) {
+		radio_ring_write(samples, total_samples);
+		return;
+	}
+
+	static float in_f[4096];
+	static float out_f[16384];
+	static int16_t out_s16[16384];
+	int in_frames_cap = (int)(sizeof(in_f) / sizeof(float)) / channels;
+	int out_frames_cap = (int)(sizeof(out_f) / sizeof(float)) / channels;
+
+	int frames_in = total_samples / channels;
+	int pos = 0;
+	while (pos < frames_in) {
+		int chunk = frames_in - pos;
+		if (chunk > in_frames_cap)
+			chunk = in_frames_cap;
+		src_short_to_float_array(samples + pos * channels, in_f, chunk * channels);
+
+		SRC_DATA d = {0};
+		d.data_in = in_f;
+		d.input_frames = chunk;
+		d.data_out = out_f;
+		d.output_frames = out_frames_cap;
+		d.src_ratio = radio.src_ratio;
+		d.end_of_input = 0;
+		if (src_process(radio.resampler, &d) != 0)
+			return; // drop this frame rather than feed garbage
+		if (d.output_frames_gen > 0) {
+			src_float_to_short_array(out_f, out_s16, (int)(d.output_frames_gen * channels));
+			radio_ring_write(out_s16, (int)(d.output_frames_gen * channels));
+		}
+		if (d.input_frames_used <= 0)
+			break; // converter stalled; avoid spinning
+		pos += (int)d.input_frames_used;
+	}
+}
 
 // Use radio_net_parse_url for URL parsing
 
@@ -866,26 +958,19 @@ static void* hls_stream_thread_func(void* arg) {
 					if (info && radio.aac_sample_rate == 0 && info->sampleRate > 0) {
 						radio.aac_sample_rate = info->sampleRate;
 						radio.aac_channels = info->numChannels;
-						// Reconfigure audio device to match stream's sample rate
-						Player_setSampleRate(info->sampleRate);
-						Player_resumeAudio(); // Resume after reconfiguration
+						// Open device at a sink-compatible rate; resample in-app
+						radio_configure_rate(info->sampleRate, info->numChannels);
+					} else if (info && info->sampleRate > 0 && info->sampleRate != radio.aac_sample_rate) {
+						// Station changed rate mid-stream — rebuild resampler only
+						radio.aac_sample_rate = info->sampleRate;
+						radio.aac_channels = info->numChannels;
+						radio_update_stream_rate(info->sampleRate, info->numChannels);
 					}
 
 					if (info && info->frameSize > 0) {
 						frames_decoded++;
-
-						pthread_mutex_lock(&radio.audio_mutex);
-
-						int samples = info->frameSize * info->numChannels;
-						for (int s = 0; s < samples; s++) {
-							if (radio.audio_ring_count < AUDIO_RING_SIZE) {
-								radio.audio_ring[radio.audio_ring_write] = decode_buf[s];
-								radio.audio_ring_write = (radio.audio_ring_write + 1) % AUDIO_RING_SIZE;
-								radio.audio_ring_count++;
-							}
-						}
-
-						pthread_mutex_unlock(&radio.audio_mutex);
+						radio_push_samples(decode_buf, info->frameSize * info->numChannels,
+										   info->numChannels);
 					}
 				} else if (err == AAC_DEC_NOT_ENOUGH_BITS) {
 					break;
@@ -1109,25 +1194,18 @@ static void* stream_thread_func(void* arg) {
 					if (info && radio.aac_sample_rate == 0 && info->sampleRate > 0) {
 						radio.aac_sample_rate = info->sampleRate;
 						radio.aac_channels = info->numChannels;
-						// Reconfigure audio device to match stream's sample rate
-						Player_setSampleRate(info->sampleRate);
-						Player_resumeAudio(); // Resume after reconfiguration
+						// Open device at a sink-compatible rate; resample in-app
+						radio_configure_rate(info->sampleRate, info->numChannels);
+					} else if (info && info->sampleRate > 0 && info->sampleRate != radio.aac_sample_rate) {
+						// Station changed rate mid-stream — rebuild resampler only
+						radio.aac_sample_rate = info->sampleRate;
+						radio.aac_channels = info->numChannels;
+						radio_update_stream_rate(info->sampleRate, info->numChannels);
 					}
 
 					if (info && info->frameSize > 0) {
-						pthread_mutex_lock(&radio.audio_mutex);
-
-						// Add to ring buffer
-						int samples = info->frameSize * info->numChannels;
-						for (int s = 0; s < samples; s++) {
-							if (radio.audio_ring_count < AUDIO_RING_SIZE) {
-								radio.audio_ring[radio.audio_ring_write] = decode_buf[s];
-								radio.audio_ring_write = (radio.audio_ring_write + 1) % AUDIO_RING_SIZE;
-								radio.audio_ring_count++;
-							}
-						}
-
-						pthread_mutex_unlock(&radio.audio_mutex);
+						radio_push_samples(decode_buf, info->frameSize * info->numChannels,
+										   info->numChannels);
 					}
 				} else if (err == AAC_DEC_NOT_ENOUGH_BITS) {
 					// Need more data
@@ -1190,9 +1268,14 @@ static void* stream_thread_func(void* arg) {
 					if (radio.mp3_sample_rate == 0) {
 						radio.mp3_sample_rate = frame_info.sample_rate;
 						radio.mp3_channels = frame_info.channels;
-						// Reconfigure audio device to match stream's sample rate
-						Player_setSampleRate(frame_info.sample_rate);
-						Player_resumeAudio(); // Resume after reconfiguration
+						// Open device at a sink-compatible rate; resample in-app
+						radio_configure_rate(frame_info.sample_rate, frame_info.channels);
+					} else if (frame_info.sample_rate > 0 &&
+							   frame_info.sample_rate != radio.mp3_sample_rate) {
+						// Station changed rate mid-stream — rebuild resampler only
+						radio.mp3_sample_rate = frame_info.sample_rate;
+						radio.mp3_channels = frame_info.channels;
+						radio_update_stream_rate(frame_info.sample_rate, frame_info.channels);
 					}
 
 					// Consume the frame
@@ -1200,19 +1283,8 @@ static void* stream_thread_func(void* arg) {
 							radio.stream_buffer_pos - frame_info.frame_bytes);
 					radio.stream_buffer_pos -= frame_info.frame_bytes;
 
-					// Add decoded samples to ring buffer
-					pthread_mutex_lock(&radio.audio_mutex);
-
-					int total_samples = samples * frame_info.channels;
-					for (int s = 0; s < total_samples; s++) {
-						if (radio.audio_ring_count < AUDIO_RING_SIZE) {
-							radio.audio_ring[radio.audio_ring_write] = decode_buf[s];
-							radio.audio_ring_write = (radio.audio_ring_write + 1) % AUDIO_RING_SIZE;
-							radio.audio_ring_count++;
-						}
-					}
-
-					pthread_mutex_unlock(&radio.audio_mutex);
+					radio_push_samples(decode_buf, samples * frame_info.channels,
+									   frame_info.channels);
 				} else if (frame_info.frame_bytes > 0) {
 					// Invalid frame, skip it
 					memmove(radio.stream_buffer, radio.stream_buffer + frame_info.frame_bytes,
@@ -1667,6 +1739,14 @@ void Radio_stop(void) {
 		radio.aac_sample_rate = 0;
 		radio.aac_channels = 0;
 	}
+
+	// Tear down the stream->device resampler
+	if (radio.resampler) {
+		src_delete(radio.resampler);
+		radio.resampler = NULL;
+	}
+	radio.stream_rate = 0;
+	radio.device_rate = 0;
 
 	// Reset HLS state
 	radio.stream_type = STREAM_TYPE_DIRECT;

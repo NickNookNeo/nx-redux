@@ -71,19 +71,36 @@ index 8340288fe..e2b512404 100644
  	target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--no-execute-only")
  endif()
 diff --git a/core/audio/audiobackend_sdl2.cpp b/core/audio/audiobackend_sdl2.cpp
-index 99d932677..8d873cd92 100644
+index 99d932677..15dbdbdf6 100644
 --- a/core/audio/audiobackend_sdl2.cpp
 +++ b/core/audio/audiobackend_sdl2.cpp
-@@ -93,31 +93,45 @@ public:
+@@ -7,6 +7,7 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include <cstdlib>
+ #include <mutex>
+ 
+ class SDLAudioBackend : AudioBackend
+@@ -93,31 +94,58 @@ public:
  		wav_spec.userdata = this;
  		needs_resampling = false;
  
 -		// Try 44.1KHz which should be faster since it's native.
-+		// NextUI: prefer 48 kHz output — the device's ALSA dmix runs at 48 kHz and
-+		// alsa-lib's plug would otherwise linear-resample our 44.1 kHz stream (audible
-+		// distortion). SDL's converter is much higher quality. See DC.pak notes.
-+		wav_spec.freq = 48000;
-+		needs_resampling = true;
++		// NextUI: open at the sink's preferred rate, published by audiomon and
++		// passed in by DC.pak/launch.sh as NX_AUDIO_RATE. Default 48 kHz: the
++		// internal codec's dmix runs at 48 kHz and alsa-lib's plug would
++		// otherwise linear-resample our 44.1 kHz stream (audible distortion).
++		// SDL's converter is much higher quality. See DC.pak notes.
++		int target_rate = 48000;
++		const char* env_rate = getenv("NX_AUDIO_RATE");
++		if (env_rate != nullptr) {
++			int r = atoi(env_rate);
++			if (r >= 8000 && r <= 192000)
++				target_rate = r;
++		}
++		wav_spec.freq = target_rate;
++		needs_resampling = (target_rate != 44100);
  		audiodev = SDL_OpenAudioDevice(NULL, 0, &wav_spec, &out_spec, 0);
  		if (audiodev == 0)
  		{
@@ -93,11 +110,11 @@ index 99d932677..8d873cd92 100644
 +			// NOTICE_LOG (not INFO_LOG): INFO-level logging is compiled out entirely in
 +			// Release builds (MAX_LOGLEVEL, core/log/Log.h) -- this line must survive so
 +			// the on-device log proves which path was taken.
-+			NOTICE_LOG(AUDIO, "SDL2: SDL_OpenAudioDevice (48 KHz) failed: %s", SDL_GetError());
++			NOTICE_LOG(AUDIO, "SDL2: SDL_OpenAudioDevice (%d Hz) failed: %s", target_rate, SDL_GetError());
 +		}
-+		else
++		else if (needs_resampling)
 +		{
-+			int ret = SDL_BuildAudioCVT(&audioCvt, AUDIO_S16, 2, 44100, AUDIO_S16, 2, 48000);
++			int ret = SDL_BuildAudioCVT(&audioCvt, AUDIO_S16, 2, 44100, AUDIO_S16, 2, target_rate);
 +			if (ret != 1 || audioCvt.needed == 0)
 +			{
 +				ERROR_LOG(AUDIO, "SDL2: can't build audio converter: %s", SDL_GetError());
@@ -107,8 +124,12 @@ index 99d932677..8d873cd92 100644
 +			else
 +			{
 +				audioCvt.buf = new u8[SAMPLE_COUNT * 2 * sizeof(uint32_t) * audioCvt.len_mult];
-+				NOTICE_LOG(AUDIO, "SDL2: Using resampling to 48 KHz");
++				NOTICE_LOG(AUDIO, "SDL2: Using resampling to %d Hz", target_rate);
 +			}
++		}
++		else
++		{
++			NOTICE_LOG(AUDIO, "SDL2: Using native 44.1 KHz output (sink-preferred)");
 +		}
 +
 +		if (audiodev == 0)

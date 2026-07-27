@@ -43,6 +43,24 @@ void Settings_cycleSoftLimiterNext(void);
 void Settings_cycleSoftLimiterPrev(void);
 const char* Settings_getSoftLimiterDisplayStr(void);
 
+// Output sample-rate mode (0 = fixed device-default pipeline, 1 = follow source rate)
+int Settings_getRateModeFollowSource(void);
+void Settings_cycleRateModeNext(void);
+void Settings_cycleRateModePrev(void);
+const char* Settings_getRateModeDisplayStr(void);
+
+// Resampler quality: 0=Fast (SRC_SINC_FASTEST), 1=Medium, 2=Best
+int Settings_getResamplerQuality(void);
+void Settings_cycleResamplerQualityNext(void);
+void Settings_cycleResamplerQualityPrev(void);
+const char* Settings_getResamplerQualityDisplayStr(void);
+
+// SDL audio buffer size in frames (1024/2048/4096)
+int Settings_getBufferFrames(void);
+void Settings_cycleBufferFramesNext(void);
+void Settings_cycleBufferFramesPrev(void);
+const char* Settings_getBufferFramesDisplayStr(void);
+
 // Save settings to file (auto-called on change)
 void Settings_save(void);
 

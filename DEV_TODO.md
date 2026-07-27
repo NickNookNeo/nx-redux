@@ -37,46 +37,6 @@ blind (which is how the original masks got here).
 
 ---
 
-## Audio output routing + quality options
-
-**Requested:** 2026-07-27 (GitHub comment on the music player + the flycast audio
-investigation). **Not started.** Big enough to deserve its own design session
-(brainstorming first) — deliberately kept out of the 2026-07-27 fix round.
-
-Today every app plays through ALSA `default` = `softvol → dmix(48 kHz) → internal codec`,
-hardcoded in the firmware's `/etc/asound.conf`. USB-C DACs enumerate as ALSA card 1 but
-nothing routes to them; BT audio plumbing exists on-device (`bluealsa`, `pulseaudio`,
-alsa-lib plugin modules all shipped) but the default PCM never reaches it. The 3.5 mm
-jack "works" only because the codec chip switches speaker→headphone amp in hardware.
-
-- [ ] **Music player** (the GitHub request): settings for output device (system default
-      vs. detected USB DAC — cards visible in `/proc/asound/cards`), sample-rate mode
-      (fixed 48 kHz vs. follow-source-when-sink-accepts, fallback to resample), SRC
-      resampler quality (`src-sinc-fastest`/`medium`/`best` — currently hardcoded
-      fastest), and buffer size (currently fixed 2048). Direct `hw:` output bypasses
-      `softvol`, so device volume keys won't apply — fine for USB DACs (own volume),
-      must be documented.
-- [ ] **Sink-aware output for emulators** (flycast/minarch/N64): same routing question.
-      flycast currently always opens SDL default at 48 kHz (deliberate — see
-      `workspace/all/other/flycast/README.md` audio section). A USB/BT-aware path would
-      need per-sink rate choice (USB DACs often prefer source rate) and a volume story.
-      The internal codec HAS hardware volume controls (`DAC Volume`, `HPOUT Gain` —
-      verified via amixer on tg5050), so a hw-volume route exists if softvol is bypassed.
-- [ ] **BT audio**: confirm whether the stock/NextUI stack can route game audio to BT at
-      all (bluealsa PCM open from an app), before promising it anywhere.
-
-**Per-sink rate policy (design decision, 2026-07-27):** the output rate must follow the
-selected sink, not a global constant — internal codec via dmix = always 48 kHz (dmix is
-fixed there; anything else hits alsa-lib's linear resampler, the exact bug fixed in
-flycast); direct `hw:` to the internal codec or a USB DAC = open at source rate,
-negotiated, falling back to the nearest supported rate with an in-app quality resample
-(SRC/SDL), never ALSA `plug`; Bluetooth = match whatever rate the A2DP codec negotiated
-via the bluealsa PCM. Crucially, the rate CANNOT be autodetected through the `default`
-PCM — `plug` accepts any rate and converts silently — so the policy keys off the
-user-selected output device: `default` → force 48 kHz, `hw:X`/bluealsa → negotiate.
-
----
-
 ## Trimui Brick Pro: deferred from the port
 
 Scoped out of the Brick Pro port (`c0da09c7`) on purpose. None of these block the port's
@@ -101,3 +61,4 @@ hardware bring-up (that checklist lives in `DEV_CHECKLIST.md`).
       by side. **Blocked on an asset:** a 1024×768 pair does not exist anywhere in the
       repo. Until one is produced the file correctly stays in `common/`, since there is
       only one variant to ship.
+

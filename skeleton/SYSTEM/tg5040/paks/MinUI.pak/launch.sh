@@ -181,7 +181,7 @@ cd "$SYSTEM_PATH/bin"
 
 # Ensure .asoundrc is clean at boot — /etc/asound.conf handles speaker routing.
 # audiomon will write .asoundrc when USB/BT devices connect.
-rm -f $USERDATA_PATH/.asoundrc
+rm -f $USERDATA_PATH/.asoundrc /tmp/nx_audio_sink
 audiomon.elf & # &> $SDCARD_PATH/audiomon.txt &
 
 # BT handling

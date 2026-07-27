@@ -85,15 +85,7 @@ static int m4a_read_callback(int64_t offset, void* buffer, size_t size, void* to
 	return 0; // Success
 }
 
-// Sample rates for different audio outputs
-#define SAMPLE_RATE_BLUETOOTH 44100 // 44.1kHz for Bluetooth A2DP compatibility
-#define SAMPLE_RATE_SPEAKER 48000	// 48kHz for speaker output
-#define SAMPLE_RATE_USB_DAC 48000	// 48kHz for USB DAC output
-#define SAMPLE_RATE_DEFAULT 48000	// Default fallback
-
 #define AUDIO_CHANNELS 2
-#define AUDIO_SAMPLES 2048 // Smaller buffer for lower latency
-
 
 // Soft limiter for built-in speaker to prevent amplifier clipping
 // Linear below threshold, asymptotically compressed above
@@ -166,25 +158,20 @@ static inline int16_t speaker_hpf_process(int16_t sample, int channel) {
 
 // Global player context
 static PlayerContext player = {0};
-static int64_t audio_position_samples = 0;			  // Track position in samples for precision
-static WaveformData waveform = {0};					  // Waveform overview for progress display
-static int current_sample_rate = SAMPLE_RATE_DEFAULT; // Track current SDL audio device rate
+static int64_t audio_position_samples = 0; // Track position in samples for precision
+static WaveformData waveform = {0};		   // Waveform overview for progress display
+static int current_sample_rate = 48000;	   // Track current SDL audio device rate
+static int current_buffer_frames = 0;	   // Buffer size the device was opened with (0 = not open yet)
 // Audio sink state is now managed by AudioMgr (audio_manager.c)
 
-// Get target sample rate based on current audio sink
-static int get_target_sample_rate(void) {
-	if (AudioMgr_isBluetoothActive()) {
-		return SAMPLE_RATE_BLUETOOTH; // 44100 Hz for Bluetooth
-	}
-	int sink = AudioMgr_getSinkType();
-	switch (sink) {
-	case AUDIOMGR_SINK_BLUETOOTH:
-		return SAMPLE_RATE_BLUETOOTH; // 44100 Hz
-	case AUDIOMGR_SINK_USBDAC:
-		return SAMPLE_RATE_USB_DAC; // 48000 Hz
-	default:
-		return SAMPLE_RATE_SPEAKER; // 48000 Hz for speaker
-	}
+// Device-open rate: always sink-compatible (AudioMgr_pickRate reads the
+// audiomon-published state). The user setting only controls whether we
+// chase the track's source rate (useful on USB DACs) or stay at 48 kHz.
+static int get_target_sample_rate(int source_rate) {
+	int desired = 48000;
+	if (Settings_getRateModeFollowSource() && source_rate > 0)
+		desired = source_rate;
+	return AudioMgr_pickRate(desired);
 }
 
 // Forward declaration for audio device change callback (from AudioMgr)
@@ -1228,9 +1215,14 @@ static void* stream_thread_func(void* arg) {
 				// Decoder has reached end of file
 				player.stream_eof = true;
 			} else {
-				// Resample chunk to target rate if needed
+				// Resample chunk to target rate if needed.
+				// Use the already-open device rate (not a fresh
+				// get_target_sample_rate() call) so this hot per-chunk
+				// path doesn't re-read the sink-state file, and so the
+				// resample target can never drift from the device that's
+				// actually open for this track.
 				int src_rate = player.stream_decoder.source_sample_rate;
-				int dst_rate = get_target_sample_rate();
+				int dst_rate = current_sample_rate;
 				bool is_last = (player.stream_decoder.current_frame >= player.stream_decoder.total_frames);
 
 				size_t output_frames;
@@ -1418,14 +1410,14 @@ int Player_init(void) {
 	AudioMgr_init();
 
 	// Determine target sample rate based on audio output
-	int target_rate = get_target_sample_rate();
+	int target_rate = get_target_sample_rate(0);
 
 	SDL_AudioSpec want, have;
 	SDL_zero(want);
 	want.freq = target_rate;
 	want.format = AUDIO_S16SYS;
 	want.channels = AUDIO_CHANNELS;
-	want.samples = AUDIO_SAMPLES;
+	want.samples = Settings_getBufferFrames();
 	want.callback = audio_callback;
 	want.userdata = &player;
 
@@ -1437,6 +1429,7 @@ int Player_init(void) {
 
 	player.audio_initialized = true;
 	current_sample_rate = have.freq;
+	current_buffer_frames = have.samples;
 	{
 		int bass_hz = Settings_getBassFilterHz();
 		if (bass_hz > 0)
@@ -1451,7 +1444,10 @@ int Player_init(void) {
 
 // Reconfigure audio device with a new sample rate
 static int reconfigure_audio_device(int new_sample_rate) {
-	if (new_sample_rate == current_sample_rate && player.audio_device > 0) {
+	// A changed buffer-size setting also needs a reopen — on the speaker path
+	// every track resolves to the same rate, so rate alone would never reopen.
+	if (new_sample_rate == current_sample_rate &&
+		Settings_getBufferFrames() == current_buffer_frames && player.audio_device > 0) {
 		return 0; // No change needed
 	}
 
@@ -1468,7 +1464,7 @@ static int reconfigure_audio_device(int new_sample_rate) {
 	want.freq = new_sample_rate;
 	want.format = AUDIO_S16SYS;
 	want.channels = AUDIO_CHANNELS;
-	want.samples = AUDIO_SAMPLES;
+	want.samples = Settings_getBufferFrames();
 	want.callback = audio_callback;
 	want.userdata = &player;
 
@@ -1476,7 +1472,7 @@ static int reconfigure_audio_device(int new_sample_rate) {
 	if (player.audio_device == 0) {
 		LOG_error("Failed to open audio device at %d Hz: %s\n", new_sample_rate, SDL_GetError());
 		// Try to reopen at target rate for current audio sink
-		int fallback_rate = get_target_sample_rate();
+		int fallback_rate = get_target_sample_rate(0);
 		want.freq = fallback_rate;
 		player.audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
 		if (player.audio_device == 0) {
@@ -1485,6 +1481,7 @@ static int reconfigure_audio_device(int new_sample_rate) {
 	}
 
 	current_sample_rate = have.freq;
+	current_buffer_frames = have.samples;
 	{
 		int bass_hz = Settings_getBassFilterHz();
 		if (bass_hz > 0)
@@ -1511,8 +1508,10 @@ static void reopen_audio_device(void) {
 	SND_flushALSAConfig();
 	SDL_InitSubSystem(SDL_INIT_AUDIO);
 
-	// Get target sample rate for the new audio sink
-	int target_rate = get_target_sample_rate();
+	// Get target sample rate for the new audio sink. In Follow-source mode,
+	// keep chasing the current track's rate across the hotplug; otherwise
+	// this is source_rate=0 (device default).
+	int target_rate = get_target_sample_rate(player.use_streaming ? player.stream_decoder.source_sample_rate : 0);
 
 	// Reopen with target sample rate
 	SDL_AudioSpec want, have;
@@ -1520,7 +1519,7 @@ static void reopen_audio_device(void) {
 	want.freq = target_rate;
 	want.format = AUDIO_S16SYS;
 	want.channels = AUDIO_CHANNELS;
-	want.samples = AUDIO_SAMPLES;
+	want.samples = Settings_getBufferFrames();
 	want.callback = audio_callback;
 	want.userdata = &player;
 
@@ -1531,6 +1530,7 @@ static void reopen_audio_device(void) {
 	}
 
 	current_sample_rate = have.freq;
+	current_buffer_frames = have.samples;
 	{
 		int bass_hz = Settings_getBassFilterHz();
 		if (bass_hz > 0)
@@ -2003,7 +2003,7 @@ AudioFormat Player_detectFormat(const char* filepath) {
 
 // Reset audio device to default sample rate (for radio use)
 void Player_resetSampleRate(void) {
-	reconfigure_audio_device(get_target_sample_rate());
+	reconfigure_audio_device(get_target_sample_rate(0));
 }
 
 // Set audio device to specific sample rate
@@ -2028,11 +2028,12 @@ static int load_streaming(const char* filepath) {
 
 	// Initialize resampler for streaming
 	int src_rate = player.stream_decoder.source_sample_rate;
-	int dst_rate = get_target_sample_rate();
+	int dst_rate = get_target_sample_rate(src_rate);
 
 	if (src_rate != dst_rate) {
 		int error;
-		player.resampler = src_new(SRC_SINC_FASTEST, AUDIO_CHANNELS, &error);
+		static const int src_quality_map[] = {SRC_SINC_FASTEST, SRC_SINC_MEDIUM_QUALITY, SRC_SINC_BEST_QUALITY};
+		player.resampler = src_new(src_quality_map[Settings_getResamplerQuality()], AUDIO_CHANNELS, &error);
 		if (!player.resampler) {
 			LOG_error("Stream: Failed to create resampler: %s\n", src_strerror(error));
 			circular_buffer_free(&player.stream_buffer);
@@ -2301,6 +2302,17 @@ int Player_getDuration(void) {
 
 const TrackInfo* Player_getTrackInfo(void) {
 	return &player.track_info;
+}
+
+int Player_getSourceSampleRate(void) {
+	if (player.use_streaming)
+		return player.stream_decoder.source_sample_rate;
+	// Non-streaming formats are decoded straight at the device rate
+	return current_sample_rate;
+}
+
+int Player_getOutputSampleRate(void) {
+	return current_sample_rate;
 }
 
 const char* Player_getCurrentFile(void) {

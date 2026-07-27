@@ -42,7 +42,12 @@ Trimui devices (verified on the Brick with Mario Kart 64, 2026-07):
   alsa-lib converts 44100→48000 with its built-in linear interpolator — audibly
   distorted. Outputting 48000 directly means a single sinc resample (game rate →
   48 kHz) and no ALSA-side conversion. Set to 0 to restore upstream auto-selection
-  (11025/22050/44100), e.g. for a Bluetooth sink that prefers 44100.
+  (11025/22050/44100), e.g. for a Bluetooth sink that prefers 44100. `launch.sh` may
+  override this per-sink via `--set Audio-SDL[OUTPUT_FREQUENCY]=<rate>`, using
+  audiomon's published `/tmp/nx_audio_sink` to pick the rate; the cfg default stays
+  48000. This `--set` override is read once, at launch, before the emulator starts —
+  a sink change mid-game (Bluetooth hotplug, USB DAC plug/unplug) does not re-trigger
+  it, so the audio plugin keeps outputting at whatever rate it launched with.
 - **Dynamic rate control** — the audio callback nudges the resample ratio (max
   ±0.5%, inaudible) to steer the buffer level toward `PRIMARY_BUFFER_TARGET`.
   With `AUDIO_SYNC=False` nothing else couples the emulated AI clock to the DAC

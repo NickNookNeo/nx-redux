@@ -23,6 +23,14 @@ bool AudioMgr_isUSBDACActive(void);
 // Returns NULL — apps always use ALSA default, audiomon manages .asoundrc.
 const char* AudioMgr_getPreferredDevice(void);
 
+// Pick the device-open rate for a desired rate, from the sink state published
+// by audiomon (/tmp/nx_audio_sink). Exact match wins; else nearest listed rate.
+// Missing/corrupt state file falls back to MIN(desired, 48000).
+int AudioMgr_pickRate(int desired);
+
+// Human-readable "sink - rate" line for the settings Output row. Static buffer.
+const char* AudioMgr_getSinkDescription(void);
+
 // Callback invoked on main thread when audio sink changes
 typedef void (*AudioMgrCallback)(int sink_type);
 void AudioMgr_setCallback(AudioMgrCallback cb);

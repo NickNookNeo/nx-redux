@@ -384,7 +384,7 @@ file can pick the right prebuilt curl/OpenSSL.
 ```
 workspace/all/other/flycast/
 ├── README.md                ← this file
-├── flycast.patch             ← the 7-file, 10-hunk source patch (see below)
+├── flycast.patch             ← the 7-file, 11-hunk source patch (see below)
 ├── toolchain-aarch64.cmake   ← shared cross-compile toolchain file (CURL/SDL2/OpenSSL hints)
 ├── cmake-hints/               ← hand-written SDL2Config.cmake package (tracked, see SDL2 section above)
 ├── flycast/                   ← gitignored checkout — cloned + patched by the Makefile rule below
@@ -429,7 +429,7 @@ binary byte-for-byte except a 4-byte embedded build timestamp.
 
 ## Patch: what `flycast.patch` does
 
-`workspace/all/other/flycast/flycast.patch` (22,319 bytes, 10 hunks across 7
+`workspace/all/other/flycast/flycast.patch` (26,357 bytes, 11 hunks across 7
 files) carries the NextUI in-game overlay integration plus one compiler
 workaround and one audio-quality fix, all on top of the pinned v2.6 checkout:
 
@@ -441,7 +441,7 @@ workaround and one audio-quality fix, all on top of the pinned v2.6 checkout:
 | `core/input/gamepad_device.cpp` | Redirects the existing `EMU_BTN_MENU` case (previously `gui_open_settings()`) to `nx_overlay_request_menu()` — a second, mapped-input path into the same menu-open request the direct SDL button-8 polling in `nx_overlay.cpp` already provides as belt-and-braces. `EMU_BTN_ESCAPE` (still `dc_exit()`) is untouched. |
 | `core/hw/sh4/sh4_interrupts.cpp` | GCC 8.3.0 (tg5040 toolchain) internal-compiler-error workaround. `InterruptSourceList` was `static const`, but its `PrioReg` field was a `const u16*` built via a reinterpret-cast macro (`GIPA`/`GIPB`/`GIPC`) — never a C++ constant expression, so the compiler had to emit a dynamic global constructor, and GCC 8.3.0's aarch64 backend crashes expanding it (`internal compiler error: in gen_reg_rtx, at emit-rtl.c:1187`). Refactored `PrioReg` into an `enum class IprReg : u8 { Fixed, IPRA, IPRB, IPRC }` tag, resolved to the live register value via a `switch` inside `GetPrLvl()` — same one dereference-shift-mask cost as before, at the same single call site — so the initializer is now a literal integer aggregate, fully constant-initializable, no dynamic constructor, no ICE. Confirmed flag-independent (reproduced at `-O0` through `-O3`/`-Og`, with/without half a dozen individual optimization-pass toggles) and toolchain-specific (absent under tg5050's GCC 10.3.0 compiling the identical file/flags) before landing this fix — see the "Status update" note in Step 1 above. |
 | `CMakeLists.txt` | Overlay-sources block, guarded `if(NOT LIBRETRO AND NOT ANDROID AND NOT APPLE AND NOT WIN32)`: compiles `nx_overlay.cpp` plus the 3 shared `workspace/all/common/emu_overlay*.c` files into the `flycast` target. Scopes their `-I .../common` include path to just those sources (`set_source_files_properties(... PROPERTIES INCLUDE_DIRECTORIES ...)`) rather than target-wide — a target-wide include broke *every* pre-existing flycast `#include <SDL.h>` by resolving it against `workspace/all/common/sdl.h` (an SDL1/2 compatibility shim used by other emulator cores in this workspace) instead of the toolchain's real SDL2 headers, on this Docker bind mount's case-insensitive filesystem. Also links `GLESv2` directly (+ `mali` on tg5050, whose `libGLESv2.so` is a thin stub backed by `libmali.so.0`) — the overlay calls GLES3 functions directly (`emu_overlay_sdl.c`), unlike flycast's own renderer which resolves GL lazily via `glad`+`dlopen()`. |
-| `core/audio/audiobackend_sdl2.cpp` | 48 kHz-first audio fix (see "Audio: 48 kHz-first output" below). Upstream `SDLAudioBackend::init()` tried opening the SDL audio device at 44.1 kHz (the Dreamcast's native rate) first, falling back to 48 kHz + an `SDL_AudioCVT` resampler only if that failed. On this hardware the 44.1 kHz open always *succeeds* (ALSA's `plug` device accepts any rate), but the device's real output — `dmix`, fixed at 48000 Hz with no quality `rate_converter` configured — then does its own low-quality linear resample from 44.1→48 kHz in `alsa-lib`, producing constant audible distortion (the same class of bug already fixed for mupen64plus/N64.pak — see that pak's README for the precedent). The patch reverses the order: open 48 kHz (matching the device's real output rate exactly, so ALSA does no resampling at all) with SDL's own higher-quality `SDL_BuildAudioCVT` converter as the primary path, falling back to native 44.1 kHz only if the 48 kHz open or converter build fails. The pre-existing `needs_resampling`/`audioCvt` buffer machinery is unchanged (buffer sizing is driven by the device's fixed frame-count callback size, not by sample rate, so it already covered this code path when it was the fallback). Also switches the mode-report log lines from `INFO_LOG` to `NOTICE_LOG`, since `INFO_LOG` is compiled out entirely in Release builds (`MAX_LOGLEVEL`, `core/log/Log.h`) and would otherwise never reach the on-device log — `NOTICE_LOG` matches the codebase's existing convention for startup path decisions (e.g. `core/emulator.cpp`'s `"Forcing real BIOS"`/`"Forcing HLE BIOS"`) and is what lets `$LOGS_PATH/DC.txt` prove which rate path a given run actually took. |
+| `core/audio/audiobackend_sdl2.cpp` | Sink-preferred audio rate, driven by `NX_AUDIO_RATE` (see "Audio: NX_AUDIO_RATE (sink-preferred output rate)" below). Upstream `SDLAudioBackend::init()` tried opening the SDL audio device at 44.1 kHz (the Dreamcast's native rate) first, falling back to 48 kHz + an `SDL_AudioCVT` resampler only if that failed. On this hardware the 44.1 kHz open always *succeeds* (ALSA's `plug` device accepts any rate), but the device's real output — `dmix`, fixed at 48000 Hz with no quality `rate_converter` configured — then does its own low-quality linear resample from 44.1→48 kHz in `alsa-lib`, producing constant audible distortion (the same class of bug already fixed for mupen64plus/N64.pak — see that pak's README for the precedent). The patch reverses the order and generalizes the target: `target_rate` defaults to 48000 but is overridable via the `NX_AUDIO_RATE` env var (integer Hz, range-validated (`[8000, 192000]`; out-of-range falls back to 48000)), which `DC.pak/launch.sh`'s `nx_pick_audio_rate()` helper sets from the audiomon-published `/tmp/nx_audio_sink` sink info — opening at `target_rate` (matching the device's real output rate exactly when it's 48000, so ALSA does no resampling at all) with SDL's own higher-quality `SDL_BuildAudioCVT` converter as the primary path when `target_rate != 44100`, skipping the converter entirely when the sink prefers native 44.1 kHz, and falling back to a literal native 44.1 kHz open only if the `target_rate` open or converter build fails. The pre-existing `needs_resampling`/`audioCvt` buffer machinery is unchanged (buffer sizing is driven by the device's fixed frame-count callback size, not by sample rate, so it already covered this code path when it was the fallback). Also switches the mode-report log lines from `INFO_LOG` to `NOTICE_LOG`, since `INFO_LOG` is compiled out entirely in Release builds (`MAX_LOGLEVEL`, `core/log/Log.h`) and would otherwise never reach the on-device log — `NOTICE_LOG` matches the codebase's existing convention for startup path decisions (e.g. `core/emulator.cpp`'s `"Forcing real BIOS"`/`"Forcing HLE BIOS"`) and is what lets `$LOGS_PATH/DC.txt` prove which rate path a given run actually took. |
 
 ## Regenerating the patch
 
@@ -543,42 +543,69 @@ and the Smart Pro S (tg5050) with the real `dc_boot.bin` in place — real-BIOS
 boot takes over cleanly on both, and the HLE fallback still works with the
 file absent.
 
-## Audio: 48 kHz-first output
+## Audio: NX_AUDIO_RATE (sink-preferred output rate)
 
-`core/audio/audiobackend_sdl2.cpp`'s `SDLAudioBackend::init()` is patched to
-open the SDL audio device at **48000 Hz first**, not the Dreamcast's native
-44100 Hz. Root cause of the distortion this fixes: the device's ALSA default
-PCM is `plug` over `dmix`, and `dmix` is fixed at 48000 Hz with no quality
-`rate_converter` configured. Upstream flycast opens at 44100 Hz with
-`allowed_changes=0`; `plug` accepts that request (it'll happily open at any
-rate) but then `dmix` forces the real hardware rate, so `alsa-lib` itself
-does a low-quality **linear** resample from 44.1→48 kHz on every frame —
-audible as constant harsh distortion. This is the identical class of bug
-already fixed for mupen64plus (see `workspace/all/other/mupen64plus/README.md`
-for that precedent).
+`core/audio/audiobackend_sdl2.cpp`'s `SDLAudioBackend::init()` opens the SDL
+audio device at a rate driven by the `NX_AUDIO_RATE` environment variable
+(integer Hz), which both `DC.pak/launch.sh` scripts (tg5040 and tg5050,
+identical insertion) export before invoking `./flycast`. Source of truth is
+`/tmp/nx_audio_sink`, published by the `audiomon` daemon as a `rates=` line
+(a single value or a space-separated list, most-preferred rate first).
+`launch.sh`'s `nx_pick_audio_rate()` helper picks: the Dreamcast's native
+44100 Hz if it's exactly listed in `rates=`; otherwise the sink's first
+(most-preferred) listed rate; 48000 Hz if `/tmp/nx_audio_sink` is absent
+(audiomon not running, or no sink info published yet) — the same 48 kHz
+default this code path used to hard-code unconditionally. This read happens
+once, at launch: `NX_AUDIO_RATE` is exported before `./flycast` starts and
+the SDL device is opened once against it, so a sink change mid-game (e.g. a
+Bluetooth hotplug or USB DAC plug/unplug) does not reopen the audio device —
+flycast keeps playing at the rate it launched with, matching the pre-existing
+routing behavior elsewhere in this branch (nothing re-probes `/tmp/nx_audio_sink`
+after startup).
 
-The fix: request 48000 Hz directly (matching `dmix`'s real rate exactly, so
-`alsa-lib` does no resampling of its own) and resample the Dreamcast's native
-44.1 kHz audio stream to 48 kHz *ourselves*, in SDL, via `SDL_BuildAudioCVT`/
-`SDL_ConvertAudio` — a much higher-quality resampler than alsa-lib's linear
-one. This is exactly the `needs_resampling`/`audioCvt` code path flycast
-already had, just previously only reachable as a *fallback* (when 44.1 kHz
-failed to open, which on this hardware it never does). The patch only swaps
-which rate is tried first; the resampling machinery itself, and its buffer
-sizing (`SAMPLE_COUNT`-based, driven by the device's fixed per-callback frame
-count rather than by sample rate), needed no changes. Native 44.1 kHz remains
-a fallback if the 48 kHz open or converter build ever fails.
+Env contract in `SDLAudioBackend::init()`:
+- `NX_AUDIO_RATE` unset (or unparsable, or outside the `[8000, 192000]` sanity range) → `target_rate` falls back to 48000 — byte-identical to the pre-`NX_AUDIO_RATE` hard-coded behavior below.
+- `NX_AUDIO_RATE=44100` → opens natively at the Dreamcast's own rate; `needs_resampling` is false, so no `SDL_BuildAudioCVT` build and no per-callback CVT copy.
+- Any other value in range → opens at that rate and resamples 44100→`target_rate` via `SDL_BuildAudioCVT`/`SDL_ConvertAudio`, same converter/buffer-sizing/fallback machinery described below.
 
-The three log lines that report which path was actually taken
-(`"SDL2: Using resampling to 48 KHz"` / `"SDL2: Using native 44.1 KHz
-output"` / `"SDL2: SDL_OpenAudioDevice (48 KHz) failed: %s"`) use
-`NOTICE_LOG`, not `INFO_LOG` — `INFO_LOG` calls are dead-code-eliminated
-entirely in Release builds (`MAX_LOGLEVEL` in `core/log/Log.h` resolves to
-`LWARNING` when `NDEBUG` is defined, and `LINFO` calls are stripped by the
-compiler as unreachable), so they'd never actually appear in
-`$LOGS_PATH/DC.txt`. `NOTICE_LOG` survives Release builds and matches the
-codebase's own convention for this kind of message (e.g. `core/emulator.cpp`'s
-`"Forcing real BIOS"`/`"Forcing HLE BIOS"`).
+Root cause of the distortion this rate-picking exists to route around: the
+device's ALSA default PCM is `plug` over `dmix`, and `dmix` is fixed at
+48000 Hz with no quality `rate_converter` configured. Upstream flycast opens
+at 44100 Hz with `allowed_changes=0`; `plug` accepts that request (it'll
+happily open at any rate) but then `dmix` forces the real hardware rate, so
+`alsa-lib` itself does a low-quality **linear** resample from 44.1→48 kHz on
+every frame — audible as constant harsh distortion. This is the identical
+class of bug already fixed for mupen64plus (see
+`workspace/all/other/mupen64plus/README.md` for that precedent).
+
+The fix: request the sink-preferred rate directly (by default 48000 Hz,
+matching `dmix`'s real rate exactly, so `alsa-lib` does no resampling of its
+own — or, when the current sink actually prefers 44.1 kHz natively, e.g. a
+USB/Bluetooth sink that lists it, skip resampling entirely) and, when the
+target isn't 44100, resample the Dreamcast's native 44.1 kHz audio stream to
+`target_rate` *ourselves*, in SDL, via `SDL_BuildAudioCVT`/`SDL_ConvertAudio`
+— a much higher-quality resampler than alsa-lib's linear one. This is exactly
+the `needs_resampling`/`audioCvt` code path flycast already had, just
+previously only reachable as a *fallback* (when 44.1 kHz failed to open,
+which on this hardware it never does). The resampling machinery itself, and
+its buffer sizing (`SAMPLE_COUNT`-based, driven by the device's fixed
+per-callback frame count rather than by sample rate), needed no changes.
+Native 44.1 kHz remains a hard fallback if the `target_rate` open or
+converter build ever fails (that final fallback block is untouched by
+`NX_AUDIO_RATE` — it always retries at a literal 44100).
+
+The log lines that report which path was actually taken
+(`"SDL2: Using resampling to %d Hz"` / `"SDL2: Using native 44.1 KHz output
+(sink-preferred)"` / `"SDL2: SDL_OpenAudioDevice (%d Hz) failed: %s"`, plus
+the unconditional-fallback block's own `"SDL2: Using native 44.1 KHz
+output"` / `"SDL2: SDL_OpenAudioDevice failed: %s"`) use `NOTICE_LOG`, not
+`INFO_LOG` — `INFO_LOG` calls are dead-code-eliminated entirely in Release
+builds (`MAX_LOGLEVEL` in `core/log/Log.h` resolves to `LWARNING` when
+`NDEBUG` is defined, and `LINFO` calls are stripped by the compiler as
+unreachable), so they'd never actually appear in `$LOGS_PATH/DC.txt`.
+`NOTICE_LOG` survives Release builds and matches the codebase's own
+convention for this kind of message (e.g. `core/emulator.cpp`'s `"Forcing
+real BIOS"`/`"Forcing HLE BIOS"`).
 
 ## RetroAchievements
 

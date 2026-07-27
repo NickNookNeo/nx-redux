@@ -29,15 +29,12 @@ typedef struct {
 // Static items
 // ============================================
 
-#define BT_STATIC_COUNT 3
+#define BT_STATIC_COUNT 2
 #define BT_IDX_TOGGLE 0
 #define BT_IDX_DIAG 1
-#define BT_IDX_RATE 2
 
 static const char* bt_toggle_labels[] = {"Off", "On"};
 static const char* bt_diag_labels[] = {"Off", "On"};
-static const char* bt_rate_labels[] = {"44100 Hz", "48000 Hz"};
-static int bt_rate_values[] = {44100, 48000};
 
 // ============================================
 // Scanner thread state
@@ -124,18 +121,6 @@ static int bt_get_diag(void) {
 
 static void bt_set_diag(int val) {
 	BT_diagnosticsEnable(val ? true : false);
-}
-
-static int bt_get_rate(void) {
-	return CFG_getBluetoothSamplingrateLimit();
-}
-
-static void bt_set_rate(int val) {
-	CFG_setBluetoothSamplingrateLimit(val);
-}
-
-static void bt_reset_rate(void) {
-	CFG_setBluetoothSamplingrateLimit(CFG_DEFAULT_BLUETOOTH_MAXRATE);
 }
 
 // ============================================
@@ -542,7 +527,6 @@ static void bt_on_show(SettingsPage* page) {
 	// Sync static items
 	settings_item_sync(&page->items[BT_IDX_TOGGLE]);
 	settings_item_sync(&page->items[BT_IDX_DIAG]);
-	settings_item_sync(&page->items[BT_IDX_RATE]);
 
 	// Start scanner thread
 	bt_page_ref = page;
@@ -616,20 +600,6 @@ SettingsPage* bt_page_create(void) {
 		.label_count = 2,
 		.get_value = bt_get_diag,
 		.set_value = bt_set_diag,
-	};
-
-	// Maximum sampling rate
-	page->items[BT_IDX_RATE] = (SettingItem){
-		.name = "Maximum sampling rate",
-		.desc = "Maximum audio sampling rate for Bluetooth",
-		.type = ITEM_CYCLE,
-		.visible = 1,
-		.labels = bt_rate_labels,
-		.label_count = 2,
-		.get_value = bt_get_rate,
-		.set_value = bt_set_rate,
-		.on_reset = bt_reset_rate,
-		.values = bt_rate_values,
 	};
 
 	page->item_count = BT_STATIC_COUNT;

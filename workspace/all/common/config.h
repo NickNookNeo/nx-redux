@@ -131,6 +131,7 @@ typedef struct
 	bool bluetooth;
 	bool bluetoothDiagnostics;
 	int bluetoothSamplerateLimit;
+	bool audioRateNegotiation;
 
 	// Notifications
 	bool notifyManualSave;
@@ -198,6 +199,7 @@ typedef struct
 #define CFG_DEFAULT_BLUETOOTH false
 #define CFG_DEFAULT_BLUETOOTH_DIAG false
 #define CFG_DEFAULT_BLUETOOTH_MAXRATE 48000
+#define CFG_DEFAULT_AUDIO_RATE_NEGOTIATION true
 #define CFG_DEFAULT_NTP false
 #define CFG_DEFAULT_TIMEZONE 320 // Europe/Berlin
 
@@ -336,6 +338,10 @@ void CFG_setBluetoothDiagnostics(bool on);
 // BT maximum sample rate to request
 int CFG_getBluetoothSamplingrateLimit(void);
 void CFG_setBluetoothSamplingrateLimit(int value);
+// Sink sample-rate negotiation on/off (audiomon publishes /tmp/nx_audio_sink;
+// off = publish 48000 for every sink, i.e. pre-negotiation behavior)
+bool CFG_getAudioRateNegotiation(void);
+void CFG_setAudioRateNegotiation(bool on);
 // NTP on/off
 bool CFG_getNTP(void);
 // \note this will only apply after reboot, unless you set it through PLAT_setNetworkTimeSync

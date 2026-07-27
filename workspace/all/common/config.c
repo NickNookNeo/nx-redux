@@ -83,6 +83,7 @@ void CFG_defaults(NextUISettings* cfg) {
 		.bluetooth = CFG_DEFAULT_BLUETOOTH,
 		.bluetoothDiagnostics = CFG_DEFAULT_BLUETOOTH_DIAG,
 		.bluetoothSamplerateLimit = CFG_DEFAULT_BLUETOOTH_MAXRATE,
+		.audioRateNegotiation = CFG_DEFAULT_AUDIO_RATE_NEGOTIATION,
 
 		.notifyManualSave = CFG_DEFAULT_NOTIFY_MANUAL_SAVE,
 		.notifyLoad = CFG_DEFAULT_NOTIFY_LOAD,
@@ -279,6 +280,10 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb) {
 			}
 			if (sscanf(line, "btMaxRate=%i", &temp_value) == 1) {
 				CFG_setBluetoothSamplingrateLimit(temp_value);
+				continue;
+			}
+			if (sscanf(line, "audioRateNegotiation=%i", &temp_value) == 1) {
+				CFG_setAudioRateNegotiation((bool)temp_value);
 				continue;
 			}
 			if (sscanf(line, "ntp=%i", &temp_value) == 1) {
@@ -743,6 +748,15 @@ void CFG_setBluetoothSamplingrateLimit(int value) {
 	CFG_sync();
 }
 
+bool CFG_getAudioRateNegotiation(void) {
+	return settings.audioRateNegotiation;
+}
+
+void CFG_setAudioRateNegotiation(bool on) {
+	settings.audioRateNegotiation = on;
+	CFG_sync();
+}
+
 bool CFG_getNTP(void) {
 	return settings.ntp;
 }
@@ -1013,6 +1027,8 @@ void CFG_get(const char* key, char* value) {
 		sprintf(value, "%i", (int)(CFG_getBluetoothDiagnostics()));
 	} else if (strcmp(key, "btMaxRate") == 0) {
 		sprintf(value, "%i", CFG_getBluetoothSamplingrateLimit());
+	} else if (strcmp(key, "audioRateNegotiation") == 0) {
+		sprintf(value, "%i", (int)(CFG_getAudioRateNegotiation()));
 	} else if (strcmp(key, "ntp") == 0) {
 		sprintf(value, "%i", (int)(CFG_getNTP()));
 	} else if (strcmp(key, "currentTimezone") == 0) {
@@ -1087,6 +1103,7 @@ static int CFG_serialize(char* buf, size_t cap) {
 	EMIT("bluetooth=%i\n", settings.bluetooth);
 	EMIT("btDiagnostics=%i\n", settings.bluetoothDiagnostics);
 	EMIT("btMaxRate=%i\n", settings.bluetoothSamplerateLimit);
+	EMIT("audioRateNegotiation=%i\n", settings.audioRateNegotiation);
 	EMIT("ntp=%i\n", settings.ntp);
 	EMIT("currentTimezone=%i\n", settings.currentTimezone);
 	EMIT("notifyManualSave=%i\n", settings.notifyManualSave);
@@ -1305,6 +1322,7 @@ void CFG_print(void) {
 	printf("\t\"bluetooth\": %i,\n", settings.bluetooth);
 	printf("\t\"btDiagnostics\": %i,\n", settings.bluetoothDiagnostics);
 	printf("\t\"btMaxRate\": %i,\n", settings.bluetoothSamplerateLimit);
+	printf("\t\"audioRateNegotiation\": %i,\n", settings.audioRateNegotiation);
 	printf("\t\"ntp\": %i,\n", settings.ntp);
 	printf("\t\"currentTimezone\": %i,\n", settings.currentTimezone);
 	printf("\t\"keepAwakeUSB\": %i,\n", settings.keepAwakeUSB);

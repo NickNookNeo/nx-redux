@@ -18,6 +18,7 @@
 
 #include "utils.h"
 #include "config.h"
+#include "audio_manager.h"
 
 #include <pthread.h>
 
@@ -1785,12 +1786,13 @@ int GFX_blitHardwareGroup(SDL_Surface* dst, IndicatorType show_setting) {
 		int show_wifi = strength > SIGNAL_STRENGTH_OFF;
 		// no need to handle in PLAT_updateNetworkStatus,
 		// this one is async anyway
-		int show_bt_audio = GetAudioSink() == AUDIO_SINK_BLUETOOTH;
+		// External audio sink (Bluetooth or USB DAC) — same headphone glyph for both
+		int show_ext_audio = GetAudioSink() != AUDIO_SINK_DEFAULT;
 		int show_bt_controller = access("/dev/input/js1", F_OK) == 0;
 		bool show_clock = CFG_getShowClock();
 		SDL_Rect battery_rect = asset_rects[ASSET_BATTERY];
 
-		if (!show_bt_audio && !show_bt_controller && !show_wifi && !show_clock) {
+		if (!show_ext_audio && !show_bt_controller && !show_wifi && !show_clock) {
 			ow = battery_rect.w + SCALE1(BUTTON_MARGIN * 2);
 			ox = dst->w - SCALE1(PADDING) - ow;
 
@@ -1801,7 +1803,7 @@ int GFX_blitHardwareGroup(SDL_Surface* dst, IndicatorType show_setting) {
 		} else {
 			ow = SCALE1(BUTTON_MARGIN);
 
-			if (show_bt_audio) {
+			if (show_ext_audio) {
 				SDL_Rect audio_rect = asset_rects[ASSET_AUDIO];
 				ow += audio_rect.w + SCALE1(BUTTON_MARGIN);
 			}
@@ -1838,7 +1840,7 @@ int GFX_blitHardwareGroup(SDL_Surface* dst, IndicatorType show_setting) {
 
 			ox += SCALE1(BUTTON_MARGIN);
 
-			if (show_bt_audio) {
+			if (show_ext_audio) {
 				SDL_Rect audio_rect = asset_rects[ASSET_AUDIO];
 				int x = ox;
 				int y = (bar_h - audio_rect.h) / 2;
@@ -1988,7 +1990,6 @@ SDL_Color GFX_mapColor(uint32_t c) {
 // to (try to) understand it
 // better
 
-#define MAX_SAMPLE_RATE 48000
 #define BATCH_SIZE 100
 #ifndef SAMPLES
 #define SAMPLES 512 // default
@@ -2480,7 +2481,10 @@ void SND_init(double sample_rate, double frame_rate) { // plat_sound_init
 	SDL_AudioSpec spec_in;
 	SDL_AudioSpec spec_out;
 
-	spec_in.freq = PLAT_pickSampleRate(sample_rate, MAX_SAMPLE_RATE);
+	// Open at the sink's preferred rate (audiomon-published); minarch's own
+	// libsamplerate path handles core->device conversion, so ALSA plug never
+	// linear-resamples. The BT max-rate cap is applied at publish time.
+	spec_in.freq = AudioMgr_pickRate(sample_rate);
 	spec_in.format = AUDIO_S16;
 	spec_in.channels = 2;
 	spec_in.samples = SAMPLES;

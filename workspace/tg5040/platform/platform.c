@@ -376,14 +376,6 @@ void PLAT_setRumble(int strength) {
 	putInt(RUMBLE_PATH, (strength) ? 1 : 0);
 }
 
-int PLAT_pickSampleRate(int requested, int max) {
-	// bluetooth: allow limiting the maximum to improve compatibility
-	if (PLAT_bluetoothConnected())
-		return MIN(requested, CFG_getBluetoothSamplingrateLimit());
-
-	return MIN(requested, max);
-}
-
 void PLAT_overrideMute(int mute) {
 	putInt("/sys/class/speaker/mute", mute);
 }

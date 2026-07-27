@@ -36,6 +36,16 @@ static int ffplay_exec(FfplayConfig* config, int use_subs) {
 	argv[argc++] = "-loglevel";
 	argv[argc++] = "error";
 
+	// Resample inside ffplay (swresample) to the sink's preferred rate so the
+	// audio device opens at a rate ALSA plug passes through — otherwise plug
+	// linear-resamples the stream rate into dmix (same artifact class fixed in
+	// the music player and emulators). Rate re-picks automatically on sink
+	// changes because this engine restarts ffplay for them (see run loop).
+	static char af_str[32];
+	snprintf(af_str, sizeof(af_str), "aresample=%d", AudioMgr_pickRate(48000));
+	argv[argc++] = "-af";
+	argv[argc++] = af_str;
+
 	// Seek position
 	char seek_str[32];
 	if (config->start_position_sec > 0) {

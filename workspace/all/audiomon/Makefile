@@ -25,8 +25,8 @@ TARGET = audiomon.elf
 CC = $(CROSS_COMPILE)gcc
 
 CFLAGS += -Wall -O2 -I. -I../common/ -I../../$(PLATFORM)/platform/ -I$(PREFIX)/include/dbus-1.0 -I$(PREFIX)/lib/dbus-1.0/include
-CFLAGS += -I$(PREFIX_LOCAL)/include -DPLATFORM=\"$(PLATFORM)\" $$(pkg-config --cflags dbus-1 libudev)
-LDFLAGS += $$(pkg-config --libs dbus-1 libudev)
+CFLAGS += -I$(PREFIX_LOCAL)/include -DPLATFORM=\"$(PLATFORM)\" $$(pkg-config --cflags dbus-1 libudev alsa)
+LDFLAGS += $$(pkg-config --libs dbus-1 libudev alsa)
 LDFLAGS += -L$(PREFIX_LOCAL)/lib -lmsettings
 
 SRCS = audiomon.c

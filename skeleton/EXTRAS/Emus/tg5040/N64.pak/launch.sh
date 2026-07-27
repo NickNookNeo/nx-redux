@@ -97,12 +97,40 @@ SYNC_PID=$!
 # Start power button sleep/poweroff handler
 sleepmon.elf &
 
+# Pick the device-open rate for the current audio sink (audiomon publishes
+# /tmp/nx_audio_sink). Exact match on the native rate wins; otherwise the
+# sink's preferred (first-listed) rate; 48000 when the file is absent.
+nx_pick_audio_rate() {
+    NATIVE="$1"
+    RATE=48000
+    if [ -f /tmp/nx_audio_sink ]; then
+        RATES=$(sed -n 's/^rates=//p' /tmp/nx_audio_sink)
+        for R in $RATES; do
+            if [ "$R" = "$NATIVE" ]; then
+                echo "$NATIVE"
+                return
+            fi
+        done
+        FIRST=${RATES%% *}
+        [ -n "$FIRST" ] && RATE=$FIRST
+    fi
+    echo "$RATE"
+}
+
+# audio-sdl resamples the game (32-44.1 kHz) to OUTPUT_FREQUENCY; keep the cfg
+# default of 48000 unless the active sink prefers a different rate (e.g. a
+# 44.1 kHz Bluetooth link), so ALSA plug stays a pass-through.
+NX_AUDIO_RATE=$(nx_pick_audio_rate 48000)
+AUDIO_OVERRIDE=""
+[ "$NX_AUDIO_RATE" != "48000" ] && AUDIO_OVERRIDE="--set Audio-SDL[OUTPUT_FREQUENCY]=$NX_AUDIO_RATE"
+
 # Launch from PAK_DIR so core library resolves via ./
 cd "$PAK_DIR"
 ./mupen64plus --fullscreen --resolution "$DEVICE_RESOLUTION" \
     --configdir "$DEVICE_CONFIG_DIR" \
     --datadir "$EMU_DIR" \
     --plugindir "$PAK_DIR" \
+    $AUDIO_OVERRIDE \
     --gfx "$EMU_DIR/mupen64plus-video-GLideN64.so" \
     --audio mupen64plus-audio-sdl.so \
     --input mupen64plus-input-sdl.so \

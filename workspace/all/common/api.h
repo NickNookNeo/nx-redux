@@ -714,7 +714,6 @@ void PLAT_pinToCores(int core_type); // CPU_CORE_EFFICIENCY or CPU_CORE_PERFORMA
 void PLAT_setRumble(int strength);
 void PLAT_setCapturePipeFd(int fd);
 void PLAT_captureRecStop(void);
-int PLAT_pickSampleRate(int requested, int max);
 
 char* PLAT_getModel(void);
 void PLAT_getOsVersionInfo(char* output_str, size_t max_len);

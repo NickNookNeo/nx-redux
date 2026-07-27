@@ -76,10 +76,6 @@ void PLAT_setRumble(int strength) {
 	// buh
 }
 
-int PLAT_pickSampleRate(int requested, int max) {
-	return MIN(requested, max);
-}
-
 char* PLAT_getModel(void) {
 	return "Desktop";
 }

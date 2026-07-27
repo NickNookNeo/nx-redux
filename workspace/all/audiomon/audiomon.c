@@ -3,6 +3,7 @@
 
 #include <dbus/dbus.h>
 #include <libudev.h>
+#include <alsa/asoundlib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,8 +31,136 @@ enum DeviceType {
 static bool use_syslog = false;
 static volatile sig_atomic_t running = 1;
 
+// Forward declaration for use in publish functions
+static void audiomon_log(const char* msg);
+
 // Track current USB card number for disconnect verification
 static char current_usb_card[16] = "";
+
+// Track current BT device for sink-state publishing
+static char current_bt_mac[18] = "";
+static volatile sig_atomic_t republish_requested = 0;
+
+// Mirrors what write_audio_file()/clear_audio_file() last routed —
+// publish must reflect actual routing, which is last-event-wins.
+enum { ROUTED_DEFAULT,
+	   ROUTED_BLUETOOTH,
+	   ROUTED_USB } current_route = ROUTED_DEFAULT;
+
+// Sink state published for apps/scripts (see DEV docs: sink=, rates=, card=)
+#define SINK_STATE_FILE "/tmp/nx_audio_sink"
+#define SINK_STATE_TMP "/tmp/.nx_audio_sink.tmp"
+
+// Parse one integer key from the shared NextUI settings file.
+// audiomon doesn't link common/config.c, so read the key=value line directly.
+static int read_cfg_int(const char* key, int fallback) {
+	char path[512];
+	snprintf(path, sizeof(path), "%s/minuisettings.txt", SHARED_USERDATA_PATH);
+	FILE* f = fopen(path, "r");
+	if (!f)
+		return fallback;
+	char line[256];
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "%s=%%i", key);
+	int value = fallback;
+	while (fgets(line, sizeof(line), f)) {
+		int v;
+		if (sscanf(line, pattern, &v) == 1) {
+			value = v;
+			break;
+		}
+	}
+	fclose(f);
+	return value;
+}
+
+// A2DP negotiated rate: the raw bluealsa PCM (not via plug) constrains
+// rate min==max==negotiated, so hw-params report exactly it.
+static int probe_bluetooth_rate(const char* mac) {
+	char pcm_name[64];
+	snprintf(pcm_name, sizeof(pcm_name), "bluealsa:DEV=%s,PROFILE=a2dp", mac);
+	snd_pcm_t* pcm = NULL;
+	if (snd_pcm_open(&pcm, pcm_name, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) < 0)
+		return 44100; // conservative SBC default
+	int rate = 44100;
+	snd_pcm_hw_params_t* params;
+	snd_pcm_hw_params_alloca(&params);
+	if (snd_pcm_hw_params_any(pcm, params) >= 0) {
+		unsigned int r = 0;
+		int dir = 0;
+		// bluealsa constrains min==max==negotiated once the transport is fully
+		// up; an unconstrained result (UINT_MAX, seen when probing mid-A2DP
+		// handshake) must not leak into the published state
+		if (snd_pcm_hw_params_get_rate_max(params, &r, &dir) >= 0 &&
+			r >= 8000 && r <= 192000)
+			rate = (int)r;
+	}
+	snd_pcm_close(pcm);
+	return rate;
+}
+
+// Supported subset of the standard rate ladder, publish order 48000-first.
+static int probe_usb_rates(const char* card, int* rates_out, int max_rates) {
+	static const unsigned int ladder[] = {48000, 44100, 88200, 96000, 176400, 192000};
+	char pcm_name[32];
+	snprintf(pcm_name, sizeof(pcm_name), "hw:%s,0", card);
+	snd_pcm_t* pcm = NULL;
+	if (snd_pcm_open(&pcm, pcm_name, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) < 0)
+		return 0;
+	int count = 0;
+	snd_pcm_hw_params_t* params;
+	snd_pcm_hw_params_alloca(&params);
+	if (snd_pcm_hw_params_any(pcm, params) >= 0) {
+		for (unsigned int i = 0; i < sizeof(ladder) / sizeof(ladder[0]) && count < max_rates; i++) {
+			if (snd_pcm_hw_params_test_rate(pcm, params, ladder[i], 0) == 0)
+				rates_out[count++] = (int)ladder[i];
+		}
+	}
+	snd_pcm_close(pcm);
+	return count;
+}
+
+// Publish /tmp/nx_audio_sink (atomic: tmp + rename). Probe failures fall back
+// to conservative defaults; publishing must never block or fail routing.
+static void publish_sink_state(void) {
+	FILE* f = fopen(SINK_STATE_TMP, "w");
+	if (!f) {
+		audiomon_log("Failed to write sink state file");
+		return;
+	}
+
+	bool negotiate = read_cfg_int("audioRateNegotiation", 1) != 0;
+
+	switch (current_route) {
+	case ROUTED_BLUETOOTH: {
+		int rate = negotiate ? probe_bluetooth_rate(current_bt_mac) : 48000;
+		int cap = read_cfg_int("btMaxRate", 48000);
+		if (rate > cap)
+			rate = cap;
+		fprintf(f, "sink=bluetooth\nrates=%d\n", rate);
+	} break;
+	case ROUTED_USB: {
+		int rates[8];
+		int n = negotiate ? probe_usb_rates(current_usb_card, rates, 8) : 0;
+		if (n == 0) {
+			rates[0] = 48000;
+			n = 1;
+		}
+		fprintf(f, "sink=usb\nrates=");
+		for (int i = 0; i < n; i++)
+			fprintf(f, "%s%d", i ? " " : "", rates[i]);
+		fprintf(f, "\ncard=%s\n", current_usb_card);
+	} break;
+	case ROUTED_DEFAULT:
+	default:
+		fprintf(f, "sink=default\nrates=48000\n"); // dmix is fixed at 48 kHz
+		break;
+	}
+
+	fclose(f);
+	rename(SINK_STATE_TMP, SINK_STATE_FILE);
+	audiomon_log("Published sink state");
+}
 
 static void audiomon_log(const char* msg) {
 	if (use_syslog)
@@ -218,11 +347,18 @@ static void handle_bt_connected(DBusConnection* conn, const char* path) {
 	if (!path_to_mac(path, mac, sizeof(mac)))
 		return;
 
+	// Connect can be signalled twice (Device1.Connected + MediaTransport1 added)
+	if (current_route == ROUTED_BLUETOOTH && strcmp(mac, current_bt_mac) == 0)
+		return;
+
 	if (has_uuid(conn, path, UUID_A2DP)) {
 		char log_buf[256];
 		snprintf(log_buf, sizeof(log_buf), "Audio device connected: %s", mac);
 		audiomon_log(log_buf);
 		write_audio_file(mac, DEVICE_BLUETOOTH);
+		snprintf(current_bt_mac, sizeof(current_bt_mac), "%s", mac);
+		current_route = ROUTED_BLUETOOTH;
+		publish_sink_state();
 		SetAudioSink(AUDIO_SINK_BLUETOOTH);
 
 		// Set BT A2DP mixer to max for software volume control
@@ -246,8 +382,102 @@ static void handle_bt_disconnected(DBusConnection* conn, const char* path) {
 		snprintf(log_buf, sizeof(log_buf), "Audio device disconnected: %s", mac);
 		audiomon_log(log_buf);
 		clear_audio_file();
+		current_bt_mac[0] = '\0';
+		current_route = ROUTED_DEFAULT;
+		publish_sink_state();
 		SetAudioSink(AUDIO_SINK_DEFAULT);
 	}
+}
+
+// BlueZ removes org.bluez.MediaTransport1 when the A2DP stream link drops.
+// Modern earbuds often keep an LE link (battery/status) alive, so
+// Device1.Connected never flips false and the PropertiesChanged path above
+// never fires — the transport object is the ground truth for audio.
+static void handle_interfaces_removed(DBusMessage* msg) {
+	DBusMessageIter args;
+	if (!dbus_message_iter_init(msg, &args) ||
+		dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_OBJECT_PATH)
+		return;
+
+	const char* path = NULL;
+	dbus_message_iter_get_basic(&args, &path);
+	if (!path || !strstr(path, "dev_"))
+		return;
+
+	char mac[18];
+	if (!path_to_mac(path, mac, sizeof(mac)))
+		return;
+	if (current_route != ROUTED_BLUETOOTH || strcmp(mac, current_bt_mac) != 0)
+		return;
+
+	if (!dbus_message_iter_next(&args) ||
+		dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_ARRAY)
+		return;
+
+	DBusMessageIter arr;
+	dbus_message_iter_recurse(&args, &arr);
+	while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_STRING) {
+		const char* iface = NULL;
+		dbus_message_iter_get_basic(&arr, &iface);
+		if (iface && strcmp(iface, "org.bluez.MediaTransport1") == 0) {
+			audiomon_log("A2DP transport removed (LE link may remain) - reverting audio route");
+			clear_audio_file();
+			current_bt_mac[0] = '\0';
+			current_route = ROUTED_DEFAULT;
+			publish_sink_state();
+			SetAudioSink(AUDIO_SINK_DEFAULT);
+			return;
+		}
+		dbus_message_iter_next(&arr);
+	}
+}
+
+// Mirror case: the A2DP transport can (re)appear without Device1.Connected
+// changing (LE link stayed up the whole time). Route audio back to the device.
+static void handle_interfaces_added(DBusConnection* conn, DBusMessage* msg) {
+	DBusMessageIter args;
+	if (!dbus_message_iter_init(msg, &args) ||
+		dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_OBJECT_PATH)
+		return;
+
+	const char* path = NULL;
+	dbus_message_iter_get_basic(&args, &path);
+	if (!path || !strstr(path, "dev_"))
+		return;
+
+	if (!dbus_message_iter_next(&args) ||
+		dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_ARRAY)
+		return;
+
+	bool has_transport = false;
+	DBusMessageIter dict;
+	dbus_message_iter_recurse(&args, &dict);
+	while (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY) {
+		DBusMessageIter entry;
+		dbus_message_iter_recurse(&dict, &entry);
+		if (dbus_message_iter_get_arg_type(&entry) == DBUS_TYPE_STRING) {
+			const char* iface = NULL;
+			dbus_message_iter_get_basic(&entry, &iface);
+			if (iface && strcmp(iface, "org.bluez.MediaTransport1") == 0) {
+				has_transport = true;
+				break;
+			}
+		}
+		dbus_message_iter_next(&dict);
+	}
+	if (!has_transport)
+		return;
+
+	// The transport lives at .../dev_XX_.../sepN/fdM — hand handle_bt_connected
+	// the device object path (it queries Device1 properties on it).
+	const char* p = strstr(path, "dev_");
+	size_t prefix = (size_t)(p - path) + 4 + 17; // through the MAC segment
+	char devpath[128];
+	if (prefix >= sizeof(devpath) || strlen(path) < prefix)
+		return;
+	memcpy(devpath, path, prefix);
+	devpath[prefix] = '\0';
+	handle_bt_connected(conn, devpath);
 }
 
 static void handle_usb_audio_connected(struct udev_device* dev) {
@@ -262,6 +492,8 @@ static void handle_usb_audio_connected(struct udev_device* dev) {
 	snprintf(log_buf, sizeof(log_buf), "USB audio device connected: card %s", card);
 	audiomon_log(log_buf);
 	write_audio_file(card, DEVICE_USB_AUDIO);
+	current_route = ROUTED_USB;
+	publish_sink_state();
 	SetAudioSink(AUDIO_SINK_USBDAC);
 
 	// Set USB DAC mixer controls to 100%
@@ -286,11 +518,16 @@ static void handle_usb_audio_disconnected(void) {
 	audiomon_log("USB audio device disconnected");
 	current_usb_card[0] = '\0';
 	clear_audio_file();
+	current_route = ROUTED_DEFAULT;
+	publish_sink_state();
 	SetAudioSink(AUDIO_SINK_DEFAULT);
 }
 
 static void signal_handler(int sig) {
-	(void)sig;
+	if (sig == SIGUSR1) {
+		republish_requested = 1;
+		return;
+	}
 	running = 0;
 }
 
@@ -330,6 +567,18 @@ static void process_dbus_events(DBusConnection* conn) {
 
 	DBusMessage* msg;
 	while ((msg = dbus_connection_pop_message(conn)) != NULL) {
+		// A2DP transport lifecycle — the audio-truth signal (see handlers above)
+		if (dbus_message_is_signal(msg, "org.freedesktop.DBus.ObjectManager", "InterfacesRemoved")) {
+			handle_interfaces_removed(msg);
+			dbus_message_unref(msg);
+			continue;
+		}
+		if (dbus_message_is_signal(msg, "org.freedesktop.DBus.ObjectManager", "InterfacesAdded")) {
+			handle_interfaces_added(conn, msg);
+			dbus_message_unref(msg);
+			continue;
+		}
+
 		if (!dbus_message_is_signal(msg, "org.freedesktop.DBus.Properties", "PropertiesChanged")) {
 			dbus_message_unref(msg);
 			continue;
@@ -374,10 +623,21 @@ static void process_dbus_events(DBusConnection* conn) {
 				dbus_bool_t connected;
 				dbus_message_iter_get_basic(&variant, &connected);
 
-				if (connected)
-					handle_bt_connected(conn, path);
-				else
+				if (connected) {
+					// Do NOT route yet: Connected covers any link, including an
+					// LE-only one (battery/status) with no audio path behind it.
+					// Routing happens when the A2DP MediaTransport1 appears —
+					// see handle_interfaces_added.
+					char mac[18];
+					if (path_to_mac(path, mac, sizeof(mac)) && has_uuid(conn, path, UUID_A2DP)) {
+						char log_buf[256];
+						snprintf(log_buf, sizeof(log_buf),
+								 "BT device connected: %s (waiting for A2DP transport)", mac);
+						audiomon_log(log_buf);
+					}
+				} else {
 					handle_bt_disconnected(conn, path);
+				}
 			}
 
 			dbus_message_iter_next(&changed);
@@ -438,9 +698,11 @@ int main(int argc, char* argv[]) {
 
 	InitSettings();
 	SetAudioSink(AUDIO_SINK_DEFAULT);
+	publish_sink_state();
 
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
+	signal(SIGUSR1, signal_handler);
 
 	// Initialize D-Bus (optional — needed for Bluetooth, not for USB audio)
 	// IMPORTANT: Must use dbus_connection_open_private + manual register instead of
@@ -477,6 +739,15 @@ int main(int argc, char* argv[]) {
 		audiomon_log("Connected to system D-Bus");
 		dbus_bus_add_match(conn,
 						   "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
+						   NULL);
+		// A2DP transport lifecycle: earbuds can drop/re-establish the audio
+		// link while their LE connection stays up, so Device1.Connected alone
+		// is not a reliable audio signal (see handle_interfaces_removed/added)
+		dbus_bus_add_match(conn,
+						   "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesAdded'",
+						   NULL);
+		dbus_bus_add_match(conn,
+						   "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesRemoved'",
 						   NULL);
 		dbus_connection_flush(conn);
 	}
@@ -519,6 +790,11 @@ int main(int argc, char* argv[]) {
 					  : "Monitoring for USB audio device events (no D-Bus)");
 
 	while (running) {
+		if (republish_requested) {
+			republish_requested = 0;
+			publish_sink_state(); // settings page poked us after a policy change
+		}
+
 		fd_set readfds;
 		FD_ZERO(&readfds);
 

@@ -84,6 +84,29 @@ SYNC_PID=$!
 # Start power button sleep/poweroff handler
 sleepmon.elf &
 
+# Pick the device-open rate for the current audio sink (audiomon publishes
+# /tmp/nx_audio_sink). Exact match on the native rate wins; otherwise the
+# sink's preferred (first-listed) rate; 48000 when the file is absent.
+nx_pick_audio_rate() {
+    NATIVE="$1"
+    RATE=48000
+    if [ -f /tmp/nx_audio_sink ]; then
+        RATES=$(sed -n 's/^rates=//p' /tmp/nx_audio_sink)
+        for R in $RATES; do
+            if [ "$R" = "$NATIVE" ]; then
+                echo "$NATIVE"
+                return
+            fi
+        done
+        FIRST=${RATES%% *}
+        [ -n "$FIRST" ] && RATE=$FIRST
+    fi
+    echo "$RATE"
+}
+
+# Dreamcast AICA is natively 44.1 kHz
+export NX_AUDIO_RATE=$(nx_pick_audio_rate 44100)
+
 cd "$PAK_DIR"
 ./flycast "$ROM" &> "$LOGS_PATH/$EMU_TAG.txt" &
 EMU_PID=$!

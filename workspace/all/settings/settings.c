@@ -13,6 +13,7 @@
 #include "settings_menu.h"
 #include "settings_wifi.h"
 #include "settings_bt.h"
+#include "settings_audio.h"
 #include "settings_led.h"
 #include "settings_developer.h"
 #include "settings_updater.h"
@@ -1234,6 +1235,7 @@ static SettingsPage main_page;
 /* WiFi/BT/LED pages (created upfront in build_menu_tree) */
 static SettingsPage* wifi_page_ptr = NULL;
 static SettingsPage* bt_page_ptr = NULL;
+static SettingsPage* audio_page_ptr = NULL;
 static SettingsPage* led_page_ptr = NULL;
 static SettingsPage* dev_page_ptr = NULL;
 
@@ -1794,6 +1796,12 @@ static void build_menu_tree(const DeviceInfo* dev) {
 		}
 	}
 
+	audio_page_ptr = audio_page_create();
+	if (audio_page_ptr) {
+		main_items[idx++] = (SettingItem)ITEM_SUBMENU_INIT(
+			"Audio", "Output device and sample-rate policy", audio_page_ptr);
+	}
+
 	if (has_mute_toggle(dev)) {
 		main_items[idx++] = (SettingItem)ITEM_SUBMENU_INIT(
 			"FN switch", "FN switch settings", &fn_switch_page);
@@ -1928,6 +1936,8 @@ int main(int argc, char* argv[]) {
 		wifi_page_destroy(wifi_page_ptr);
 	if (bt_page_ptr)
 		bt_page_destroy(bt_page_ptr);
+	if (audio_page_ptr)
+		audio_page_destroy(audio_page_ptr);
 	if (dev_page_ptr)
 		developer_page_destroy(dev_page_ptr);
 	free_dynamic_labels();

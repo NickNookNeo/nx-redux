@@ -2,12 +2,51 @@
 #include "api.h"
 #include <msettings.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <SDL2/SDL.h>
+
+#define SINK_STATE_FILE "/tmp/nx_audio_sink"
+#define SINK_MAX_RATES 8
+
+typedef struct {
+	char sink[16];
+	int rates[SINK_MAX_RATES];
+	int rate_count;
+} SinkState;
+
+// Parse audiomon's published sink state. Returns false when absent/empty.
+static bool read_sink_state(SinkState* out) {
+	memset(out, 0, sizeof(*out));
+	FILE* f = fopen(SINK_STATE_FILE, "r");
+	if (!f)
+		return false;
+	char line[256];
+	while (fgets(line, sizeof(line), f)) {
+		if (sscanf(line, "sink=%15s", out->sink) == 1)
+			continue;
+		if (strncmp(line, "rates=", 6) == 0) {
+			char* p = line + 6;
+			while (*p && out->rate_count < SINK_MAX_RATES) {
+				char* end = NULL;
+				long r = strtol(p, &end, 10);
+				if (end == p)
+					break;
+				if (r > 0)
+					out->rates[out->rate_count++] = (int)r;
+				p = end;
+				while (*p == ' ')
+					p++;
+			}
+		}
+	}
+	fclose(f);
+	return out->rate_count > 0;
+}
 
 // Linux input event definitions (avoid including linux/input.h due to conflicts)
 #define EV_KEY 0x01
@@ -225,6 +264,42 @@ bool AudioMgr_isUSBDACActive(void) {
 
 const char* AudioMgr_getPreferredDevice(void) {
 	return NULL; // Always use ALSA default — audiomon manages .asoundrc
+}
+
+int AudioMgr_pickRate(int desired) {
+	if (desired <= 0)
+		desired = 48000;
+
+	SinkState st;
+	if (!read_sink_state(&st))
+		return desired < 48000 ? desired : 48000; // pre-negotiation behavior
+
+	for (int i = 0; i < st.rate_count; i++) {
+		if (st.rates[i] == desired)
+			return desired;
+	}
+	int best = st.rates[0];
+	for (int i = 1; i < st.rate_count; i++) {
+		if (abs(st.rates[i] - desired) < abs(best - desired))
+			best = st.rates[i];
+	}
+	return best;
+}
+
+const char* AudioMgr_getSinkDescription(void) {
+	static char buf[64];
+	SinkState st;
+	if (!read_sink_state(&st)) {
+		snprintf(buf, sizeof(buf), "Speaker - 48000 Hz");
+		return buf;
+	}
+	const char* name = "Speaker";
+	if (strcmp(st.sink, "bluetooth") == 0)
+		name = "Bluetooth";
+	else if (strcmp(st.sink, "usb") == 0)
+		name = "USB DAC";
+	snprintf(buf, sizeof(buf), "%s - %d Hz", name, st.rates[0]);
+	return buf;
 }
 
 void AudioMgr_setCallback(AudioMgrCallback cb) {

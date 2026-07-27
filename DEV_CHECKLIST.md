@@ -343,3 +343,56 @@ platform's `taskset` turns out to be broken on some device.
       unnamed `mupen64plus` thread is never pinned — see the Brick bullet above,
       where the fix is recorded as prescribed follow-up. Full evidence + CPU% tables:
       `.superpowers/sdd/2026-07-26-flycast-dc-pak/n64-tg5050-report.md`.
+
+---
+
+## Audio output routing + rate negotiation (built 2026-07-27, partially verified)
+
+**Verified 2026-07-27 on BOTH devices:** boot state, USB probe/route/unplug-revert
+(BE02T dongle: rates=48000 96000; hw_params pass-through incl. Follow-source 96 k
+native + 44.1 k→48 k nearest-fallback), BT negotiated 44100 route + gapless playback +
+transport-loss revert to speaker, SIGUSR1 republish, buffer setting visible on direct
+hw (period 4096), rate badge + ext-audio status icon. Session fixes riding along:
+buffer-change reopen, MediaTransport1-driven BT routing (LE-only connect no longer
+routes), probe rate-window guard. NOTE Brick needs the final audiomon.elf pushed
+(tg5040 build ready; Smart Pro S already runs it).
+
+Ground truth for "no silent resample": `cat /proc/asound/card<X>/pcm0p/sub0/hw_params`
+during playback — rate shown must equal the app's open rate. For BT compare
+bluealsa's negotiated rate to `cat /tmp/nx_audio_sink`.
+
+Still to verify, per device (Brick + Smart Pro S):
+- [ ] Radio through pickRate + decode-thread resampler (built 2026-07-27, moved from
+      DEV_TODO): play an internet station on speaker — device must open 48000
+      (`hw_params`), audio clean (in-app SRC does stream→48 k, no ALSA plug resample);
+      over BT the device opens at the negotiated rate. HLS + direct, AAC + MP3 paths.
+      DEPLOY DEBT: radio-fixed musicplayer.elf not yet pushed to either device
+      (tg5040 + tg5050 builds ready); Brick also still needs the final audiomon.elf
+      (MediaTransport1-driven BT routing).
+- [ ] Media player through `-af aresample=<pickRate>` (built 2026-07-27): play a video
+      on speaker — `hw_params` shows 48000 (ffplay's swresample converts in-process, plug
+      passes through); over BT device opens at negotiated rate; sink hotplug mid-video
+      restarts ffplay at the new rate (existing restart path). Also confirms the vendored
+      ffplay binary accepts `-af` (it errors out immediately if the filter is missing).
+      DEPLOY DEBT: mediaplayer.elf both devices (builds ready).
+- [ ] USB+BT together — precedence unchanged from before (last-event-wins).
+- [ ] Music player: 44.1 kHz file over a 44.1-capable USB DAC reopens at 44100 in
+      Follow-source (the BE02T rejects 44100 — needs a different DAC, or accept the
+      48000-nearest result already verified).
+- [ ] flycast: over USB DAC that accepts 44100 → log shows "native 44.1 KHz output",
+      hw_params 44100; on speaker → unchanged 48 kHz resample path.
+- [ ] N64: with BT connected at 44.1 kHz → mupen log shows OUTPUT_FREQUENCY 44100
+      (`--set` override); speaker → no override, 48000.
+- [ ] minarch: PS core over 44.1-capable USB DAC opens 44100 (hw_params).
+      NOTE intentional change: sub-48k cores on SPEAKER now open 48000 (minarch sinc
+      resample) instead of core-rate + ALSA plug linear resample — verify no audio
+      regression on a 32 kHz SNES title.
+- [ ] Escape hatch: Settings → Audio → Rate negotiation = Force 48000 Hz →
+      /tmp/nx_audio_sink shows rates=48000 on every sink immediately (SIGUSR1 path)
+      (with Bluetooth max rate left at 48000; a 44100 cap still caps the published
+      BT rate — `btMaxRate` is applied to the BT sink after the force, by design),
+      all apps behave exactly as pre-change.
+- [ ] Settings → Audio "Output" row shows live sink + rate; BT max rate row moved
+      here (gone from Bluetooth page), still caps BT publish rate.
+- [ ] Regression: speaker/jack daily-driver flows (music, DC, N64, minarch) still
+      pass their existing checklist items.

@@ -159,6 +159,11 @@ int Player_getDuration(void);
 // Get track info
 const TrackInfo* Player_getTrackInfo(void);
 
+// Sample rates for the now-playing rate badge: the file's native rate and the
+// rate the audio device is actually opened at (equal when playing natively)
+int Player_getSourceSampleRate(void);
+int Player_getOutputSampleRate(void);
+
 // Get current file path
 const char* Player_getCurrentFile(void);
 

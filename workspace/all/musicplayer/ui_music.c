@@ -15,6 +15,14 @@
 #include "lyrics.h"
 #include "settings.h"
 
+// Short kHz label for the rate badge: 48000 -> "48", 44100 -> "44.1"
+static void format_khz(int rate, char* buf, size_t size) {
+	if (rate % 1000 == 0)
+		snprintf(buf, size, "%d", rate / 1000);
+	else
+		snprintf(buf, size, "%.1f", rate / 1000.0);
+}
+
 // Scroll text state for browser list (selected item)
 static ScrollTextState browser_scroll = {0};
 
@@ -173,6 +181,36 @@ void render_playing(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 		SDL_FillRect(screen, &inner, RGB_BLACK);
 		SDL_BlitSurface(fmt_surf, NULL, screen, &(SDL_Rect){badge_x + SCALE1(5), top_y + SCALE1(2)});
 		SDL_FreeSurface(fmt_surf);
+	}
+
+	// Sample-rate badge next to the format badge: "96kHz" when the device
+	// plays the file natively, "44.1→48kHz" when resampling to the sink rate
+	{
+		int src_rate = Player_getSourceSampleRate();
+		int out_rate = Player_getOutputSampleRate();
+		if (src_rate > 0 && out_rate > 0) {
+			char src_str[8], out_str[8], rate_str[24];
+			format_khz(src_rate, src_str, sizeof(src_str));
+			if (src_rate == out_rate) {
+				snprintf(rate_str, sizeof(rate_str), "%skHz", src_str);
+			} else {
+				format_khz(out_rate, out_str, sizeof(out_str));
+				snprintf(rate_str, sizeof(rate_str), "%s→%skHz", src_str, out_str);
+			}
+			SDL_Surface* rate_surf = TTF_RenderUTF8_Blended(font.tiny, rate_str, COLOR_GRAY);
+			if (rate_surf) {
+				int rate_x = badge_x + badge_w + SCALE1(4);
+				int rate_w = rate_surf->w + SCALE1(10);
+				SDL_Rect rate_border = {rate_x, top_y, rate_w, badge_h};
+				SDL_FillRect(screen, &rate_border, RGB_GRAY);
+				SDL_Rect rate_inner = {rate_x + 1, top_y + 1, rate_w - 2, badge_h - 2};
+				SDL_FillRect(screen, &rate_inner, RGB_BLACK);
+				SDL_BlitSurface(rate_surf, NULL, screen,
+								&(SDL_Rect){rate_x + SCALE1(5), top_y + (badge_h - rate_surf->h) / 2});
+				SDL_FreeSurface(rate_surf);
+				badge_w += SCALE1(4) + rate_w; // track counter shifts right with us
+			}
+		}
 	}
 
 	// Track counter "01 - 03" (smaller, gray) - after the format badge
