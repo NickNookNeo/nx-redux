@@ -11,6 +11,117 @@ Move an entry from there to here once it compiles and needs hardware time.
 
 ---
 
+## DC netplay pre-launch wizard (built 2026-07-29)
+
+**Status:** Tasks 1-7 (nextui Y-launch, the standalone `netplay.elf` wizard, and the
+rewritten DC.pak `launch.sh`) are built, compile clean on both platforms, and staged
+(not committed). This supersedes the shell-based overlay-toggle flow entirely — see
+`workspace/all/other/flycast/README.md`'s Netplay chapter for what changed and why, and
+`docs/superpowers/specs/2026-07-29-netplay-prelaunch-wizard-design.md` for the design.
+**Verified 2026-07-29/30 on tg5040 Brick** (WiFi pairing + session in real use; solo
+failure-path pass over adb: rc contracts — no `--game` rc=2, `--cleanup` no-op rc=0 —
+first-screen cancel, hotspot AP up/`NextUI-<code>`/teardown-on-cancel within budget,
+kill-and-heal of an orphaned AP healed instantly, migration guard rewrote planted
+`GGPO=yes`/`device2=0`, `emu.cfg` md5 stable across all cancels). What remains below is
+the two-device pair matrix and its bundled checks.
+
+Shape of the shipped feature: `Y` on a netplay-capable ROM (Phase 1: DC.pak only,
+marked by a `netplay` file beside its `launch.sh`) writes `/tmp/netplay_launch` and
+launches the pak normally; root Search moved from `Y` to `START`; a "Launch with
+Netplay" context-menu item does the same thing as Y. `DC.pak/launch.sh` sees the flag,
+runs `netplay.elf` (role → hotspot/WiFi → UDP 55441 broadcast discovery / TCP 55440
+handshake → optional rsync save sync on TCP 18731 → `/tmp/netplay_session`), then
+starts flycast with every netplay value as a **virtual** `-config` (`GGPO`,
+`ActAsServer`, `server`, `EnableUPnP`, `device2`) — `emu.cfg` is never written on this
+path. An idempotent migration guard reverts a leftover `GGPO=yes/True` and
+`device2=0` from the old overlay flow on every launch. `--cleanup` (called after the
+game exits, and defensively at the wizard's own startup) tears down any hotspot,
+restores prior WiFi, stops a stray rsyncd, and removes the session file, bounded to a
+19 s budget.
+
+### On-device verification
+
+- [ ] **Pair test, Brick ↔ Smart Pro S, a netplay-capable DC game (e.g. MvC2), all
+      four quadrants** (host/client × hotspot/WiFi) — *WiFi pairing + a full session
+      already proven in real use 2026-07-29/30; still open: the hotspot quadrants, the
+      mismatch `REJECT`, the save-sync integrity checks, the post-session port sweep,
+      and (bundled here) the full-session `emu.cfg` hash from the item below* — from
+      the spec's hardware verification plan plus Task 4/5/7's device items:
+      - pairing completes with no IP ever typed in any quadrant (UDP 55441 broadcast
+        + TCP 55440 handshake, not the old ping sweep).
+      - only hosts broadcasting the *identical* game name appear in the client's
+        list; a deliberately mismatched game/protocol produces a named `REJECT`
+        error on the CLIENT's screen only — it falls back to its host list
+        (WiFi) or exits the wizard (hotspot, nothing else to connect to) — while
+        the HOST shows no error at all: it silently sends `REJECT` and keeps
+        showing "Waiting for player...", by design. Do not expect (or misreport
+        the absence of) a host-side error here.
+      - save sync: client's `netplay-data` copy of `vmu_save_*.bin`/`dc_nvmem.bin`
+        md5-matches the host's real originals after the pull, at WiFi speed; a pull
+        attempted from a third, non-paired IP is refused (rsync `hosts allow`); no
+        `.netplay-staging` directory survives a successful sync; a deliberately
+        failed pull leaves the client's existing saves byte-identical (no partial
+        commit); the progress bar renders correctly at both devices' screen scales.
+      - both devices clear flycast's untimed "Starting Network" modal and P2 inputs
+        work (virtual `device2=0` on both sides).
+      - client's own real saves are untouched after the session (it played entirely
+        out of `netplay-data/`); host's `netplay-backup/` holds its pre-session copy.
+      - after the session, `netstat` shows no listener on 55440/18731 on either
+        device, and `pidof hostapd`/`pidof rsync` are clean.
+- [ ] **`emu.cfg` untouched by a netplay run** — hash/diff it before and after a full
+      hosted and a full joined session on both devices: no key changes at all (the
+      migration guard's one-time rewrite aside), confirming the six netplay values
+      really are virtual-only — including `DCNet`, which the netplay block forces to `no`
+      virtually and must therefore leave at its overlay value on disk.
+
+### Gotchas
+
+- flycast's GGPO/DCNet internals are unaffected by the wizard rewrite and still hold:
+  GGPO always drives Dreamcast **port B** as player 2, so `device2` must be a real
+  pad on both sides or the second device's inputs reach nothing (port B is empty by
+  default); UPnP is forced off because `ggpo.cpp:801-804` punches a router mapping
+  **before** checking `ActAsServer`, so both roles would otherwise leak an 86400 s
+  lease; `server =` semantics (empty → loopback deadlock, flycast's "Starting
+  Network" modal has no timeout, Cancel is the only exit) are still exactly what a
+  broken pairing looks like at the flycast layer, even though the wizard should now
+  make that unreachable in normal use. **DCNet is likewise forced off** (virtually,
+  `network:DCNet=no` last in `NETPLAY_ARGS`): it relays the emulated modem to an
+  external cloud service, an input the GGPO lockstep never synchronizes, so leaving a
+  per-game or global `DCNet = yes` in force on a session is a desync. It is on by
+  default now, so this is the common case, not a corner one.
+- **`PerGameVmu` must stay off.** With it on, flycast writes the per-game VMU file as
+  `<gameId>_vmu_save_A1.bin`, which does not match the wizard's `--fetch-files` glob
+  (`vmu_save_*.bin`) any more than it matched the old tar glob — the sync silently
+  ships an incomplete card, with "Peer verification failed" the only symptom.
+- **Switcher-resume desync.** A netplay session must be started as a fresh launch,
+  never a switcher RESUME on a netplay-capable ROM — GGPO's boot-time sync desyncs
+  against a mid-session state load. This used to mean "must be a plain A START"; it
+  is now "must be a plain **Y** START" (or the "Launch with Netplay" context item) —
+  an ordinary switcher resume on a netplay-capable game is exactly what the Y branch
+  exists to bypass, so don't use it to start netplay.
+- **`show2.elf` must still be killed with `killall -9`, never plain `killall`**, if
+  anything ever drives it again — SIGTERM is swallowed (SDL traps it into an
+  `SDL_QUIT` its daemon loop never pumps). This no longer applies to netplay at all
+  (the wizard has its own screens and owns its own process lifecycle); `show2.elf`
+  remains only the first-boot install splash.
+- **Migration guard fires at most once per card**, by construction: it reverts
+  `GGPO=yes/True → no` and `device2=0 → 10` on every launch, but since the new flow
+  never writes either key back to `emu.cfg`, there's nothing left for it to revert
+  after the first post-upgrade launch. A user who deliberately sets `device2 = 0` in
+  flycast's own Controls UI for local two-pad play will have it reverted the one time
+  the old value is still on disk — same accepted ambiguity as the original overlay
+  flow, just incapable of recurring afterward.
+- A stale `server =` (and `EnableUPnP = no`) left in `emu.cfg` by an old, pre-wizard
+  session is harmless and deliberately not swept — flycast only reads it on the GGPO
+  path, where the wizard's virtual value overrides it anyway.
+- **`wizard_wifi.c`'s picker/scan loops don't poll `app_quit`** — up to 120 s
+  (`WIZ_PICKER_TIMEOUT_MS`). This is what makes a SIGTERM-then-SIGKILL while sitting
+  in the WiFi/hotspot picker a real window for an orphaned AP, i.e. exactly the
+  scenario the kill-and-heal check above exists to catch. Tracked as a follow-up in
+  `DEV_TODO.md` (make the loops poll `app_quit`); not fixed in this build.
+
+---
+
 ## Upstream-port + fix round (built 2026-07-27)
 
 **Status:** ten DEV_TODO items implemented 2026-07-27, committed as `1ccc1030`. All
@@ -146,6 +257,34 @@ Confirmed by reading the stock rootfs out of
   `osd-brickpro/` overlay (built from `skeleton/SYSTEM/osd/device/brickpro/` at
   package time) exists
 
+Confirmed live over adb on the actual unit, stock firmware v1.1.1 / kernel 4.9.191
+sun50iw10, 2026-07-29 (device arrived, no SD card, redux not installed):
+
+- `strings /usr/trimui/bin/MainUI | grep ^Trimui` → exactly one line, `Trimui Brick Pro`
+- panel live at 1024×768@60 (disp sysfs + fbset); `overlay` in `/proc/filesystems`
+  (kernel 4.9 → the tg5040 tmpfs-staging OSD mount branch is the right one here too)
+- `/sys/class/led_anim/` has `effect_{f1,f2,m,lr,rear}` + `max_scale`,
+  `max_scale_f1f2`, `max_scale_lr`, `max_scale_rear` exactly as tabled — plus
+  standalone `effect_l` / `effect_r` (and matching rgb_hex/cycles/duration nodes),
+  so the two `lr` sides are individually addressable (23 RGB LEDs in
+  `/sys/class/leds/`); possible future refinement, not needed for bring-up
+- `trimui_inputd` and `keymon` running; `trimui_osdd` runs from
+  `/usr/trimui/osd/trimui_osdd` (the overlay mount point); turbo interface is the
+  same `/tmp/trimui_inputd/turbo_*` flag files (per its own `help` file)
+- PD14/PD18 analog-pad GPIO poke confirmed commented out in the LIVE
+  `runtrimui.sh` (not just the recovery image)
+- busybox v1.27.2 — same as the Brick (tar guard / applet findings carry over)
+- **`TRIMUI Player1` key bitmap decodes to exactly the expected SDL order**:
+  BTN range 304-318 (A,B,X,Y,TL,TR,SELECT,START,MODE,THUMBL,THUMBR → SDL 0-10),
+  then low keys KEY_F1(59), KEY_F2(60), VOLDOWN(114), VOLUP(115),
+  KEY_HOMEPAGE(172) → SDL 11-15. That is 8=MENU, 9/10=L3/R3, 11/12=FN1/FN2,
+  13/14=volume, 15=HOME — kernel-level evidence for the Input Tester item below
+  (still confirm in SDL once redux is installed). ABS=3003f → both sticks,
+  analog triggers, dpad hat all present on the one device. HOME is
+  KEY_HOMEPAGE(172) *emitted by the gamepad device*, so SDL sees it as joystick
+  button 15 and keymon's tg5050 keyboard-device Home path indeed does not apply.
+- `/dev/ttyAS*` — NONE exist (see resolved calibration item below)
+
 ### 1. On-device verification (Brick Pro)
 
 - [ ] **Boots and identifies correctly** — UI is 1024×768 at 3× scale with 7 main rows.
@@ -154,9 +293,14 @@ Confirmed by reading the stock rootfs out of
       Settings → Input Tester and press everything. Expected: 9/10 = stick clicks (L3/R3),
       11/12 = FN1/FN2 (shown as L4/R4), 13/14 = volume, 15 = HOME, 8 = MENU.
       Wrong indices look like dead or swapped buttons, **not** a crash.
-- [ ] **Analog sticks** — both nubs move the on-screen indicators; `L3+R3` enters calibration.
-- [ ] **Hall-stick calibration** — check whether `/dev/ttyAS5` / `/dev/ttyAS7`
-      (`settings_input.c:68-71`) exist on this model; calibration is a no-op if they don't.
+- [ ] **Analog sticks** — both nubs move the on-screen indicators. Note: `L3+R3`
+      calibration is known-inert on this model until the I2C implementation lands
+      (protocol + design in `DEV_TODO.md`, "Trimui Brick Pro: joystick calibration").
+- [ ] **DC pre-launch options smoke (60 s)** — open "Emulator Options" once on a DC
+      game: proves seeding into `config/tg5040-brickpro` from `default-brickpro.cfg`.
+      Everything else on that feature is transitively covered — Brick Pro runs the same
+      tg5040 binaries at the same 1024×768/3× geometry verified on the Brick, and has no
+      fan daemon (the tg5050 picker-hang class does not apply).
 - [ ] **LEDs, all five zones** — Settings → LED Control shows F1 key / F2 key / Top bar /
       Joysticks / L/R triggers. Verify each zone lights the part it names (in particular that
       `lr` is the *joysticks* here and `rear` is the *triggers* — the opposite of the Brick).

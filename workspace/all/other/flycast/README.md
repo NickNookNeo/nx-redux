@@ -638,6 +638,369 @@ Mode is active — upstream behavior, not something this pak adds or can route
 around. The overlay's Save/Load actions will fail silently in that mode.
 Accepted as v1 behavior.
 
+## Netplay (GGPO + DCNet)
+
+Flycast v2.6 ships two unrelated online mechanisms; both are compiled into
+our binaries already (GGPO builds unconditionally under `if(NOT LIBRETRO)`,
+`CMakeLists.txt`; DCNet is `core/network/dcnet.cpp`). No patch changes were
+needed for either — flycast's own netplay code is used entirely as upstream
+built it.
+
+**Entry point (2026-07-29 rewrite):** GGPO netplay is no longer a persistent
+overlay toggle. It's a per-launch choice: press `Y` on a netplay-capable ROM
+in the game list (Phase 1 ships the capability marker only in DC.pak), or
+use the "Launch with Netplay" context-menu item — both do the same thing,
+the menu item just being the discoverable path. A plain `A` press on the
+same ROM is always an ordinary single-player launch: GGPO is never armed by
+accident and never outlives a quit. (Root Search moved from `Y` to `START`
+to make room for this.) Everything interactive — role, hotspot/WiFi, peer
+discovery, save sync — now lives in a new standalone wizard, `netplay.elf`
+(`workspace/all/netplay-wizard/`), that `DC.pak/launch.sh` runs before
+flycast starts. Design:
+`docs/superpowers/specs/2026-07-29-netplay-prelaunch-wizard-design.md`.
+
+### The wizard flow
+
+```
+netplay.elf --game <name> [--serve-dir <dir>] [--fetch-to <dir>]
+            [--fetch-files <pat,pat>] [--session-file <path>]
+netplay.elf --cleanup [--session-file <path>]
+```
+
+Screens: Host/Join → connection mode (Hotspot/WiFi) → network setup →
+rendezvous → handshake → optional save sync → "Go" (writes
+`/tmp/netplay_session`, exits 0). `B` backs out one screen at a time;
+backing out after network setup has already started tears that setup back
+down first — hotspot stopped, previous WiFi restored, rsyncd stopped —
+before the wizard exits. There is no path from a cancelled wizard into a
+fallback single-player launch anywhere, including inside `launch.sh`. Exit
+codes: `0` proceed with netplay, `1` user cancelled, `2` error (shown on the
+wizard's own screen for anything that happens once the UI is up; a CLI
+usage error — e.g. a missing `--game` — returns 2 *before* `GFX_init`, with
+only a stderr message and no screen, though this is practically
+unreachable since `launch.sh` always passes `--game`); `launch.sh` treats
+anything non-zero as "return to the game list, never start flycast".
+
+Ports, all distinct from minarch's own in-game netplay (55435-55438,
+56400/56421) so the two can coexist during the migration described in
+`DEV_TODO.md`:
+
+- **TCP 55440** — wizard control channel (`HELLO`/`REJECT`/`SYNC-READY`/
+  `SYNC-DONE`/`START`, line-based).
+- **UDP 55441** — discovery broadcast, magic `NXWZ` (`0x4E58575A`), sent
+  once a second while a host waits. A client only ever lists hosts
+  broadcasting the *identical* game name, so wrong-game pairing is
+  impossible by construction rather than a stall to diagnose after the
+  fact. The `HELLO` handshake re-checks the game name and protocol version
+  anyway, but only the CLIENT ever sees a mismatch: a rejected client shows
+  the named reason and falls back to its host list (WiFi) or exits the
+  wizard (hotspot has no other host to fall back to). The HOST shows no
+  error at all — it sends `REJECT` and simply keeps showing "Waiting for
+  player...", by design (`wizard_net.c`: "rejecting is not an error here —
+  the host keeps waiting for the peer it is actually paired with").
+- **TCP 18731** — the save-sync rsync daemon below. Deliberately not
+  Device Sync's 18730, so the two features' daemons never collide.
+
+### Save sync: rsync daemon, replacing tar + a per-platform HTTP server
+
+The host starts a read-only rsync daemon for the length of the handshake
+only (config written to `/tmp/netplay_rsyncd.conf`: one module named `sync`
+mapped to `--serve-dir`, `read only = true`, `hosts allow = <client ip>`,
+`list = false`, port 18731) and sends `SYNC-READY`; the client pulls each
+`--fetch-files` pattern with `rsync rsync://<host>:18731/sync/<pattern>`
+into a staging directory inside `--fetch-to`, showing a progress bar parsed
+from `--info=progress2`. Only once the WHOLE requested set has landed does
+the client rename it into `--fetch-to` proper (same filesystem, so each
+commit is an atomic `rename()`) — a failure partway removes the staging
+directory instead of leaving a partial card in place, which is what the old
+five-condition tar guard existed to prevent. The daemon is stopped the
+moment `SYNC-DONE` comes back, so it lives seconds, not the length of the
+match. Filenames are treated as data end to end — whitelisted to
+`[A-Za-z0-9._-]+` on both the wire protocol and the rsyncd module, never
+shell-interpolated — which is what now does the anti-traversal /
+anti-shell-metacharacter job the old tar guard did.
+
+### Virtual config — nothing persists to `emu.cfg`
+
+`launch.sh` starts flycast with every netplay value as a **virtual**
+`-config`, `GGPO`/`ActAsServer`/`server`/`EnableUPnP`, plus (now
+unconditionally) `input:device2`:
+
+```sh
+-config network:GGPO=yes -config network:ActAsServer=$NX_AS_SERVER \
+-config network:server=$NETPLAY_PEER_IP -config network:EnableUPnP=no \
+-config input:device2=0
+```
+
+flycast's `get_entry()` prefers a virtual value over the one in the file,
+and `ConfigFile::save()` never writes a virtual value back (`cl.cpp` →
+`cfgSetVirtual`, `ini.cpp`) — the same mechanism the old flow's B-skip
+already relied on for one value, now used for the whole netplay path.
+`emu.cfg` is never touched by a netplay run. `GGPODelay` and `DCNet`
+remain real, persisted overlay keys — ordinary gameplay settings a player
+wants to keep between sessions — while `GGPO` and `ActAsServer` were
+removed as overlay items entirely (`overlay_settings.json`'s `Netplay`
+section now ships only `GGPODelay` + `DCNet`): there is no in-game toggle
+for netplay any more.
+
+**Migration guard** (idempotent, runs on every DC launch before the netplay
+gate): if `[network] GGPO` is `yes`/`True`, set it to `no`; if
+`[input] device2` is `0`, set it to `10`. This is what makes a plain launch
+on a card that ran the old overlay-toggle flow immediately sane again — no
+90 s peer wait on what the player intends as a single-player session.
+Known, accepted ambiguity: a user who hand-set `device2 = 0` in flycast's
+own Controls UI for local two-pad play has it reverted the one time the
+old value is still on disk; the new flow never writes `device2` back to
+`emu.cfg` at all, so it cannot recur after that. A stale `server =` (or
+`EnableUPnP = no`) left over from an old session is harmless and
+deliberately not swept — flycast only reads it on the GGPO path, where the
+wizard's virtual value overrides it anyway.
+
+### Cleanup and self-heal
+
+`launch.sh` calls `netplay.elf --cleanup` after `wait $EMU_PID`, gated on
+the session file's presence: stop any stray rsyncd, tear down a hotspot AP
+and restore the WiFi network that was active before it (persisted as
+`NETPLAY_PREV_SSID` in the session file, since a fresh `--cleanup` process
+can't inherit `wifi_direct.c`'s in-memory previous-network state across
+processes), then remove the session file. Bounded to a 19 s budget
+(`WIZ_TEARDOWN_BUDGET_MS`, `wizard.c`) even against a slow supplicant
+reconnect. The wizard also runs this same teardown defensively at its own
+startup whenever a stale session file exists — a pak killed mid-session
+(an OSD/power quit bypasses `launch.sh`'s own exit block entirely) is
+healed the next time netplay is attempted, rather than left as an orphaned
+AP indefinitely.
+
+### What this replaced, and why (superseded 2026-07-29)
+
+The previous flow was a shell implementation of everything above, built
+2026-07-28/29 and largely never pair-tested. Every piece below maps to
+something in the wizard that is both simpler and already proven in-repo.
+Full mechanics and the reasoning behind them (still useful for
+archaeology) live in `docs/superpowers/specs/2026-07-28-netplay-state-sync-design.md`,
+`2026-07-28-netplay-discovery-feedback-design.md`, and
+`2026-07-29-netplay-cancel-discovery-design.md`.
+
+- **Ping-sweep discovery** (`nx_find_peer`: sweep the local /24, dedup by
+  MAC, probe `ip neigh` concurrently, bounded by a 90 s deadline) → UDP
+  broadcast reaches the peer directly. The ARP-storm bug class this fought
+  (a router answering ARP for every unused address turned 22 neighbours
+  into 259 across one sweep on a home LAN) is structurally gone, not
+  merely patched around.
+- **Tar over a platform-divergent HTTP server** (busybox `httpd` on
+  tg5040, `python3 -u -m http.server` on tg5050 because its busybox 1.35
+  has no `httpd` applet) plus five hand-rolled tar-slip guards → the rsync
+  daemon above, one implementation on both platforms.
+- **`show2.elf`'s FIFO-driven status screen** (`TEXT:`/`PROGRESS:` over
+  `/tmp/show2.fifo`, racing its own init against launch.sh's writes) → the
+  wizard's own real screens — a host/join menu, a live host list, a
+  progress bar, named errors instead of a message that may or may not
+  have been queued in time. `show2.elf` is no longer part of netplay at
+  all; it remains only the first-boot install splash.
+- **Pressing B mid-discovery to fall through to a single-player launch for
+  that run only** → `B` now backs the wizard out entirely (tearing down
+  anything already set up) and returns to the game list; there is no
+  fallback path into a peerless GGPO launch any more.
+- **The `js0` hexdump B-cancel reader** (`dd bs=8 count=1 <&3 | hexdump`,
+  one child process per poll) → ordinary SDL input handling inside the
+  wizard, the same as every other NextUI screen.
+
+### flycast internals unaffected by the rewrite (still true)
+
+None of this changed — it's how flycast itself behaves, independent of
+what drives it:
+
+- The handshake exchanges MD5s of **BIOS + game + flash/VMU state**
+  (`ggpo.cpp:537`) and fails with "Peer verification failed" on mismatch —
+  which is why the host still plays on its real VMU/flash ("host brings
+  the memory card") and the client plays on a synced, isolated copy rather
+  than its own. Only `dc_boot.bin` and the CHD must still be
+  byte-identical on both cards by hand — BIOS and game images are never
+  synced.
+- An empty `server =` makes flycast target loopback on `localPort ^ 1`
+  (`ggpo.cpp:579-597,808-811`) and wait forever on "Starting Network",
+  which has no timeout — the modal's Cancel button is the only way out
+  (`gui.cpp:1286`). The wizard always resolves a real peer IP before
+  starting flycast, so this should now only be reachable through a truly
+  exotic failure.
+- GGPO **always drives Dreamcast port B as player 2** — the remote player
+  on the host, the *local* player on the client (`ggpo.cpp:500`/`:569` set
+  the local player to `localPlayerNum + 1`, and `ggpo.cpp:643-650` writes
+  `inputState[player]` straight to the maple port index) — and flycast
+  leaves port B empty by default (`option.cpp:197-201`, enum
+  `maple_cfg.h:6-18`), so both machines need a pad there or the second
+  device's own inputs reach no maple device at all (MvC2's VS mode
+  greyed out, the second device's Start doing nothing). **Both peers must
+  carry the identical value** or the emulated machines differ and desync
+  — which is why `launch.sh` sets it as a virtual value on both sides
+  rather than leaving it to a hand edit. A bare controller on port B does
+  not perturb the GGPO verification digest — `vmuDigest()`
+  (`maple_cfg.cpp:364`) only hashes devices whose `getData()` is
+  non-null.
+- **UPnP is forced off** because `ggpo.cpp:801-804` runs
+  `miniupnp.Init()` + `AddPortMapping(19713/UDP)` **before** the
+  `ActAsServer` branch, so both roles would otherwise punch a router
+  mapping with an 86400 s lease (`miniupnp.cpp`). `EnableUPnP = no` is one
+  of the virtual `-config` values above on every netplay launch now,
+  rather than a value `sed`-written into `emu.cfg`; there is still no
+  restore-when-off branch, since the value is only ever read on the GGPO
+  path.
+- **Pairing key is the ROM filename with its extension stripped**
+  (`EMU_OVERLAY_GAME`), not CHD content — two byte-identical CHDs stored
+  under different filenames will never pair. The wizard's discovery-list
+  filtering and `HELLO` mismatch check are both keyed on this same
+  string, so keep the game file named identically on both cards.
+- **Leave flycast's `PerGameVmu` off.** With it on, the port-A1 VMU file
+  is written as `<gameId>_vmu_save_A1.bin` (`oslib.cpp:52-66`) — a name
+  the wizard's `--fetch-files` glob (`vmu_save_*.bin`) does not match, any
+  more than it matched the old tar glob. The sync then silently ships an
+  incomplete card, with "Peer verification failed" the only symptom.
+- A shared `<rom basename>.state.net` savestate is still honored by
+  flycast when present (auto-loaded at start, its MD5 replaces the
+  VMU/flash hash — `emulator.cpp:674`, `ggpo.cpp:541`), independent of the
+  wizard's own sync.
+- GGPO forces the SH4 clock to stock 200 MHz and, under threaded
+  rendering, disables framebuffer emulation (`emulator.cpp:864,983`) —
+  automatic.
+- GGPO disconnects a peer after 3 s of silence (`ggpo.cpp:566`) — opening
+  the overlay menu (pause) or save/load state mid-session will drop or
+  desync the match. Both sides launch the same game and sync from boot.
+- `GGPOAnalogAxes` must match on both peers (default 0 on both;
+  digital-only fighters like MvC2 don't need it).
+
+**DCNet** (`DCNet = yes`, overlay: "DCNet Online") — emulates the DC modem
+(or BBA with `EmulateBBA = yes`) and tunnels PPP/Ethernet traffic to the
+public `dcnet.flyca.st` relay, which routes to fan-run revival servers. This
+is for games with *native* online modes (PSO, ChuChu Rocket, Quake III,
+Alien Front Online, …), needs internet (not just LAN), needs no peer
+config, and does nothing for games without an online menu (MvC2). Off by
+default; independent of GGPO; entirely unaffected by the wizard rewrite.
+
+Existing installs are already `.initialized`, so they never receive a
+re-seeded `[network]` block from a fresh `default*.cfg` — that's fine: the
+migration guard above is what an upgraded card actually needs (it runs on
+every launch, not just first-run), and since the netplay values are all
+virtual now, nothing about `emu.cfg` needs to change on an upgraded card at
+all. Existing installs still routinely have no `[input]` section (flycast
+drops keys left at default when it rewrites the file), but that no longer
+matters either, since `device2` is virtual-only on the netplay path.
+
+## Pre-launch options (Emulator Options / Emulator Settings)
+
+Flycast's `emu.cfg` keys can be set **before** a game starts, without opening
+the in-game overlay, through two entry points that share one schema. **Per-game
+overrides** come from the game-list context menu's "Emulator Options" item —
+shown only when a pak beside the ROM's `launch.sh` also ships an `options.sh`
+probe. **Global defaults** come from Tools → Emulator Settings, which runs
+`options.elf --pick`. Both edit the same shared schema,
+`overlay_settings.json` (the very file the in-game Options screen reads, above),
+so a key is described in exactly one place. A per-game edit is written to its own
+file at
+`$SHARED_USERDATA_PATH/DC-flycast/config/<device>/games/<key>.cfg`, where `<key>`
+comes from `nx_rom_base()` — a folder-named `.m3u` game collapses to the folder
+name. At launch, `launch.sh` turns any present per-game file into virtual
+`-config` arguments (`$GAME_ARGS`) placed **before** `$NETPLAY_ARGS`, i.e. the
+same last-`-config`-wins mechanism the netplay path above uses. Setting
+`EMU_OVERLAY_HIDE_OPTIONS=1` hides the in-game Options menu for that launch.
+Design: `docs/superpowers/specs/2026-07-29-dc-prelaunch-options-design.md`.
+
+### Override precedence and the argv contract
+
+- **Override precedence is argv order, not sections.** `launch.sh` runs
+  `./flycast $GAME_ARGS $NETPLAY_ARGS "$ROM"`, and flycast's last `-config` for a
+  repeated `section:key` wins: `ParseCommandLine()` walks argv left-to-right
+  (`core/cfg/cl.cpp`) and each `-config` lands in `cfgSetVirtual()` →
+  `ConfigSection::set()`, a plain `std::map` assignment (`core/cfg/ini.cpp`).
+  Swapping the two variables silently inverts netplay precedence, so `GAME_ARGS`
+  stays first and `NETPLAY_ARGS` last.
+- **Both arg variables are deliberately unquoted** — they are word-split argument
+  lists whose values are ints/bools with no whitespace, and empty on a normal
+  launch. A schema that ever grew a string-valued option would break this; it
+  would need a different mechanism, not quoting.
+- **Bools are written `True`/`False`, not `yes`/`no`.**
+  `emu_ovl_cfg_format_value` speaks flycast's INI dialect and both spellings
+  parse fine, so don't "fix" an override file that reads `rend.WideScreen = True`
+  — and don't grep argv for `=yes`; the pair to expect there is
+  `-config config:rend.WideScreen=True`. The single spaces around `=` in the
+  override file ARE load-bearing: `launch.sh`'s awk splits on `-F' = '`, so a
+  hand-edited `key=value` line is silently dropped.
+
+### Debugging: argv is the only witness
+
+- **Applied overrides leave NO trace in `$LOGS_PATH/DC.txt` — don't look for
+  one.** flycast does log every virtual pair (`Virtual cfg <sec>:<key>=<val>`,
+  `core/cfg/cl.cpp:51`) but that call is an `INFO_LOG`, and INFO level is
+  compiled **out** of Release builds (`MAX_LOGLEVEL` = `LWARNING` under `NDEBUG`,
+  `core/log/Log.h:58-63`; the paks are built `-DCMAKE_BUILD_TYPE=Release`).
+  Verified against the shipped binaries: `strings` finds zero `Virtual cfg`
+  occurrences in either `DC.pak/flycast`, while NOTICE-level log strings from the
+  same builds are present. This is the same trap `flycast.patch:110-112` already
+  documents for the audio path. **The witness is argv**, not the log:
+  `tr '\0' ' ' < /proc/$(pidof flycast)/cmdline` (or `xargs -0 echo <` the same
+  file) shows every `-config` pair and, crucially, their order — the same applies
+  to netplay's six pairs. Read `/proc` directly rather than reaching for `ps w`:
+  the device's busybox `ps` only honors `w` when built with `FEATURE_PS_WIDE`,
+  and without it argv is truncated to the terminal width, silently hiding the
+  very `-config` pairs you're looking for.
+- **Never run `DC.pak/launch.sh` (or `options.sh`) from a bare adb shell to see
+  what path it computes.** Both source `nx_paths.sh`, which builds every path
+  from `SHARED_USERDATA_PATH` and branches on `DEVICE` — and those are exported by
+  `MinUI.pak/launch.sh` (`:23`, `:52-56`), not by the pak itself. Outside
+  nextui's environment they're empty/unset, so the pak resolves
+  `$DEVICE_CONFIG_DIR` to a bogus
+  **`/DC-flycast/config/tg5040-smart-pro/…`** on the rootfs (empty prefix,
+  `DEVICE` falling through to the smart-pro `else`), happily `mkdir`s it and seeds
+  a junk `emu.cfg` there. `SDCARD_PATH` being empty also breaks
+  `LD_LIBRARY_PATH`, `EMU_OVERLAY_JSON` and `FLYCAST_BIOS_PATH`, so the run is not
+  a faithful launch either. Only the trailing `<key>.cfg` basename would be
+  trustworthy from such a trace. If you genuinely need to trace the pak, export
+  the environment first — `skeleton/SYSTEM/tg5040/dbg/launch.sh:3-27` is the
+  ready-made export list (note it leaves `DEVICE` unset on Smart Pro, where
+  `nx_paths.sh`'s `else` happens to land correctly).
+
+### File format and lifecycle edge cases
+
+- **A malformed or unreadable override file is skipped silently** — the game
+  launches with globals only, no error anywhere, and (per the debugging note
+  above) nothing in the log either way. If an override "doesn't apply", dump
+  argv: pair absent → `launch.sh` never parsed the file (wrong filename, or a
+  line not matching `key = value`); pair present but no visible effect → flycast
+  took the value and something else is wrong. The editor treats a malformed file
+  as empty and rewrites it cleanly on the next save.
+- **The override key can collide by design.** `nx_rom_base()` maps a folder-m3u
+  game to the folder name, so a flat ROM that happens to share that name resolves
+  to the same override file. Inherent to the mandated one-file-per-game scheme,
+  accepted.
+- **Renaming or deleting a ROM orphans its override file** — harmless, and
+  deliberately not cleaned up (explicit non-goal). It will silently re-attach if
+  a ROM with the old name ever reappears.
+
+### The editor binary (`options.elf`)
+
+- **`options.elf` is a SYSTEM bin on `PATH`, invoked bare** — same shape as
+  `netplay.elf`. Pushing a rebuilt copy needs no reboot (it is not
+  nextui/minarch), but the editor must not be running at the time.
+- **`options.sh`'s stdout must stay uncaptured.** Only stderr is redirected (to
+  `$LOGS_PATH/emu-options.txt`); the Emulator Settings tool captures
+  `options.elf --pick`'s stdout **directly** and `exec`s the result, so wrapping
+  `options.sh` in `$(…)` anywhere would swallow the editor's own output stream.
+  This is the same class of bug the tg5050 fancontrol lesson taught: a
+  `system("… &")` daemon (the fan-control daemon respawned by `InitSettings()`)
+  inherited the picker's `$()` pipe write end and hung the capture, because the
+  pipe stays open as long as any process holds its write end. `options.c` now
+  parks stdout with `FD_CLOEXEC` (`stdout_park`) for exactly this reason, so a
+  daemon a child spawns can never keep the capture pipe open.
+- **Editor exit 1 means two different things** — cancel in `--pick` mode,
+  config-load failure in the edit modes; a plain usage error exits 2. Callers
+  must not conflate the two exit-1 cases (they currently don't: `options.sh`
+  ignores the edit-mode code, the tool treats empty stdout as cancel).
+- **Emulator Settings exits silently (rc=0) when no pak on the card ships an
+  `options.sh`** — an empty Tools app, not an error. Expected on any platform
+  other than tg5040/tg5050, where `options.elf` isn't even built.
+- The schema's `options_hint` still reads "Restart game to apply changes" —
+  correct for the in-game overlay, vacuous in the pre-launch editor (nothing is
+  running yet). Cosmetic; left alone so both consumers share one schema file.
+
 ## Runtime libraries
 
 **Nothing is shipped in the pak.** Verified on the Brick (tg5040) via
