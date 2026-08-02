@@ -11,6 +11,80 @@ Move an entry from there to here once it compiles and needs hardware time.
 
 ---
 
+## N64 Netplay: 4-player (built 2026-08-01)
+
+**Status:** wizard multi-join (`--max-players N`, dynamic "start when ready" host UI,
+join-order player numbers) + N64.pak `launch.sh` presence mapping (`nx_netplay_map.awk` →
+per-session `--configdir`). **2-player verified on hardware 2026-08-01** (tg5040 Brick ↔
+tg5050 Smart Pro, real wizard) after an on-device debug pass that corrected the controller
+mapping and tuned Brick performance (see below). **3-player was hardware-tested 2026-08-02**
+(Smart Pro host + Brick + Brick Pro) and works at the protocol/wizard level, but is
+**GPU-bound on the Bricks**: N64 renders one split-screen viewport per seat, and the Brick's
+Mali can't hold 60 fps on a 3-way split (it drifts seconds behind). **3-/4-player therefore
+need a Smart-Pro-class GPU on every seat**; on the Bricks netplay tops out at 2 players.
+4-player remains hardware-pending. Design:
+`docs/superpowers/specs/2026-08-01-n64-netplay-4player-design.md`; full behavior +
+performance notes in `workspace/all/other/mupen64plus/README.md` ("Netplay").
+
+The mapping is the real fix behind the earlier "MK64 shows only 1P Game" bug. **Corrected
+model (the original design was inverted):** mupen64plus netplay reads a device's local
+input from **`Control1`** and routes it to the device's assigned seat, so the local pad
+must **stay on `Control1`** on every device — `nx_netplay_map.awk` only marks ports `1..N`
+`plugged=True` (presence) and does **not** move the pad to the player's port. Moving it
+(the first attempt) left the joiner sending zero input. `NETPLAY_PLAYER` drives only
+`--netplay-player`. Player numbering is join order (host = 1, joiners 2–4). The wizard is
+**shared** — DC and minarch call it with no `--max-players` and stay 2-player. The session
+file carries `NETPLAY_PLAYER` and `NETPLAY_NUM_PLAYERS`.
+
+**Brick performance tuning (netplay-only, single-player untouched)** — `launch.sh` pins the
+dynarec to cpu0 exclusively, all mupen workers to cpu1, the relay server to cpu2-3; forces
+`UseNativeResolutionFactor=1` **and** `txHiresEnable=False` (last on the cmdline, so they win
+over per-game/global cfg); the server runs `--buffer-target 2` (briefly tried 4, but with
+1×+hi-res-off the Brick holds 60 fps and the deeper buffer only added felt input latency).
+**Host choice:** the host's input is local (127.0.0.1, snappy) while a joiner's crosses WiFi
+— for 2 players host on the Brick; for 3+ host on the **Smart Pro** (strongest GPU, since the
+host also renders the split + relays to all joiners). **Networking:** the Bricks are
+**2.4 GHz-only**; a shared/public AP gives 5–75 ms jitter + a "queued" feel, while the
+wizard's host-AP hotspot dropped RTT to ~1–2 ms. The 3-way-split limit is **GPU**, confirmed
+on device: Brick cpu2/cpu3 idle, ~45 fps vs the host's 60, server ~6 % CPU / ~68 s input ring
+(relay ruled out). See the README for the full why.
+
+### 2-player — VERIFIED on hardware 2026-08-01 (Brick host ↔ Smart Pro joiner)
+
+- [ ] The joiner's **real** save dir stays untouched (staged writes only). _(mapping/route
+      verified; a real in-game save-write byte check still to do)_
+
+### 3-player — hardware-tested 2026-08-02 (Smart Pro host + Brick + Brick Pro)
+
+- [ ] Re-test 3-player once ≥3 Smart-Pro-class devices are available (should be smooth).
+
+### Backward-compat regression (shared wizard, `--max-players` default 2)
+
+- [ ] A **Dreamcast (flycast)** 2-player session still pairs and plays: no `--max-players`,
+      host auto-starts on the first joiner (no A-press), session file has **no**
+      `NETPLAY_PLAYER` / `NETPLAY_NUM_PLAYERS` keys.
+- [ ] A **minarch** (e.g. GBA) 2-player session still pairs and plays under the same
+      conditions.
+
+### Failure paths
+
+- [ ] Host cancels with **B** while a joiner is waiting → the joiner(s) bail to the game
+      list, and **no orphan `m64p-server.elf`** is left (`ps | grep m64p-server`).
+- [ ] One joiner drops mid-game → the others continue.
+
+> **Note:** the wizard/server path is code-complete to 4 players and hardware-exercised to
+> **3** (3 devices). 3-player runs correctly but is **GPU-bound on the Bricks** (2-way split
+> is the Brick's ceiling); a genuinely smooth 3-/4-player session needs Smart-Pro-class GPUs
+> on every seat. The 4th seat is also pending a 4th device.
+>
+> **MK64 menu caveat:** N64 game menus (e.g. Mario Kart 64's 1P/2P/3P/4P select) are
+> **hardcoded in the ROM** — they always list all modes regardless of how many controllers
+> are plugged (verified: single-player shows all four with only `Control1` plugged). The
+> presence mapping controls which seats actually *respond*, not what the menu shows; there is
+> no emulator-side fix. Cosmetic and harmless.
+
+---
+
 ## Boot: failed MinUI.zip extraction must not brick the boot loop (built 2026-08-01)
 
 Found live on Smart Pro S (fresh install, 2026-08-01): a truncated MinUI.zip
@@ -277,39 +351,3 @@ widget tile. None of them block bring-up.
 - Don't push an `.elf` over a running copy — stop the pak first. Only `nextui`/`minarch`
   need a reboot after pushing; other paks just need to not be running.
 - Never `killall nextui` on device: the `kill -9` path powers the unit off.
-
----
-
-## Thread-pinning `taskset` now actually works — re-verify everything that uses it
-
-**Status:** fixed and merged to `main` 2026-07-27 (`99985dec`, PR #56 — task 11 fix round).
-tg5050 (Smart Pro S) fully verified (native `taskset`, PS.pak probe, DC.pak + N64.pak
-pinning — evidence in `.superpowers/sdd/2026-07-26-flycast-dc-pak/n64-tg5050-report.md`).
-Only the Brick N64.pak re-verify remains.
-
-`skeleton/SYSTEM/shared/bin/taskset` — the binary every pak's `taskset` calls resolved
-to via `PATH` — was a `-static` build that aborted with `FATAL: kernel too old` on the
-Brick's real 4.9.191 kernel. Every call site wraps `taskset` in `2>/dev/null`, so this
-failure was completely silent: **every existing thread-pinning call in the repo has
-been a no-op on tg5040 this whole time**, not just for DC.pak. Fixed by dropping
-`-static` from `workspace/all/taskset/Makefile` and shipping working, platform-specific,
-dynamically-linked binaries at `skeleton/SYSTEM/{tg5040,tg5050}/bin/taskset` (which
-shadow the old shared path via existing `PATH` ordering — no call-site changes needed).
-The old shared binary was deleted this round, so **there is no fallback anymore** if a
-platform's `taskset` turns out to be broken on some device.
-
-- [ ] **N64.pak pinning on Brick, with pinning actually active** — re-verify audio/perf
-      with real affinity applied. The masks and the thread-name heuristic
-      (`skeleton/SYSTEM/tg5040/paks/Emus/N64.pak/launch.sh:100,108,127`) were written and
-      shipped blind, against a `taskset` that always silently failed; they were never
-      exercised for real until this fix, the same way DC.pak's pinning was
-      evidence-gated by direct measurement (task-11 report) before shipping.
-      **Known gap, measured on Smart Pro S 2026-07-27 (reproduced twice, incl. a real
-      user session):** the "pin the busiest `mupen64plus`-named thread" heuristic only
-      pins ONE of the (at least) two non-main threads named `mupen64plus`; the other is
-      left on the unrestricted 0-7 mask. Measured impact is small: its load is bursty
-      init/loading work (~3.6% during boot, ~0% in live gameplay), and since NxRedux only
-      brings cpu0-1/4(/5) online (8-core silicon run as effective 4-core by boot policy),
-      "unrestricted" still lands it on the contended cores. The fix (pin unmatched threads
-      to LITTLE by default) is written up in `DEV_TODO.md` and should land with this
-      re-verify, so it ships measured rather than blind.
