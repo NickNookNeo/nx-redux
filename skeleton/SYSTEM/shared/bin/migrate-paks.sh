@@ -1,16 +1,18 @@
 #!/bin/sh
 # Migration to the .system pak layout (2026-07-31, platform-less): shipped
 # Emus and Tools paks live in .system/paks/, and /Emus,/Tools hold user paks
-# only (no platform subfolder — cards are per-device). Any SD pak whose
-# <TAG>.pak name exists among the system paks is a redux-shipped leftover:
-# delete it (tag match only — no content check; owner-accepted that
-# customized copies of shipped-name paks are removed too). Unknown tags are
-# never touched. Legacy /Emus/<plat> and /Tools/<plat> dirs from pre-merge
-# cards get the same cleanup, surviving entries hoisted one level up, .media
-# merged, and the platform dir removed. Cards are per-device now, but a
-# formerly-shared card (common under old NxRedux) can carry MORE than one
-# platform's legacy dirs, so every known platform is swept, not just this
-# device's. /Emus/shared is never examined
+# only. Any SD pak whose <TAG>.pak name exists among the system paks is a
+# redux-shipped leftover: delete it (tag match only — no content check;
+# owner-accepted that customized copies of shipped-name paks are removed too).
+# Unknown tags are NEVER touched: user paks live either flat (/Emus/X.pak) or
+# in a platform subfolder (/Emus/<plat>/X.pak — the MinUI community pak
+# convention, which such paks hardcode internally; the launcher checks both).
+# Earlier revisions of this script hoisted user paks out of the platform
+# subfolder, which broke community paks — the undo pass below reads this
+# card's migration-report and moves those paks back where they came from.
+# A formerly-shared card (common under old NxRedux) can carry MORE than one
+# platform's legacy dirs, so every known platform is swept for shipped-name
+# leftovers, not just this device's. /Emus/shared is never examined
 # (refreshed by unzip -o; holds user state). The pre-flatten legacy
 # .system/<plat> tree is removed too: wholesale on a normal (new-boot) run, or
 # pruned around the two Task-11 compat shims (bin/install.sh,
@@ -44,19 +46,50 @@ report() {
 	echo "$1" >> "$REPORT"
 }
 
-# user pak layers must exist (fresh cards ship without them)
+# user pak layers must exist (fresh cards ship without them); the README is
+# ours — rewrite it so existing cards pick up wording changes
 for dir in "$SDCARD_PATH/Emus" "$SDCARD_PATH/Tools"; do
 	mkdir -p "$dir"
-	[ -f "$dir/README.txt" ] || cat > "$dir/README.txt" <<'RM_EOF'
-Put your own paks here (e.g. PSP.pak). The paks NX Redux ships live in
-/.system/paks/ and are replaced wholesale on every update — do not edit them
-there, and do not place a pak here with the same name as a shipped one:
-same-named paks are treated as NX Redux leftovers and are currently removed on
-every update.
+	cat > "$dir/README.txt" <<RM_EOF
+Put your own paks here (e.g. PSP.pak), either directly in this folder or in a
+platform subfolder (e.g. $PLATFORM/PSP.pak). Community paks usually require
+the platform subfolder — they hardcode that path internally. The paks NX Redux
+ships live in /.system/paks/ and are replaced wholesale on every update — do
+not edit them there, and do not place a pak here with the same name as a
+shipped one: same-named paks are treated as NX Redux leftovers and are removed
+on every update.
 RM_EOF
 done
 
-# 1) current layout: delete shipped-name paks
+# 1) undo the old hoist: earlier revisions flattened user paks out of the
+# platform subfolder; every such move was logged as
+#   MOVED   /mnt/SDCARD/<kind>/<plat>/X.pak -> /mnt/SDCARD/<kind>/X.pak
+# in this card's report. Replay those lines in reverse. Guards make this
+# idempotent and conservative: only .pak directories, only if the flat copy
+# still exists, the platform slot is free, and the name isn't a shipped pak.
+if [ -f "$REPORT" ]; then
+	UNDO_LIST="/tmp/nx_migrate_undo.txt"
+	sed -n 's/^MOVED  *//p' "$REPORT" > "$UNDO_LIST"
+	while IFS= read -r line; do
+		src="${line%% -> *}"
+		dest="${line#* -> }"
+		case "$src" in
+			"$SDCARD_PATH"/Emus/*/*.pak) kind=Emus ;;
+			"$SDCARD_PATH"/Tools/*/*.pak) kind=Tools ;;
+			*) continue ;;
+		esac
+		[ -d "$dest" ] || continue # flat pak already gone (or was a file)
+		[ -e "$src" ] && continue  # platform slot occupied, leave both
+		tag="$(basename "$dest")"
+		[ -d "$SYSTEM_PATH/paks/$kind/$tag" ] && continue # shipped name
+		mkdir -p "$(dirname "$src")"
+		mv "$dest" "$src"
+		report "RESTORED $dest -> $src — user pak returned to platform folder"
+	done < "$UNDO_LIST"
+	rm -f "$UNDO_LIST"
+fi
+
+# 2) current layout: delete shipped-name paks
 for kind in Emus Tools; do
 	for pak in "$SDCARD_PATH/$kind"/*.pak; do
 		[ -d "$pak" ] || continue
@@ -68,7 +101,9 @@ for kind in Emus Tools; do
 	done
 done
 
-# 2) legacy platform dirs (pre-merge layout), for every known platform
+# 3) legacy platform dirs: shipped-name leftovers are deleted; user paks and
+# everything else are LEFT IN PLACE — the platform subfolder is a supported
+# pak location now, not a legacy layout to unwind
 for kind in Emus Tools; do
 	for legacy_plat in $KNOWN_PLATFORMS; do
 		legacy="$SDCARD_PATH/$kind/$legacy_plat"
@@ -83,41 +118,14 @@ for kind in Emus Tools; do
 			fi
 		done
 
-		# merge legacy .media entry-by-entry (freshly-shipped copy wins), drop rest
-		if [ -d "$legacy/.media" ]; then
-			mkdir -p "$SDCARD_PATH/$kind/.media"
-			for item in "$legacy/.media"/* "$legacy/.media"/.[!.]*; do
-				[ -e "$item" ] || continue
-				name="$(basename "$item")"
-				if [ ! -e "$SDCARD_PATH/$kind/.media/$name" ]; then
-					mv "$item" "$SDCARD_PATH/$kind/.media/$name"
-					report "MOVED   $item -> $SDCARD_PATH/$kind/.media/$name"
-				fi
-			done
-			rm -rf "$legacy/.media"
-			report "REMOVED $legacy/.media — merged into $SDCARD_PATH/$kind/.media"
-		fi
-
 		# a README this script wrote into the legacy dir on an earlier run is ours
 		rm -f "$legacy/README.txt"
 
-		# hoist surviving entries (user paks, stray files) one level up
-		for item in "$legacy"/* "$legacy"/.[!.]*; do
-			[ -e "$item" ] || continue
-			name="$(basename "$item")"
-			if [ -e "$SDCARD_PATH/$kind/$name" ]; then
-				report "SKIPPED $item — $SDCARD_PATH/$kind/$name already exists, left in place"
-			else
-				mv "$item" "$SDCARD_PATH/$kind/$name"
-				report "MOVED   $item -> $SDCARD_PATH/$kind/$name"
-			fi
-		done
-
-		rmdir "$legacy" 2>/dev/null && report "REMOVED $legacy — legacy platform folder"
+		rmdir "$legacy" 2>/dev/null && report "REMOVED $legacy — empty platform folder"
 	done
 done
 
-# 3) legacy .system/<plat> trees (pre-flatten layout), for every known
+# 4) legacy .system/<plat> trees (pre-flatten layout), for every known
 # platform. Foreign-platform trees are dead weight (their shims/tree are never
 # invoked on this device — the updater dispatches by /proc/cpuinfo) and go
 # wholesale regardless of the flag. Only THIS device's tree may need its two

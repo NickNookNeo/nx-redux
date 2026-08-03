@@ -195,6 +195,11 @@ Entry* entryFromPakName(char* pak_name) {
 	if (exists(pak_path))
 		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
 
+	// Check in platform Tools (MinUI community pak convention)
+	snprintf(pak_path, sizeof(pak_path), "%s/" PLATFORM "/%s.pak", TOOLS_PATH, pak_name);
+	if (exists(pak_path))
+		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
+
 	// Check in system Tools
 	snprintf(pak_path, sizeof(pak_path), "%s/Tools/%s.pak", PAKS_PATH, pak_name);
 	if (exists(pak_path))
@@ -205,8 +210,13 @@ Entry* entryFromPakName(char* pak_name) {
 	if (exists(pak_path))
 		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
 
-	// Check in platform Emus
+	// Check in SD Emus
 	snprintf(pak_path, sizeof(pak_path), "%s/Emus/%s.pak", SDCARD_PATH, pak_name);
+	if (exists(pak_path))
+		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
+
+	// Check in platform Emus (MinUI community pak convention)
+	snprintf(pak_path, sizeof(pak_path), "%s/Emus/" PLATFORM "/%s.pak", SDCARD_PATH, pak_name);
 	if (exists(pak_path))
 		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
 
@@ -220,6 +230,11 @@ int hasEmu(char* emu_name) {
 		return 1;
 
 	snprintf(pak_path, sizeof(pak_path), "%s/Emus/%s.pak/launch.sh", SDCARD_PATH, emu_name);
+	if (exists(pak_path))
+		return 1;
+
+	// community paks use the MinUI platform-subfolder convention
+	snprintf(pak_path, sizeof(pak_path), "%s/Emus/" PLATFORM "/%s.pak/launch.sh", SDCARD_PATH, emu_name);
 	return exists(pak_path);
 }
 
@@ -867,6 +882,12 @@ Array* getEntries(char* path) {
 	return entries;
 }
 
+// platform subfolders (MinUI community pak convention, e.g. Tools/tg5040)
+// get their paks merged into the Tools list instead of appearing as folders
+static int isPlatformDirName(const char* name) {
+	return strcmp(name, "tg5040") == 0 || strcmp(name, "tg5050") == 0 || strcmp(name, "desktop") == 0 || strcmp(name, "shared") == 0;
+}
+
 Array* getTools(void) {
 	Array* entries = Array_new();
 
@@ -881,12 +902,36 @@ Array* getTools(void) {
 				continue;
 			if (dp->d_type != DT_DIR)
 				continue;
+			if (isPlatformDirName(dp->d_name))
+				continue;
 			char full_path[MAX_PATH];
 			snprintf(full_path, sizeof(full_path), "%s/%s", TOOLS_PATH, dp->d_name);
 			int type = suffixMatch(".pak", dp->d_name) ? ENTRY_PAK : ENTRY_DIR;
 			Array_push(entries, Entry_new(full_path, type));
 		}
 		closedir(sd);
+	}
+
+	// append platform-subfolder paks not shadowed by an SD pak of the same name
+	char plat_path[MAX_PATH];
+	snprintf(plat_path, sizeof(plat_path), "%s/" PLATFORM, TOOLS_PATH);
+	DIR* pd = opendir(plat_path);
+	if (pd != NULL) {
+		struct dirent* dp;
+		while ((dp = readdir(pd)) != NULL) {
+			if (hide(dp->d_name))
+				continue;
+			if (dp->d_type != DT_DIR || !suffixMatch(".pak", dp->d_name))
+				continue;
+			char shadow[MAX_PATH];
+			snprintf(shadow, sizeof(shadow), "%s/%s", TOOLS_PATH, dp->d_name);
+			if (exists(shadow))
+				continue;
+			char full_path[MAX_PATH];
+			snprintf(full_path, sizeof(full_path), "%s/%s", plat_path, dp->d_name);
+			Array_push(entries, Entry_new(full_path, ENTRY_PAK));
+		}
+		closedir(pd);
 	}
 
 	// append system paks not shadowed by an SD pak of the same name
@@ -902,6 +947,9 @@ Array* getTools(void) {
 				continue;
 			char shadow[MAX_PATH];
 			snprintf(shadow, sizeof(shadow), "%s/%s", TOOLS_PATH, dp->d_name);
+			if (exists(shadow))
+				continue;
+			snprintf(shadow, sizeof(shadow), "%s/%s", plat_path, dp->d_name);
 			if (exists(shadow))
 				continue;
 			char full_path[MAX_PATH];
