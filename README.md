@@ -1,14 +1,15 @@
 # NX Redux
 
-**My vision of how NextUI should be.**
-Minimal on the surface. Structured underneath. Built to last.
+Custom firmware for retro handheld gaming devices. It keeps the minimal,
+distraction-free interface — pick up, pick a game, play — while deliberately extending
+what sits underneath: standalone emulators, netplay, achievements, media tools and more.
+Those extras stay out of the way until you ask for them, tucked into the Tools and pause
+menus (and hidden entirely in simple mode).
 
-NX Redux is a fork of [NextUI](https://github.com/LoveRetro/NextUI) (by LoveRetro), which itself descends from [MinUI](https://github.com/shauninman/MinUI) — custom firmware that replaces the stock operating system on retro handheld gaming devices. It keeps that minimal, distraction-free interface — pick up, pick a game, play — while deliberately extending what sits underneath: standalone emulators, netplay, achievements, media tools and more. Those extras stay out of the way until you ask for them, tucked into the Tools and pause menus (and hidden entirely in simple mode), so there's more under the hood without anything in your way.
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y61SI04B)
-
+NX Redux is a fork of [NextUI](https://github.com/LoveRetro/NextUI) by LoveRetro, which itself descends from [MinUI](https://github.com/shauninman/MinUI).
 
 Refer to the Youtube Video below for demonstration of the features:
+
 [![nx-redux-youtube](https://github.com/user-attachments/assets/e4cf9c86-604b-49a4-b888-4b569ba592a9)](https://www.youtube.com/watch?v=l4iJBRgUe4U)
 
 ## Supported Devices
@@ -21,66 +22,20 @@ Refer to the Youtube Video below for demonstration of the features:
 
 > ⚠️ **SD cards are built per device model.** Each release is packaged for a specific device — resolution, OSD assets and other layout differ between models — so a card set up for one device (e.g. the Brick) must **not** be moved into another (e.g. the Smart Pro S). To carry saves, save states, settings and (optionally) ROMs across devices, use the built-in **Device Sync** tool instead of swapping cards.
 
-## Why Fork?
+## Why Fork
 
-NextUI is a great foundation — lightweight, focused, and true to its minimalist roots.
-
-But over time I found myself wanting two things the upstream project couldn't give me:
-
-1. **Creative freedom** — the ability to add features and UX improvements without waiting for upstream approval or aligning with someone else's roadmap.
-2. **Structural clarity** — cleaner code organization, consistent formatting, and a codebase that's easier to maintain and extend.
-
-NX Redux is where those two goals meet.
+NextUI keeps a deliberately tight core and pushes extras out to paks. That's the right call for a project many people contribute to — but it's not what I wanted to build. Some features only work the way I want them to when they live inside the system: sharing state with the core, drawing with the system's own UI, owning the input path. So this fork builds them in, takes on the maintenance cost that comes with that, and answers to no roadmap but mine.
 
 ## What's Different
 
-Improvements:
-- Refactored `nextui.c`, splitting the monolithic code into smaller, focused components (game list, game switcher, search, launcher, image loader and more).
-- Refactored `minarch.c`, splitting the ~9,000-line monolith into focused `ma_*` modules (game, saves, rewind, config, shaders, options, input, video, audio, core, menu and more).
-- Applied various bug fixes and optimizations across the refactored components.
-- Added clang-format tooling with enforced code style and VSCode support.
-- Introduced a reusable UI component library in `common/ui/` for consistent design across tools.
-    - Strict one-component-per-file layout (menu bar, button hint bar, dialogs, overlays, lists, keyboard, toast, etc.), each with its own header — apps include only what they use.
-    - Single `ui.mk` fragment wires the components into every app build, so adding a component is a one-line change.
-    - Shared drawing primitives (rounded rects/pills, scrim surfaces, centered button rows) replace previously duplicated rendering code across the UI files.
-- Added a semi-transparent progress overlay for blocking actions.
-- Added confirmation dialogs for actions that require them.
-- Rewrote the `Settings` app in C with a redesigned UI
-- Removed the `Battery` monitoring feature. 
-- Merged the `LED Control`, `Input`, `Clock` and `Updater` into the `Settings` app (no separate app required)
-- Integrated the `Remove Loading` feature directly into the install script (no separate app required) 
-- Split release builds into per-platform zips packages (brick/brickpro/smartpro/smartpros).
-- All standalone emulators now support USB-C and Bluetooth audio. 
-- All standalone emulators now include a custom in-game menu with UI styling consistent with the system.
-- All standalone emulators now support save states with screenshots.
-- Quitting a game now auto-saves to a hidden save slot (minarch cores, N64 and Dreamcast), so the `Game Switcher` always resumes exactly where you left off.
-- Sink-aware audio sample-rate negotiation across the whole system (music, radio, video and all emulators):
-    - The audio device opens at the rate the active output actually prefers — 48 kHz on the speaker, the negotiated Bluetooth rate, or a USB DAC's supported rates — with high-quality in-app resampling instead of silent low-quality system resampling.
-    - Hot-plugging a USB-C DAC or connecting Bluetooth mid-playback reroutes audio automatically, and a headphone icon appears in the status bar while an external output is active.
-    - New `Audio` page in `Settings`: current output device and rate, a `Force 48 kHz` escape hatch, and the Bluetooth max sample rate setting.
-- Added sleep by pressing power button support for all standalone emulator and Portmaster games. 
-- Added top and bottom scroll indicators to the all menu list.
-- Redesigned the `Game Tracker` tool with a cleaner play-stats list (total · average · play count per game).
-    - Any game's play record can now be deleted (press `X`, with a confirmation dialog). The record starts fresh the next time the game is played.
-
-New Features:
+Core experience:
 - Redesigned UI with consistent styling across the system.
-- Game art fallback for titles without save states in the game switcher
+- Rewrote the `Settings` app in C with a redesigned UI.
+- Game art fallback for titles without save states in the game switcher.
 - `Game Switcher` lists only resumable games by default — switch to `All recent games` in `Settings → System`.
+- Quitting a game now auto-saves to a hidden save slot (minarch cores, N64 and Dreamcast), so the `Game Switcher` always resumes exactly where you left off.
 - Main menu shortcut for quick access to frequently used `Tools` and `Games`
 - Option to disable the emulator folders (ideal for users who prefer listing only selected games via shortcuts in the main menu)
-- Added `Developer options` in `Settings`:
-    - Toggle SSH service and autostart
-    - Disable system sleep (useful for ADB)
-    - Keep device awake over USB
-    - Clean up macOS-specific dotfiles (if any were copied)
-- Added slide transition animations (can be disabled in Settings)
-    - `Game Switcher` slides up on enter and down on exit
-    - `Page Navigation` slides in from the right on enter and out to the left on exit
-- Added `Simple Mode` in `Settings` — a simplified menu for children or casual users.
-    - Hides `Tools` from the main menu and replaces `Options` with `Reset` in-game.
-    - `Settings` stays on the main menu, protected by a 4-digit PIN set when enabling Simple Mode.
-    - Forgot the PIN? Delete `.userdata/shared/enable-simple-mode` from the SD card to turn Simple Mode off.
 - Added `Search` function in main menu (Press `START` to activate)
 - Added a game-list context menu (press `MENU` on a highlighted game):
     - Built-in ROMs collection management — add a game to an existing collection or create a new one on the spot.
@@ -90,9 +45,18 @@ New Features:
     - Remove a game from `Recently Played`.
     - Refresh the ROMs list.
     - Edit per game emulator options
-- Added jostick and calibration feature in `Input` app
-- Added `Device Sync` to sync game saves, states, user settings, and ROMs (optional) across devices. 
-- Added `Artwork Manager` to fetch custom mix box art for ROMs. 
+- Added slide transition animations (can be disabled in Settings)
+    - `Game Switcher` slides up on enter and down on exit
+    - `Page Navigation` slides in from the right on enter and out to the left on exit
+- Added top and bottom scroll indicators to all menu lists.
+- Added a semi-transparent progress overlay for blocking actions.
+- Added confirmation dialogs for actions that require them.
+- Added `Simple Mode` in `Settings` — a simplified menu for children or casual users.
+    - Hides `Tools` from the main menu and replaces `Options` with `Reset` in-game.
+    - `Settings` stays on the main menu, protected by a 4-digit PIN set when enabling Simple Mode.
+    - Forgot the PIN? Delete `.userdata/shared/enable-simple-mode` from the SD card to turn Simple Mode off.
+
+Available when you want it (Tools, pause menu and OSD):
 - Added `On-Screen Display (OSD)` for quick access to common actions from anywhere — in the menus or in-game.
     - Opened with the `Home` button on devices that have one (Smart Pro S), or by long-pressing the `MENU` button (Brick / Brick Pro / Smart Pro).
     - Volume slider with mute toggle, brightness slider, and rumble toggle.
@@ -108,7 +72,7 @@ New Features:
     - Audio settings: sample-rate mode (`Device default` / `Follow source` for bit-exact hi-res playback on USB DACs), resampler quality and buffer size.
     - Live sample-rate badge on the now-playing screen (e.g. `96kHz` when playing natively, `44.1→48kHz` when resampling).
     - Internet radio streams through the same high-quality resampler, with cover art fetched for the currently playing song.
-- Built-in [Media Player](https://github.com/mohammadsyuhada/nextui-video-player)
+- Built-in `Media Player` with audio and subtitle switcher.
 - Bundled `Drastic Nintendo DS` emulator.
 - Bundled `Mupen64Plus Nintendo 64` emulator.
     - Support for high resolution textures (with limitations due to 1GB RAM)
@@ -121,6 +85,10 @@ New Features:
     - GGPO netplay for Dreamcast games: press `Y` on a supported game in the list to host or join over Wi-Fi or a device-hosted hotspot — no manual IP entry, no persistent toggle to remember to turn back off, and save data is synced automatically before the match starts.
 - Bundled `Portmaster` in the Tools.
     - Configured by default with Nintendo input layout (configurable)
+- All standalone emulators now support USB-C and Bluetooth audio. 
+- All standalone emulators now include a custom in-game menu with UI styling consistent with the system.
+- All standalone emulators now support save states with screenshots.
+- Added sleep by pressing power button support for all standalone emulator and Portmaster games. 
 - Added [Netplay](https://github.com/mohammadsyuhada/nextui-netplay) for local wireless multiplayer.
     - Host or join over a regular Wi-Fi network, or let the host device start its own hotspot (no router needed).
     - `GB Link` support for Game Boy (gambatte) — link cable games like Pokémon trades and battles.
@@ -139,6 +107,39 @@ New Features:
         - `Sync now` to push pending offline unlocks, and `Download all game data` to cache your whole library with a live progress bar.
         - `Reset account data` (for switching accounts) and `Erase all achievement data` options.
     - In-game achievement unlock and progress notifications, with a per-achievement mute toggle.
+- Added `Device Sync` to sync game saves, states, user settings, and ROMs (optional) across devices. 
+- Added `Artwork Manager` to fetch custom mix box art for ROMs. 
+- Redesigned the `Game Tracker` tool with a cleaner play-stats list (total · average · play count per game).
+    - Any game's play record can now be deleted (press `X`, with a confirmation dialog). The record starts fresh the next time the game is played.
+- Added joystick calibration in `Settings → Input`.
+- Added `Developer options` in `Settings`:
+    - Toggle SSH service and autostart
+    - Disable system sleep (useful for ADB)
+    - Keep device awake over USB
+    - Clean up macOS-specific dotfiles (if any were copied)
+
+Under the hood:
+- Refactored `nextui.c`, splitting the monolithic code into smaller, focused components (game list, game switcher, search, launcher, image loader and more).
+- Introduced a reusable UI component library in `common/ui/` for consistent design across tools.
+    - Strict one-component-per-file layout (menu bar, button hint bar, dialogs, overlays, lists, keyboard, toast, etc.), each with its own header — apps include only what they use.
+    - Single `ui.mk` fragment wires the components into every app build, so adding a component is a one-line change.
+    - Shared drawing primitives (rounded rects/pills, scrim surfaces, centered button rows) replace previously duplicated rendering code across the UI files.
+- Applied various bug fixes and optimizations across the refactored components.
+- Added clang-format tooling with enforced code style and VSCode support.
+- Split release builds into per-platform zips packages (brick/brickpro/smartpro/smartpros).
+- Sink-aware audio sample-rate negotiation across the whole system (music, radio, video and all emulators):
+    - The audio device opens at the rate the active output actually prefers — 48 kHz on the speaker, the negotiated Bluetooth rate, or a USB DAC's supported rates — with high-quality in-app resampling instead of silent low-quality system resampling.
+    - Hot-plugging a USB-C DAC or connecting Bluetooth mid-playback reroutes audio automatically, and a headphone icon appears in the status bar while an external output is active.
+    - New `Audio` page in `Settings`: current output device and rate, a `Force 48 kHz` escape hatch, and the Bluetooth max sample rate setting.
+
+Removed or consolidated:
+- Merged the standalone `LED Control`, `Input`, `Clock` and `Updater` apps into the `Settings` app — one place to configure the device instead of five separate paks.
+- Integrated the `Remove Loading` feature directly into the install script — it's a one-time tweak, not something that needs a resident app.
+- Removed the `Battery` monitoring feature — it needed an always-on daemon logging to a database on the SD card to power a history graph, while the status bar already shows the charge level.
+- Hardcore RetroAchievements mode is intentionally omitted (see the RetroAchievements notes above — account safety).
+
+Merged from upstream:
+- Modular `minarch` split (`ma_*` modules: game, saves, rewind, config, shaders, options, input, video, audio, core, menu and more) — from [carroarmato0's work in NextUI #721](https://github.com/LoveRetro/NextUI/pull/721), adapted here.
 
 Upcoming Features:
 - `CPU mode` switch in the OSD — quickly change the CPU governor (e.g. performance mode) from anywhere; defaults to auto.
@@ -169,6 +170,7 @@ Architectural decisions here prioritize clarity and maintainability over strict 
 
 - [ro8inmorgan](https://github.com/ro8inmorgan), [frysee](https://github.com/frysee) and all contributors for developing NextUI
 - [clintonium-119](https://github.com/clintonium-119) for the original [RetroAchievements integration](https://github.com/LoveRetro/NextUI/pull/633) in NextUI that our offline support is built on
+- [carroarmato0](https://github.com/carroarmato0) for the [minarch modularization](https://github.com/LoveRetro/NextUI/pull/721) that the `ma_*` split here is based on
 - [KrutzOtrem](https://github.com/KrutzOtrem/Trimui-Brick-Overlays) for the overlays
 - [timbueno](https://github.com/timbueno/ArtBookNextUI.theme) for the Artbook theme
 - [anthonycaccese](https://github.com/anthonycaccese/art-book-next-es.git) for the Artbook artwork
