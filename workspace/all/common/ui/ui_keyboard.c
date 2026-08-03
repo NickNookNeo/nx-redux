@@ -34,8 +34,14 @@ char* UIKeyboard_open(const char* prompt) {
 
 	const char* font_path = RES_PATH "/font1.ttf";
 
+	// The vendored keyboard binary predates the Brick Pro: it sizes its window
+	// 1024x768 only for DEVICE=brick and 1280x720 for everything else, which
+	// runs offscreen on the Brick Pro's 1024x768 panel — spawn it as a Brick.
+	const char* device = getenv("DEVICE");
+	const char* env_fix = (device && strcmp(device, "brickpro") == 0) ? "DEVICE=brick " : "";
+
 	char cmd[1024];
-	snprintf(cmd, sizeof(cmd), "%s \"%s\" 2>/dev/null", keyboard_path, font_path);
+	snprintf(cmd, sizeof(cmd), "%s%s \"%s\" 2>/dev/null", env_fix, keyboard_path, font_path);
 
 	FILE* pipe = popen(cmd, "r");
 	if (!pipe)
