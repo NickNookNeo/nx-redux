@@ -442,6 +442,20 @@ static void dropMapKey(const char* map_path, const char* key) {
 		unlink(tmp_path);
 }
 
+// Arcade cores resolve the romset from the zip's filename (including
+// parent/clone lookups), so physically renaming the file breaks loading.
+// Rename must always edit the map.txt display alias for these emu tags —
+// FBN ships with us; the rest are common community arcade paks.
+static bool entryUsesRomsetNames(Entry* entry) {
+	if (!prefixMatch(ROMS_PATH, entry->path))
+		return false;
+	char emu_name[MAX_PATH];
+	getEmuName(entry->path, emu_name);
+	return exactMatch(emu_name, "FBN") || exactMatch(emu_name, "FBNEO") ||
+		   exactMatch(emu_name, "FBA") || exactMatch(emu_name, "NEOGEO") ||
+		   prefixMatch("MAME", emu_name) || prefixMatch("CPS", emu_name);
+}
+
 // Real file rename of a ROM plus its art, saves and states, all keyed by the
 // ROM's base name (filename minus final extension). Returns the new full ROM
 // path in new_path (>= MAX_PATH), or false if the rename was rejected.
@@ -801,9 +815,11 @@ static void doRename(Entry* entry, int sel) {
 	}
 	coll_key[sizeof(coll_key) - 1] = '\0';
 
-	if (mapHasKey(home_map, home_key) || mapHasKey(coll_map, coll_key)) {
-		// aliased: rename the display name in both maps; the file stays put, so
-		// saves/states/art/collection paths need no changes.
+	if (entryUsesRomsetNames(entry) || mapHasKey(home_map, home_key) || mapHasKey(coll_map, coll_key)) {
+		// aliased (or arcade, where the filename IS the romset id and must not
+		// change): rename the display name in both maps; the file stays put, so
+		// saves/states/art/collection paths need no changes. setMapAlias creates
+		// the map.txt on first use.
 		setMapAlias(home_map, home_key, newname);
 		setMapAlias(coll_map, coll_key, newname);
 		reloadDirectoryAt(stack->count - 1, sel);

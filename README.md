@@ -78,19 +78,18 @@ Available when you want it (Tools, pause menu and OSD):
     - Support for high resolution textures (with limitations due to 1GB RAM)
         - Place Rice-format texture packs in `Roms/Nintendo 64 (N64)/.hires_texture/<ROM NAME>/`, where `<ROM NAME>` is the ROM's **internal header name** (e.g. `MARIOKART64`), not its filename. To find it, run the game once and look for the `Core: Name:` line in `.userdata/<platform>/logs/N64.txt`.
         - On the game's first launch the pack is converted into a cache in `Roms/Nintendo 64 (N64)/.cache/` with an on-screen progress display — large packs take several minutes and need extra free space on the SD card (e.g. a 2.6 GB pack produces a ~450 MB cache). Later launches load straight from the cache and start fast.
-    - Netplay with up to 4 players for Nintendo 64 games: press `Y` on a supported game in the list to host or join over Wi-Fi or a device-hosted hotspot — no manual IP entry, no persistent toggle to remember to turn back off, and save data is synced automatically before the match starts.
-        - **Player-count depends on the device's GPU.** N64 renders a separate split-screen viewport per player, so 3–4 players need a **Smart Pro / Smart Pro S** on *every* seat. On the **Brick / Brick Pro** the GPU can't hold full speed past a 2-way split, so N64 netplay there is limited to **2 players** (as host or joiner).
+    - Netplay with up to 4 players for Nintendo 64 games:
+        - **Player-count depends on the device's GPU.** N64 renders a separate split-screen viewport per player, so 3–4 players need a **Smart Pro S** on *every* seat. On the **Smart Pro / Brick / Brick Pro** the GPU can't hold full speed past a 2-way split, so N64 netplay there is limited to **2 players** (as host or joiner).
 - Bundled `Flycast Sega Dreamcast` emulator.
     - Runs out of the box without a BIOS (HLE boot); drop `dc_boot.bin` into `Bios/DC/` on the SD card to boot through the real BIOS instead.
-    - GGPO netplay for Dreamcast games: press `Y` on a supported game in the list to host or join over Wi-Fi or a device-hosted hotspot — no manual IP entry, no persistent toggle to remember to turn back off, and save data is synced automatically before the match starts.
+    - GGPO netplay for Dreamcast games, up to 2 players.
 - Bundled `Portmaster` in the Tools.
     - Configured by default with Nintendo input layout (configurable)
 - All standalone emulators now support USB-C and Bluetooth audio. 
 - All standalone emulators now include a custom in-game menu with UI styling consistent with the system.
 - All standalone emulators now support save states with screenshots.
 - Added sleep by pressing power button support for all standalone emulator and Portmaster games. 
-- Added [Netplay](https://github.com/mohammadsyuhada/nextui-netplay) for local wireless multiplayer.
-    - Host or join over a regular Wi-Fi network, or let the host device start its own hotspot (no router needed).
+- Added [Netplay](https://github.com/mohammadsyuhada/nextui-netplay) for local wireless multiplayer. Press `Y` on a supported game in the list to host or join over Wi-Fi or a device-hosted hotspot — no manual IP entry, no persistent toggle to remember to turn back off, and save data is synced automatically before the match starts.
     - `GB Link` support for Game Boy (gambatte) — link cable games like Pokémon trades and battles.
     - `GBA Link` support for Game Boy Advance (gpSP) — wireless adapter and link cable games.
     - Classic lockstep netplay for the other supported cores.
@@ -142,7 +141,7 @@ Merged from upstream:
 - Modular `minarch` split (`ma_*` modules: game, saves, rewind, config, shaders, options, input, video, audio, core, menu and more) — from [carroarmato0's work in NextUI #721](https://github.com/LoveRetro/NextUI/pull/721), adapted here.
 
 Upcoming Features:
-- `CPU mode` switch in the OSD — quickly change the CPU governor (e.g. performance mode) from anywhere; defaults to auto.
+- `CPU mode` switch in the OSD — quickly change the CPU governor (e.g. performance mode) from anywhere; defaults to mode configured in launch.sh script.
 - Background `Music Player` — keep music playing while you browse, with playback controls in the OSD.
 
 Ongoing focus areas:
