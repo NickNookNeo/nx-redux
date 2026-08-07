@@ -18,6 +18,6 @@ void Search_quit(void);
 bool Search_open(void);
 
 SearchResult Search_handleInput(unsigned long now);
-void Search_render(SDL_Surface* screen, SDL_Surface* blackBG, int lastScreen);
+void Search_render(SDL_Surface* screen, int lastScreen);
 
 #endif // SEARCH_H

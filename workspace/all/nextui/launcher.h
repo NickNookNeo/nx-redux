@@ -34,13 +34,10 @@ extern ResumeState resume;
 extern RestoreState restore;
 
 // Navigation
-void queueNext(char* cmd);
 void openDirectory(char* path, int auto_launch);
 void closeDirectory(void);
-Array* pathToStack(const char* path);
 
 // Resume
-void readyResumePath(char* rom_path, int type);
 void readyResume(Entry* entry);
 int autoResume(void);
 

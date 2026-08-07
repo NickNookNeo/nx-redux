@@ -11,8 +11,7 @@ static int cm_selected;
 static bool cm_open;
 static int cm_close_guard; // counts down frames after close to prevent reopen
 
-void ContextMenu_open(const char* title, ContextMenuItem* items, int count) {
-	(void)title; // reserved for future use
+void ContextMenu_open(ContextMenuItem* items, int count) {
 	if (count > CONTEXTMENU_MAX_ITEMS)
 		count = CONTEXTMENU_MAX_ITEMS;
 	memcpy(cm_items, items, count * sizeof(ContextMenuItem));

@@ -324,7 +324,7 @@ static const char* bitmap_font[] = {
 		"1   1",
 };
 
-void drawRect(int x, int y, int w, int h, uint32_t c, uint32_t* data, int stride) {
+static void drawRect(int x, int y, int w, int h, uint32_t c, uint32_t* data, int stride) {
 	for (int _x = x; _x < x + w; _x++) {
 		data[_x + y * stride] = c;
 		data[_x + (y + h - 1) * stride] = c;
@@ -335,7 +335,7 @@ void drawRect(int x, int y, int w, int h, uint32_t c, uint32_t* data, int stride
 	}
 }
 
-void fillRect(int x, int y, int w, int h, uint32_t c, uint32_t* data, int stride) {
+static void fillRect(int x, int y, int w, int h, uint32_t c, uint32_t* data, int stride) {
 	for (int _y = y; _y < y + h; _y++) {
 		for (int _x = x; _x < x + w; _x++) {
 			data[_x + _y * stride] = c;
@@ -399,7 +399,7 @@ static void blitBitmapText(char* text, int ox, int oy, uint32_t* data, int strid
 	}
 }
 
-void drawGauge(int x, int y, float percent, int width, int height, uint32_t* data, int stride) {
+static void drawGauge(int x, int y, float percent, int width, int height, uint32_t* data, int stride) {
 	// Clamp percent to 0.0 - 1.0
 	if (percent < 0.0f)
 		percent = 0.0f;
@@ -432,17 +432,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 	int src_x, src_y, dst_x, dst_y, dst_w, dst_h, dst_p, scale;
 	double aspect;
 
-	int aspect_w = src_w;
-	int aspect_h = CEIL_DIV(aspect_w, core.aspect_ratio);
-
-	if (aspect_h < src_h) {
-		aspect_h = src_h;
-		aspect_w = aspect_h * core.aspect_ratio;
-		aspect_w += aspect_w % 2;
-	}
-
-	char scaler_name[16];
-
 	src_x = 0;
 	src_y = 0;
 	dst_x = 0;
@@ -462,7 +451,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 		// this is the same whether fit or oversized
 		scale = MIN(DEVICE_WIDTH / src_w, DEVICE_HEIGHT / src_h);
 		if (!scale) {
-			sprintf(scaler_name, "forced crop");
 			dst_w = DEVICE_WIDTH;
 			dst_h = DEVICE_HEIGHT;
 			dst_p = DEVICE_PITCH;
@@ -489,7 +477,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 			int scale_y = CEIL_DIV(DEVICE_HEIGHT, src_h);
 			scale = MIN(scale_x, scale_y);
 
-			sprintf(scaler_name, "cropped");
 			dst_w = DEVICE_WIDTH;
 			dst_h = DEVICE_HEIGHT;
 			dst_p = DEVICE_PITCH;
@@ -516,7 +503,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 				// dst_h -= oy * 2;
 			}
 		} else {
-			sprintf(scaler_name, "integer");
 			int scaled_w = src_w * scale;
 			int scaled_h = src_h * scale;
 			dst_w = DEVICE_WIDTH;
@@ -542,7 +528,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 		int scaled_h = src_h * scale;
 
 		if (scaling == SCALE_FULLSCREEN) {
-			sprintf(scaler_name, "full%i", scale);
 			// type = 'full (oversized)';
 			dst_w = scaled_w;
 			dst_h = scaled_h;
@@ -568,8 +553,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 			dst_y = (DEVICE_HEIGHT - dst_h) / 2;
 
 			dst_p = dst_w * FIXED_BPP;
-
-			sprintf(scaler_name, "raw%i", scale);
 		} else {
 			double src_aspect_ratio = ((double)src_w) / src_h;
 			// double core_aspect_ratio
@@ -588,7 +571,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 			// then to fixed aspect
 
 			if (core_aspect > fixed_aspect) {
-				sprintf(scaler_name, "aspect%iL", scale);
 				// letterbox
 				// dst_w = scaled_w;
 				// dst_h = scaled_w / fixed_aspect_ratio;
@@ -600,12 +582,11 @@ void selectScaler(int src_w, int src_h, int src_p) {
 
 				dst_y = (dst_h - scaled_h) / 2;
 			} else if (core_aspect < fixed_aspect) {
-				sprintf(scaler_name, "aspect%iP", scale);
 				// pillarbox
 				// dst_w = scaled_h * fixed_aspect_ratio;
 				// dst_w += dst_w%2;
 				// dst_h = scaled_h;
-				aspect_w = DEVICE_HEIGHT * core.aspect_ratio;
+				int aspect_w = DEVICE_HEIGHT * core.aspect_ratio;
 				double aspect_wr = ((double)aspect_w) / DEVICE_WIDTH;
 				dst_w = scaled_w / aspect_wr;
 				dst_h = scaled_h;
@@ -613,7 +594,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 				dst_w = (dst_w / 8) * 8;
 				dst_x = (dst_w - scaled_w) / 2;
 			} else {
-				sprintf(scaler_name, "aspect%iM", scale);
 				// perfect match
 				dst_w = scaled_w;
 				dst_h = scaled_h;
@@ -639,7 +619,7 @@ void selectScaler(int src_w, int src_h, int src_p) {
 																														: (scaling == SCALE_FULLSCREEN ? -1 : core.aspect_ratio);
 	renderer.blit = GFX_getScaler(&renderer);
 }
-void screen_flip(SDL_Surface* screen) {
+static void screen_flip(SDL_Surface* screen) {
 	if (use_core_fps) {
 		GFX_flip_fixed_rate(screen, core.fps);
 	} else {
@@ -654,7 +634,7 @@ void screen_flip(SDL_Surface* screen) {
 static uint32_t* fade_buffer = NULL;
 static size_t fade_buffer_len = 0;
 
-void applyFadeIn(uint32_t** data, size_t pitch, unsigned width, unsigned height, int* frame_counter, int max_frames) {
+static void applyFadeIn(uint32_t** data, size_t pitch, unsigned width, unsigned height, int* frame_counter, int max_frames) {
 	size_t pixels_per_row = pitch / sizeof(uint32_t);
 
 	if (*frame_counter >= max_frames) {
@@ -748,8 +728,10 @@ static void drawDebugHud(const void* data, unsigned width, unsigned height, size
 			blitBitmapText(debug_text, x, -y - 42, (uint32_t*)data, pitch / 4, width, height);
 		}
 
-		double buffer_fill = (double)(perf.buffer_size - perf.buffer_free) / (double)perf.buffer_size;
-		drawGauge(x, y + 30, buffer_fill, width / 2, 8, (uint32_t*)data, pitch / 4);
+		if (perf.buffer_size > 0) {
+			double buffer_fill = (double)(perf.buffer_size - perf.buffer_free) / (double)perf.buffer_size;
+			drawGauge(x, y + 30, buffer_fill, width / 2, 8, (uint32_t*)data, pitch / 4);
+		}
 	}
 }
 
@@ -812,7 +794,7 @@ static void video_refresh_callback_main(const void* data, unsigned width, unsign
 	last_flip_time = SDL_GetTicks();
 }
 
-const void* lastframe = NULL;
+static const void* lastframe = NULL;
 static Uint32* rgbaData = NULL;
 static size_t rgbaDataSize = 0;
 

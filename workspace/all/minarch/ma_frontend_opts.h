@@ -54,15 +54,11 @@ struct MenuList {
 
 // Public API: functions defined in ma_frontend_opts.c
 int Menu_message(char* message, char** pairs);
-int Menu_messageWithFont(char* message, char** pairs, TTF_Font* f);
 char* getSaveDesc(void);
-int MenuList_freeItems(MenuList* list, int i);
 
 int OptionFrontend_openMenu(MenuList* list, int i);
 int OptionShaders_openMenu(MenuList* list, int i);
 int OptionCheats_openMenu(MenuList* list, int i);
-int OptionPragmas_openMenu(MenuList* list, int i);
 int OptionControls_openMenu(MenuList* list, int i);
 int OptionShortcuts_openMenu(MenuList* list, int i);
 int OptionSaveChanges_openMenu(MenuList* list, int i);
-int OptionQuicksave_onConfirm(MenuList* list, int i);

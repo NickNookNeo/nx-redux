@@ -69,6 +69,8 @@ bool environment_callback(unsigned cmd, void* data) { // copied from picoarch in
 	}
 	case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: { /* 10 */
 		const enum retro_pixel_format* format = (const enum retro_pixel_format*)data;
+		if (!format)
+			return false;
 		// Check if the requested format is supported
 		if (*format == RETRO_PIXEL_FORMAT_XRGB8888) {
 			fmt = RETRO_PIXEL_FORMAT_XRGB8888;
@@ -83,8 +85,8 @@ bool environment_callback(unsigned cmd, void* data) { // copied from picoarch in
 	case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: { /* 11 */
 		// puts("RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS\n");
 		Input_init((const struct retro_input_descriptor*)data);
-		return false;
-		break;
+		// descriptors are consumed; returning false makes some cores stop re-sending them
+		return true;
 	}
 	case RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE: { /* 13 */
 		const struct retro_disk_control_callback* var =
@@ -122,7 +124,6 @@ bool environment_callback(unsigned cmd, void* data) { // copied from picoarch in
 		break;
 	}
 	case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: { /* 18 */
-		bool flag = *(bool*)data;
 		break;
 	}
 	case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: { /* 17 */
@@ -141,7 +142,8 @@ bool environment_callback(unsigned cmd, void* data) { // copied from picoarch in
 	}
 	case RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE: { /* 23 */
 		struct retro_rumble_interface* iface = (struct retro_rumble_interface*)data;
-		iface->set_rumble_state = set_rumble_state;
+		if (iface)
+			iface->set_rumble_state = set_rumble_state;
 		break;
 	}
 	case RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES: {
@@ -337,13 +339,9 @@ bool environment_callback(unsigned cmd, void* data) { // copied from picoarch in
 		if (var && var->key) {
 			// printf("\t%s = %s\n", var->key, var->value);
 			OptionList_setOptionValue(&config.core, var->key, var->value);
-			break;
 		}
-
-		int* out = (int*)data;
-		if (out)
-			*out = 1;
-
+		// a NULL data (or keyless struct) is only probing for support, which the
+		// trailing `return true` reports; never write back through the pointer
 		break;
 	}
 

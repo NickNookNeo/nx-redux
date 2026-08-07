@@ -10,6 +10,7 @@
 #include "ma_saves.h"
 #include "ma_game.h"
 #include "ma_config.h"
+#include "ma_core.h"
 #include "ma_video.h"
 #include "ma_rewind.h"
 #include "minarch.h"
@@ -27,86 +28,6 @@ static int ach_menu_count = 0;
 static bool ach_filter_locked_only = false; // Y button toggle: show all or locked only
 
 
-SDL_Surface* digits;
-#define DIGIT_WIDTH 9
-#define DIGIT_HEIGHT 8
-#define DIGIT_TRACKING -2
-enum {
-	DIGIT_SLASH = 10,
-	DIGIT_DOT,
-	DIGIT_PERCENT,
-	DIGIT_X,
-	DIGIT_OP, // (
-	DIGIT_CP, // )
-	DIGIT_COUNT,
-};
-#define DIGIT_SPACE DIGIT_COUNT
-void MSG_init(void) {
-	digits = SDL_CreateRGBSurface(SDL_SWSURFACE, SCALE2(DIGIT_WIDTH * DIGIT_COUNT, DIGIT_HEIGHT), FIXED_DEPTH, 0, 0, 0, 0);
-	SDL_FillRect(digits, NULL, RGB_BLACK);
-
-	SDL_Surface* digit;
-	char* chars[] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "/", ".", "%", "x", "(", ")", NULL};
-	char* c;
-	int i = 0;
-	while ((c = chars[i])) {
-		digit = TTF_RenderUTF8_Blended(font.tiny, c, COLOR_WHITE);
-		SDL_BlitSurface(digit, NULL, digits, &(SDL_Rect){(i * SCALE1(DIGIT_WIDTH)) + (SCALE1(DIGIT_WIDTH) - digit->w) / 2, (SCALE1(DIGIT_HEIGHT) - digit->h) / 2});
-		SDL_FreeSurface(digit);
-		i += 1;
-	}
-}
-static int MSG_blitChar(int n, int x, int y) {
-	if (n != DIGIT_SPACE)
-		SDL_BlitSurface(digits, &(SDL_Rect){n * SCALE1(DIGIT_WIDTH), 0, SCALE2(DIGIT_WIDTH, DIGIT_HEIGHT)}, screen, &(SDL_Rect){x, y});
-	return x + SCALE1(DIGIT_WIDTH + DIGIT_TRACKING);
-}
-static int MSG_blitInt(int num, int x, int y) {
-	int i = num;
-	int n;
-
-	if (i > 999) {
-		n = i / 1000;
-		i -= n * 1000;
-		x = MSG_blitChar(n, x, y);
-	}
-	if (i > 99) {
-		n = i / 100;
-		i -= n * 100;
-		x = MSG_blitChar(n, x, y);
-	} else if (num > 99) {
-		x = MSG_blitChar(0, x, y);
-	}
-	if (i > 9) {
-		n = i / 10;
-		i -= n * 10;
-		x = MSG_blitChar(n, x, y);
-	} else if (num > 9) {
-		x = MSG_blitChar(0, x, y);
-	}
-
-	n = i;
-	x = MSG_blitChar(n, x, y);
-
-	return x;
-}
-static int MSG_blitDouble(double num, int x, int y) {
-	int i = num;
-	int r = (num - i) * 10;
-	int n;
-
-	x = MSG_blitInt(i, x, y);
-
-	n = DIGIT_DOT;
-	x = MSG_blitChar(n, x, y);
-
-	n = r;
-	x = MSG_blitChar(n, x, y);
-	return x;
-}
-void MSG_quit(void) {
-	SDL_FreeSurface(digits);
-}
 #define MENU_ITEM_COUNT 5
 #define MENU_SLOT_COUNT 8
 
@@ -116,16 +37,6 @@ enum {
 	ITEM_LOAD,
 	ITEM_OPTS,
 	ITEM_QUIT,
-};
-
-enum {
-	STATUS_CONT = 0,
-	STATUS_SAVE = 1,
-	STATUS_LOAD = 11,
-	STATUS_OPTS = 23,
-	STATUS_DISC = 24,
-	STATUS_QUIT = 30,
-	STATUS_RESET = 31,
 };
 
 #define MENU_MAX_DISCS 9
@@ -160,12 +71,6 @@ static struct {
 		[ITEM_OPTS] = "Options",
 		[ITEM_QUIT] = "Quit",
 	}};
-
-// Accessor for external modules (netplay) that need the paused-menu backdrop.
-// Lives here because `menu` is file-static; prototype is in minarch.h.
-SDL_Surface* minarch_getMenuBitmap(void) {
-	return menu.bitmap;
-}
 
 void Menu_init(void) {
 	menu.overlay = SDL_CreateRGBSurfaceWithFormat(SDL_SWSURFACE,
@@ -221,12 +126,18 @@ void Menu_init(void) {
 }
 void Menu_quit(void) {
 	SDL_FreeSurface(menu.overlay);
+	for (int i = 0; i < menu.total_discs; i++) {
+		free(menu.disc_paths[i]);
+		menu.disc_paths[i] = NULL;
+	}
+	menu.total_discs = 0;
 }
 void Menu_beforeSleep() {
 	SRAM_write();
 	RTC_write();
 	State_autosave();
-	putFile(AUTO_RESUME_PATH, game.path + strlen(SDCARD_PATH));
+	if (prefixMatch(SDCARD_PATH, game.path))
+		putFile(AUTO_RESUME_PATH, game.path + strlen(SDCARD_PATH));
 
 	PWR_setCPUSpeed(CPU_SPEED_MENU);
 }
@@ -438,9 +349,11 @@ static int OptionAchievements_showDetail(MenuList* list, int i) {
 				snprintf(points_str, sizeof(points_str), "%u points", ach->points);
 			}
 			SDL_Surface* points_text = TTF_RenderUTF8_Blended(font.tiny, points_str, COLOR_LIGHT_TEXT);
-			SDL_BlitSurface(points_text, NULL, detail_canvas, &(SDL_Rect){center_x - points_text->w / 2, content_y});
-			content_y += points_text->h + SCALE1(2);
-			SDL_FreeSurface(points_text);
+			if (points_text) {
+				SDL_BlitSurface(points_text, NULL, detail_canvas, &(SDL_Rect){center_x - points_text->w / 2, content_y});
+				content_y += points_text->h + SCALE1(2);
+				SDL_FreeSurface(points_text);
+			}
 
 			// Unlock time or progress (smaller font, gray)
 			if (ach->unlocked && ach->unlock_time > 0) {
@@ -602,7 +515,7 @@ static int OptionAchievements_openMenu(MenuList* list, int i) {
 	const rc_client_achievement_t** filtered = calloc(total_achievements, sizeof(rc_client_achievement_t*));
 	int filtered_count = 0;
 
-	// Hide "Unknown Emulator" warning (ID 101000001) when hardcore mode is disabled.
+	// Hide the "Unknown Emulator" warning when hardcore mode is disabled.
 	// Show it when enabled so users understand why they only get softcore unlocks.
 	// Note: We intentionally show "Unsupported Game Version" so users know to find a supported ROM.
 	bool hide_unknown_emulator = !CFG_getRAHardcoreMode();
@@ -616,7 +529,7 @@ static int OptionAchievements_openMenu(MenuList* list, int i) {
 			filtered_count = 0;
 			for (int j = 0; j < total_achievements; j++) {
 				// Skip "Unknown Emulator" warning when hardcore mode is disabled
-				if (hide_unknown_emulator && all_achievements[j]->id == 101000001) {
+				if (hide_unknown_emulator && all_achievements[j]->id == RA_UNKNOWN_EMULATOR_ACHIEVEMENT_ID) {
 					continue;
 				}
 				if (!ach_filter_locked_only || !all_achievements[j]->unlocked) {
@@ -772,8 +685,10 @@ static int OptionAchievements_openMenu(MenuList* list, int i) {
 
 				// Draw ">" on the right side (always white)
 				SDL_Surface* arrow = TTF_RenderUTF8_Blended(font.small, ">", COLOR_WHITE);
-				SDL_BlitSurface(arrow, NULL, screen, &(SDL_Rect){ox + mw - arrow->w - opt_pad, oy + SCALE1((row * BUTTON_SIZE) + 3)});
-				SDL_FreeSurface(arrow);
+				if (arrow) {
+					SDL_BlitSurface(arrow, NULL, screen, &(SDL_Rect){ox + mw - arrow->w - opt_pad, oy + SCALE1((row * BUTTON_SIZE) + 3)});
+					SDL_FreeSurface(arrow);
+				}
 
 				if (is_selected) {
 					// White pill for the text area with icon (like MENU_FIXED selected text pill)
@@ -926,11 +841,12 @@ void OptionAchievements_updateDesc(void) {
 }
 
 #define OPTION_PADDING 8
+// alias must be at least MAX_PATH bytes
 bool getAlias(char* path, char* alias) {
 	bool is_alias = false;
 	char* tmp;
 	char map_path[MAX_PATH + 8]; // room to swap the filename for "map.txt"
-	strcpy(map_path, path);
+	snprintf(map_path, sizeof(map_path), "%s", path);
 	tmp = strrchr(map_path, '/');
 	if (tmp) {
 		tmp += 1;
@@ -956,7 +872,7 @@ bool getAlias(char* path, char* alias) {
 					char* key = line;
 					char* value = tmp + 1;
 					if (exactMatch(file_name, key)) {
-						strcpy(alias, value);
+						snprintf(alias, MAX_PATH, "%s", value);
 						is_alias = true;
 						break;
 					}
@@ -1187,123 +1103,14 @@ int Menu_options(MenuList* list) {
 	return 0;
 }
 
-static void Menu_scale(SDL_Surface* src, SDL_Surface* dst) {
-	uint16_t* s = src->pixels;
-	uint16_t* d = dst->pixels;
-
-	int sw = src->w;
-	int sh = src->h;
-	int sp = src->pitch / FIXED_BPP;
-
-	int dw = dst->w;
-	int dh = dst->h;
-	int dp = dst->pitch / FIXED_BPP;
-
-	int rx = 0;
-	int ry = 0;
-	int rw = dw;
-	int rh = dh;
-
-	int scaling = screen_scaling;
-	if (scaling == SCALE_CROPPED && DEVICE_WIDTH == HDMI_WIDTH) {
-		scaling = SCALE_NATIVE;
-	}
-	if (scaling == SCALE_NATIVE) {
-		rx = renderer.dst_x;
-		ry = renderer.dst_y;
-		rw = renderer.src_w;
-		rh = renderer.src_h;
-		if (renderer.scale) {
-			rw *= renderer.scale;
-			rh *= renderer.scale;
-		} else {
-			rw -= renderer.src_x * 2;
-			rh -= renderer.src_y * 2;
-			sw = rw;
-			sh = rh;
-		}
-
-		if (dw == DEVICE_WIDTH / 2) {
-			rx /= 2;
-			ry /= 2;
-			rw /= 2;
-			rh /= 2;
-		}
-	} else if (scaling == SCALE_CROPPED) {
-		sw -= renderer.src_x * 2;
-		sh -= renderer.src_y * 2;
-
-		rx = renderer.dst_x;
-		ry = renderer.dst_y;
-		rw = sw * renderer.scale;
-		rh = sh * renderer.scale;
-
-		if (dw == DEVICE_WIDTH / 2) {
-			rx /= 2;
-			ry /= 2;
-			rw /= 2;
-			rh /= 2;
-		}
-	}
-
-	if (scaling == SCALE_ASPECT || rw > dw || rh > dh) {
-		double fixed_aspect_ratio = ((double)DEVICE_WIDTH) / DEVICE_HEIGHT;
-		int core_aspect = core.aspect_ratio * 1000;
-		int fixed_aspect = fixed_aspect_ratio * 1000;
-
-		if (core_aspect > fixed_aspect) {
-			rw = dw;
-			rh = rw / core.aspect_ratio;
-			rh += rh % 2;
-		} else if (core_aspect < fixed_aspect) {
-			rh = dh;
-			rw = rh * core.aspect_ratio;
-			rw += rw % 2;
-			rw = (rw / 8) * 8; // probably necessary here since we're not scaling by an integer
-		} else {
-			rw = dw;
-			rh = dh;
-		}
-
-		rx = (dw - rw) / 2;
-		ry = (dh - rh) / 2;
-	}
-
-	// dumb nearest neighbor scaling
-	int mx = (sw << 16) / rw;
-	int my = (sh << 16) / rh;
-	int ox = (renderer.src_x << 16);
-	int sx = ox;
-	int sy = (renderer.src_y << 16);
-	int lr = -1;
-	int sr = 0;
-	int dr = ry * dp;
-	int cp = dp * FIXED_BPP;
-
-	for (int dy = 0; dy < rh; dy++) {
-		sx = ox;
-		sr = (sy >> 16) * sp;
-		if (sr == lr) {
-			memcpy(d + dr, d + dr - dp, cp);
-		} else {
-			for (int dx = 0; dx < rw; dx++) {
-				d[dr + rx + dx] = s[sr + (sx >> 16)];
-				sx += mx;
-			}
-		}
-		lr = sr;
-		sy += my;
-		dr += dp;
-	}
-}
-
 void Menu_initState(void) {
 	if (exists(menu.slot_path))
 		menu.slot = getInt(menu.slot_path);
 	// The slot file may point at a hidden slot: RESUME_SLOT_DEFAULT (8) or the
 	// AUTO_RESUME_SLOT (9) that a plain quit writes to. Neither is user-visible
 	// in the Save/Load menu, so snap back to a regular slot (0-7) for the UI.
-	if (menu.slot >= MENU_SLOT_COUNT)
+	// A corrupt slot file can also yield a negative value.
+	if (menu.slot < 0 || menu.slot >= MENU_SLOT_COUNT)
 		menu.slot = 0;
 
 	menu.save_exists = 0;
@@ -1337,15 +1144,19 @@ int save_screenshot_thread(void* data) {
 	SaveImageArgs* args = (SaveImageArgs*)data;
 	SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
 		args->pixels, args->w, args->h, 32, args->w * 4, SDL_PIXELFORMAT_ABGR8888);
-	SDL_Surface* converted = SDL_ConvertSurfaceFormat(rawSurface, SDL_PIXELFORMAT_ARGB8888, 0);
+	SDL_Surface* converted = rawSurface ? SDL_ConvertSurfaceFormat(rawSurface, SDL_PIXELFORMAT_ARGB8888, 0) : NULL;
 	SDL_FreeSurface(rawSurface);
 
-	SDL_RWops* rw = SDL_RWFromFile(args->path, "wb");
-	if (!rw) {
-		SDL_Log("Failed to open file for writing: %s", SDL_GetError());
+	if (!converted) {
+		SDL_Log("Failed to convert screenshot surface: %s", SDL_GetError());
 	} else {
-		if (IMG_SavePNG_RW(converted, rw, 1) != 0) {
-			SDL_Log("Failed to save PNG: %s", SDL_GetError());
+		SDL_RWops* rw = SDL_RWFromFile(args->path, "wb");
+		if (!rw) {
+			SDL_Log("Failed to open file for writing: %s", SDL_GetError());
+		} else {
+			if (IMG_SavePNG_RW(converted, rw, 1) != 0) {
+				SDL_Log("Failed to save PNG: %s", SDL_GetError());
+			}
 		}
 	}
 	SDL_FreeSurface(converted);
@@ -1471,18 +1282,23 @@ void Menu_loadState(void) {
 	if (menu.save_exists) {
 		int disc_changed = 0;
 		if (menu.total_discs && menu.disc >= 0) {
-			char slot_disc_name[256];
-			getFile(menu.txt_path, slot_disc_name, 256);
+			char slot_disc_name[MAX_PATH];
+			getFile(menu.txt_path, slot_disc_name, MAX_PATH);
 
-			char slot_disc_path[256];
+			char slot_disc_path[MAX_PATH];
 			if (slot_disc_name[0] == '/')
-				strcpy(slot_disc_path, slot_disc_name);
+				snprintf(slot_disc_path, sizeof(slot_disc_path), "%s", slot_disc_name);
 			else
-				sprintf(slot_disc_path, "%s%s", menu.base_path, slot_disc_name);
+				snprintf(slot_disc_path, sizeof(slot_disc_path), "%s%s", menu.base_path, slot_disc_name);
 
 			char* disc_path = menu.disc_paths[menu.disc];
 			if (!exactMatch(slot_disc_path, disc_path)) {
-				Game_changeDisc(slot_disc_path);
+				if (!Game_changeDisc(slot_disc_path)) {
+					// wrong disc and no way to swap it - loading the state
+					// anyway would silently mix disc and save
+					Notification_push(NOTIFICATION_LOAD_STATE, "Load Failed - Wrong Disc", NULL);
+					return;
+				}
 				disc_changed = 1;
 			}
 		}
@@ -1527,10 +1343,9 @@ void Menu_loop(void) {
 	int cw, ch;
 	unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
 
-	renderer.dst = pixels;
 	SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
 		pixels, cw, ch, 32, cw * 4, SDL_PIXELFORMAT_ABGR8888);
-	SDL_Surface* converted = SDL_ConvertSurfaceFormat(rawSurface, SDL_PIXELFORMAT_ARGB8888, 0);
+	SDL_Surface* converted = rawSurface ? SDL_ConvertSurfaceFormat(rawSurface, SDL_PIXELFORMAT_ARGB8888, 0) : NULL;
 	SDL_FreeSurface(rawSurface);
 	free(pixels);
 
@@ -1543,7 +1358,8 @@ void Menu_loop(void) {
 		0,
 		screen->w,
 		screen->h};
-	SDL_BlitScaled(menu.bitmap, NULL, backing, &dst);
+	if (menu.bitmap)
+		SDL_BlitScaled(menu.bitmap, NULL, backing, &dst);
 
 	int restore_w = screen->w;
 	int restore_h = screen->h;
@@ -1582,12 +1398,13 @@ void Menu_loop(void) {
 	int selected = 0; // resets every launch
 	Menu_initState();
 
-	int status = STATUS_CONT; // TODO: no longer used?
 	IndicatorType show_setting = INDICATOR_NONE;
 	bool dirty = true;
 	int ignore_menu = 0;
 	int menu_start = 0;
-	SDL_Surface* preview = SDL_CreateRGBSurface(SDL_SWSURFACE, DEVICE_WIDTH / 2, DEVICE_HEIGHT / 2, 32, RGBA_MASK_8888); // TODO: retain until changed?
+	SDL_Surface* preview = SDL_CreateRGBSurface(SDL_SWSURFACE, DEVICE_WIDTH / 2, DEVICE_HEIGHT / 2, 32, RGBA_MASK_8888);
+	char preview_path[MAX_PATH] = ""; // slot screenshot currently decoded into preview
+	int preview_valid = 0;
 
 	//set vid.blit to null for menu drawing no need for blitrender drawing
 	GFX_clearShaders();
@@ -1649,41 +1466,33 @@ void Menu_loop(void) {
 		}
 
 		if (PAD_justPressed(BTN_B) || (BTN_WAKE != BTN_MENU && PAD_tappedMenu(now))) {
-			status = STATUS_CONT;
 			show_menu = 0;
 		} else if (PAD_justPressed(BTN_X)) {
 			if (!mp_active && selected == ITEM_LOAD && State_hasUndo()) {
 				Menu_undoLoadState();
-				status = STATUS_LOAD;
 				show_menu = 0;
 			}
 		} else if (PAD_justPressed(BTN_A)) {
 			switch (selected) {
 			case ITEM_CONT:
 				if (menu.total_discs && menu.disc >= 0 && rom_disc != menu.disc) {
-					status = STATUS_DISC;
 					char* disc_path = menu.disc_paths[menu.disc];
 					Game_changeDisc(disc_path);
-				} else {
-					status = STATUS_CONT;
 				}
 				show_menu = 0;
 				break;
 
 			case ITEM_SAVE: {
 				Menu_saveState();
-				status = STATUS_SAVE;
 				show_menu = 0;
 			} break;
 			case ITEM_LOAD: {
 				Menu_loadState();
-				status = STATUS_LOAD;
 				show_menu = 0;
 			} break;
 			case ITEM_OPTS: {
 				if (simple_mode) {
-					core.reset();
-					status = STATUS_RESET;
+					Core_reset();
 					show_menu = 0;
 				} else {
 					int old_scaling = screen_scaling;
@@ -1707,7 +1516,6 @@ void Menu_loop(void) {
 				// the autosave while a session is live
 				Menu_autosaveQuit();
 				Netplay_quitAll();
-				status = STATUS_QUIT;
 				show_menu = 0;
 				quit = 1; // TODO: tmp?
 				break;
@@ -1779,18 +1587,28 @@ void Menu_loop(void) {
 				oy += SCALE1(WINDOW_RADIUS);
 
 				if (menu.preview_exists) { // has save, has preview
-					// lotta memory churn here
-					SDL_Surface* bmp = IMG_Load(menu.bmp_path);
-					SDL_Surface* raw_preview = SDL_ConvertSurfaceFormat(bmp, screen->format->format, 0);
-					if (raw_preview) {
-						SDL_FreeSurface(bmp);
-						bmp = raw_preview;
+					// decode the slot screenshot only when the slot changes
+					if (!exactMatch(preview_path, menu.bmp_path)) {
+						preview_valid = 0;
+						SDL_Surface* bmp = IMG_Load(menu.bmp_path);
+						if (bmp) {
+							SDL_Surface* raw_preview = SDL_ConvertSurfaceFormat(bmp, screen->format->format, 0);
+							if (raw_preview) {
+								SDL_FreeSurface(bmp);
+								bmp = raw_preview;
+							}
+							SDL_BlitScaled(bmp, NULL, preview, NULL);
+							SDL_FreeSurface(bmp);
+							preview_valid = 1;
+						}
+						snprintf(preview_path, sizeof(preview_path), "%s", menu.bmp_path);
 					}
 					SDL_Rect preview_rect = {ox, oy, hw, hh};
 					SDL_FillRect(screen, &preview_rect, SDL_MapRGBA(screen->format, 0, 0, 0, 255));
-					SDL_BlitScaled(bmp, NULL, preview, NULL);
-					SDL_BlitSurface(preview, NULL, screen, &(SDL_Rect){ox, oy});
-					SDL_FreeSurface(bmp);
+					if (preview_valid)
+						SDL_BlitSurface(preview, NULL, screen, &(SDL_Rect){ox, oy});
+					else
+						GFX_blitMessage(font.large, "No Preview", screen, &preview_rect);
 				} else {
 					SDL_Rect preview_rect = {ox, oy, hw, hh};
 					SDL_FillRect(screen, &preview_rect, SDL_MapRGBA(screen->format, 0, 0, 0, 255));
@@ -1820,8 +1638,10 @@ void Menu_loop(void) {
 	}
 
 	SDL_FreeSurface(preview);
-	if (menu.bitmap)
+	if (menu.bitmap) {
 		SDL_FreeSurface(menu.bitmap);
+		menu.bitmap = NULL;
+	}
 	PAD_reset();
 
 	GFX_clearAll();
@@ -1856,13 +1676,4 @@ void Menu_loop(void) {
 
 	SDL_FreeSurface(backing);
 	PWR_disableAutosleep();
-}
-
-
-// main() sets the core version shown in the options menu through this accessor
-// because options_menu is file-static here. The core version used to appear as
-// the subtitle of the in-game "Emulator" row; that row was removed (core options
-// now live in the pre-launch editor), so there is no longer a slot for it here.
-void Menu_setCoreVersionDesc(const char* version) {
-	(void)version;
 }

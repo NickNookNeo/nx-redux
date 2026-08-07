@@ -50,6 +50,9 @@ static void gs_rebuildIndices(void) {
 // stutters the carousel — key by source path so we only decode on change.
 static char gs_img_path[MAX_PATH] = {0};
 static SDL_Surface* gs_img_surf = NULL;
+// rounded corners mutate the cached surface, so apply them once per cache fill
+// (the render runs every dirty frame — battery ticks included)
+static bool gs_img_rounded = false;
 
 static SDL_Surface* gs_get_cached_image(const char* path) {
 	if (gs_img_surf && strcmp(gs_img_path, path) == 0)
@@ -62,6 +65,7 @@ static SDL_Surface* gs_get_cached_image(const char* path) {
 	if (raw)
 		raw = UI_convertSurface(raw, screen);
 	gs_img_surf = raw;
+	gs_img_rounded = false;
 	strncpy(gs_img_path, path, sizeof(gs_img_path) - 1);
 	gs_img_path[sizeof(gs_img_path) - 1] = '\0';
 	return gs_img_surf;
@@ -85,10 +89,6 @@ int GameSwitcher_shouldStartInSwitcher(void) {
 void GameSwitcher_resetSelection(void) {
 	switcher_selected = 0;
 	gs_rebuildIndices();
-}
-
-int GameSwitcher_getSelected(void) {
-	return switcher_selected;
 }
 
 const char* GameSwitcher_getSelectedName(void) {
@@ -242,10 +242,13 @@ void GameSwitcher_render(int lastScreen, SDL_Surface* blackBG,
 			int new_w, new_h;
 			UI_calcImageFit(img_w, img_h, max_w, max_h, &new_w, &new_h);
 
-			GFX_ApplyRoundedCorners_8888(
-				boxart, &(SDL_Rect){0, 0, boxart->w, boxart->h},
-				SCALE1((float)CFG_getThumbnailRadius() *
-					   ((float)img_w / (float)new_w)));
+			if (!gs_img_rounded) {
+				GFX_ApplyRoundedCorners_8888(
+					boxart, &(SDL_Rect){0, 0, boxart->w, boxart->h},
+					SCALE1((float)CFG_getThumbnailRadius() *
+						   ((float)img_w / (float)new_w)));
+				gs_img_rounded = true;
+			}
 
 			int ax = (screen->w - new_w) / 2;
 			int ay = (screen->h - new_h) / 2;

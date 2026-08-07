@@ -53,8 +53,10 @@ static bool ra_off_read_file(const char* path, char** out, size_t* out_len) {
 
 // Write via temp file + rename so a power cut never leaves a torn file.
 static bool ra_off_write_file_atomic(const char* path, const char* data, size_t len) {
-	char tmp[RA_OFFLINE_MAX_PATH + 8];
-	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	// per-thread tmp name: concurrent writers to the same path each stage
+	// their own complete copy and the last rename wins
+	char tmp[RA_OFFLINE_MAX_PATH + 32];
+	snprintf(tmp, sizeof(tmp), "%s.%lu.tmp", path, (unsigned long)pthread_self());
 	FILE* f = fopen(tmp, "wb");
 	if (!f)
 		return false;
@@ -136,11 +138,16 @@ void RA_Offline_init(const char* root_dir) {
 }
 
 void RA_Offline_setMode(RA_NetMode mode) {
+	pthread_mutex_lock(&ra_off_mutex);
 	ra_mode = mode;
+	pthread_mutex_unlock(&ra_off_mutex);
 }
 
 RA_NetMode RA_Offline_getMode(void) {
-	return ra_mode;
+	pthread_mutex_lock(&ra_off_mutex);
+	RA_NetMode mode = ra_mode;
+	pthread_mutex_unlock(&ra_off_mutex);
+	return mode;
 }
 
 const char* RA_Offline_currentGameHash(void) {
@@ -211,8 +218,16 @@ void RA_Offline_cacheResponse(const char* post_data, const char* body, size_t bo
 	if (!strstr(body, "\"Success\":true"))
 		return;
 
+	// callers include detached HTTP worker threads: serialize only the
+	// ra_current_hash update (inside ra_off_cache_relpath); the fsync'd file
+	// write stays OUTSIDE the lock so the main thread's RA_Offline_getMode
+	// can't stall behind slow SD writes (per-thread tmp + rename keeps
+	// same-path writers safe)
+	pthread_mutex_lock(&ra_off_mutex);
 	char relpath[192];
-	if (!ra_off_cache_relpath(post_data, relpath, sizeof(relpath)))
+	bool cacheable = ra_off_cache_relpath(post_data, relpath, sizeof(relpath));
+	pthread_mutex_unlock(&ra_off_mutex);
+	if (!cacheable)
 		return;
 
 	char path[RA_OFFLINE_MAX_PATH];

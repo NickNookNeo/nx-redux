@@ -13,7 +13,6 @@ struct Cheat {
 };
 
 struct Cheats {
-	int enabled;
 	size_t count;
 	struct Cheat* cheats;
 };

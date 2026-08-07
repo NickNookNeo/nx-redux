@@ -12,6 +12,14 @@
 
 static bool _simple_mode = false;
 
+// file-local content builders (exported API lives in content.h)
+static Array* getRoms(void);
+static Array* getRoot(int simple_mode);
+static Array* getCollection(char* path);
+static Array* getDiscs(char* path);
+static Array* getEntries(char* path);
+static void addEntries(Array* entries, char* path);
+
 // EMULIST_CACHE_PATH and ROMINDEX_CACHE_PATH defined in defines.h
 
 void Content_setSimpleMode(bool mode) {
@@ -21,7 +29,7 @@ void Content_setSimpleMode(bool mode) {
 ///////////////////////////////////////
 // Helpers
 
-int getIndexChar(char* str) {
+static int getIndexChar(char* str) {
 	char i = 0;
 	char c = tolower(str[0]);
 	if (c >= 'a' && c <= 'z')
@@ -29,7 +37,7 @@ int getIndexChar(char* str) {
 	return i;
 }
 
-void getUniqueName(Entry* entry, char* out_name) {
+static void getUniqueName(Entry* entry, char* out_name) {
 	char* slash = strrchr(entry->path, '/');
 	if (!slash)
 		return;
@@ -41,7 +49,7 @@ void getUniqueName(Entry* entry, char* out_name) {
 ///////////////////////////////////////
 // Directory indexing
 
-void Directory_index(Directory* self) {
+static void Directory_index(Directory* self) {
 	int is_collection = prefixMatch(COLLECTIONS_PATH, self->path);
 	int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || is_collection; // not alphabetized
 
@@ -189,39 +197,14 @@ Directory* Directory_new(char* path, int selected) {
 ///////////////////////////////////////
 // Content query helpers
 
-Entry* entryFromPakName(char* pak_name) {
-	char pak_path[MAX_PATH];
-	// Check in Tools
-	snprintf(pak_path, sizeof(pak_path), "%s/%s.pak", TOOLS_PATH, pak_name);
-	if (exists(pak_path))
-		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
-
-	// Check in platform Tools (MinUI community pak convention)
-	snprintf(pak_path, sizeof(pak_path), "%s/" PLATFORM "/%s.pak", TOOLS_PATH, pak_name);
-	if (exists(pak_path))
-		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
-
-	// Check in system Tools
-	snprintf(pak_path, sizeof(pak_path), "%s/Tools/%s.pak", PAKS_PATH, pak_name);
-	if (exists(pak_path))
-		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
-
-	// Check in Emus
-	snprintf(pak_path, sizeof(pak_path), "%s/Emus/%s.pak", PAKS_PATH, pak_name);
-	if (exists(pak_path))
-		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
-
-	// Check in SD Emus
-	snprintf(pak_path, sizeof(pak_path), "%s/Emus/%s.pak", SDCARD_PATH, pak_name);
-	if (exists(pak_path))
-		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
-
-	// Check in platform Emus (MinUI community pak convention)
-	snprintf(pak_path, sizeof(pak_path), "%s/Emus/" PLATFORM "/%s.pak", SDCARD_PATH, pak_name);
-	if (exists(pak_path))
-		return Entry_newNamed(pak_path, ENTRY_PAK, pak_name);
-
-	return NULL;
+// readdir may report DT_UNKNOWN on some filesystems; fall back to stat there
+static int direntIsDir(const char* parent_path, const struct dirent* dp) {
+	if (dp->d_type != DT_UNKNOWN)
+		return dp->d_type == DT_DIR;
+	char full[MAX_PATH];
+	struct stat st;
+	snprintf(full, sizeof(full), "%s/%s", parent_path, dp->d_name);
+	return stat(full, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 int hasEmu(char* emu_name) {
@@ -240,12 +223,22 @@ int hasEmu(char* emu_name) {
 }
 
 int hasCue(char* dir_path, char* cue_path) { // NOTE: dir_path not rom_path
+	cue_path[0] = '\0';						 // never leave callers reading an uninitialized buffer
 	char* slash = strrchr(dir_path, '/');
 	if (!slash)
 		return 0;
 	char* tmp = slash + 1;
 	snprintf(cue_path, MAX_PATH, "%s/%s.cue", dir_path, tmp);
 	return exists(cue_path);
+}
+
+int hasFolderM3u(char* dir_path, char* m3u_path) { // NOTE: dir_path not rom_path
+	m3u_path[0] = '\0';							   // never leave callers reading an uninitialized buffer
+	char* slash = strrchr(dir_path, '/');
+	if (!slash)
+		return 0;
+	snprintf(m3u_path, MAX_PATH, "%s/%s.m3u", dir_path, slash + 1);
+	return exists(m3u_path);
 }
 
 int hasM3u(char* rom_path, char* m3u_path) { // NOTE: rom_path not dir_path
@@ -300,7 +293,7 @@ int canPinEntry(Entry* entry) {
 	return 0;
 }
 
-int hasCollections(void) {
+static int hasCollections(void) {
 	int has = 0;
 	if (!exists(COLLECTIONS_PATH))
 		return has;
@@ -319,7 +312,7 @@ int hasCollections(void) {
 	return has;
 }
 
-int hasRoms(char* dir_name) {
+static int hasRoms(char* dir_name) {
 	int has = 0;
 	char emu_name[MAX_PATH];
 	char rom_path[MAX_PATH];
@@ -408,18 +401,33 @@ static int cacheIsStale(const char* cache_path) {
 	return 0;
 }
 
-static void writeRomsCache(Array* entries) {
-	FILE* file = fopen(EMULIST_CACHE_PATH, "w");
-	if (!file)
+// serialize entries as "path\tname\n" lines and stage via writeFileAtomic so a
+// power cut can never leave a truncated cache. Refuses empty lists — an empty
+// cache newer than its sources would read back as valid-and-fresh and blank
+// the UI on every boot until an mtime bump forced a rescan.
+static void writeEntryCache(const char* cache_path, Array* entries) {
+	if (entries->count == 0)
+		return;
+	size_t cap = 16384, len = 0;
+	char* buf = malloc(cap);
+	if (!buf)
 		return;
 	for (int i = 0; i < entries->count; i++) {
 		Entry* entry = entries->items[i];
-		fputs(entry->path, file);
-		fputc('\t', file);
-		fputs(entry->name, file);
-		fputc('\n', file);
+		size_t need = strlen(entry->path) + strlen(entry->name) + 2;
+		while (len + need + 1 > cap) {
+			cap *= 2;
+			char* grown = realloc(buf, cap);
+			if (!grown) {
+				free(buf);
+				return;
+			}
+			buf = grown;
+		}
+		len += snprintf(buf + len, cap - len, "%s\t%s\n", entry->path, entry->name);
 	}
-	fclose(file);
+	writeFileAtomic(cache_path, buf, len);
+	free(buf);
 }
 
 static Array* readRomsCache(void) {
@@ -436,7 +444,8 @@ static Array* readRomsCache(void) {
 		return NULL;
 
 	Array* entries = Array_new();
-	char line[MAX_PATH];
+	// sized to what writeEntryCache can emit: two MAX_PATH strings + tab + newline
+	char line[MAX_PATH * 2 + 8];
 	while (fgets(line, sizeof(line), file) != NULL) {
 		normalizeNewline(line);
 		trimTrailingNewlines(line);
@@ -455,22 +464,13 @@ static Array* readRomsCache(void) {
 		Array_push(entries, Entry_newNamed(path, ENTRY_DIR, name));
 	}
 	fclose(file);
+	if (entries->count == 0) { // empty cache is never trusted, force rescan
+		EntryArray_free(entries);
+		return NULL;
+	}
 	return entries;
 }
 
-static void writeRomIndexCache(Array* entries) {
-	FILE* file = fopen(ROMINDEX_CACHE_PATH, "w");
-	if (!file)
-		return;
-	for (int i = 0; i < entries->count; i++) {
-		Entry* entry = entries->items[i];
-		fputs(entry->path, file);
-		fputc('\t', file);
-		fputs(entry->name, file);
-		fputc('\n', file);
-	}
-	fclose(file);
-}
 
 static Array* readRomIndexCache(void) {
 	if (cacheIsStale(ROMINDEX_CACHE_PATH))
@@ -481,7 +481,8 @@ static Array* readRomIndexCache(void) {
 		return NULL;
 
 	Array* entries = Array_new();
-	char line[MAX_PATH * 2];
+	// sized to what writeEntryCache can emit: two MAX_PATH strings + tab + newline
+	char line[MAX_PATH * 2 + 8];
 	while (fgets(line, sizeof(line), file) != NULL) {
 		normalizeNewline(line);
 		trimTrailingNewlines(line);
@@ -500,6 +501,10 @@ static Array* readRomIndexCache(void) {
 		Array_push(entries, Entry_newNamed(path, ENTRY_ROM, name));
 	}
 	fclose(file);
+	if (entries->count == 0) { // empty cache is never trusted, force rescan
+		EntryArray_free(entries);
+		return NULL;
+	}
 	return entries;
 }
 
@@ -535,7 +540,7 @@ Array* Content_searchRoms(const char* query) {
 	return results;
 }
 
-Array* getRoms(void) {
+static Array* getRoms(void) {
 	// Try loading from cache first
 	Array* entries = readRomsCache();
 	if (entries)
@@ -638,11 +643,18 @@ Array* getRoms(void) {
 			while ((rom_dp = readdir(rom_dh)) != NULL) {
 				if (hide(rom_dp->d_name))
 					continue;
-				if (rom_dp->d_type == DT_DIR)
-					continue;
 
 				snprintf(rom_path, sizeof(rom_path), "%s/%s",
 						 console_entry->path, rom_dp->d_name);
+
+				if (direntIsDir(console_entry->path, rom_dp)) {
+					// folder game (e.g. Game/Game.m3u): index the resolved
+					// cue/m3u so multi-disc games are searchable too
+					char resolved[MAX_PATH];
+					if (!dirGameFile(rom_path, resolved))
+						continue;
+					snprintf(rom_path, sizeof(rom_path), "%s", resolved);
+				}
 
 				char display_name[MAX_PATH];
 				getDisplayName(rom_path, display_name);
@@ -655,12 +667,12 @@ Array* getRoms(void) {
 			closedir(rom_dh);
 		}
 		EntryArray_sort(rom_index);
-		writeRomIndexCache(rom_index);
+		writeEntryCache(ROMINDEX_CACHE_PATH, rom_index);
 		EntryArray_free(rom_index);
 	}
 
-	// Write cache for next launch
-	writeRomsCache(entries);
+	// Write cache for next launch (refused for an empty scan — see writeEntryCache)
+	writeEntryCache(EMULIST_CACHE_PATH, entries);
 
 	return entries;
 }
@@ -688,7 +700,7 @@ Array* getCollections(void) {
 	return collections;
 }
 
-Array* getRoot(int simple_mode) {
+static Array* getRoot(int simple_mode) {
 	Array* root = Array_new();
 
 	if (Recents_load() && CFG_getShowRecents())
@@ -767,7 +779,7 @@ Array* getRoot(int simple_mode) {
 	return root;
 }
 
-Array* getCollection(char* path) {
+static Array* getCollection(char* path) {
 	Array* entries = Array_new();
 	FILE* file = fopen(path, "r");
 	if (file) {
@@ -790,7 +802,7 @@ Array* getCollection(char* path) {
 	return entries;
 }
 
-Array* getDiscs(char* path) {
+static Array* getDiscs(char* path) {
 	Array* entries = Array_new();
 
 	char base_path[MAX_PATH];
@@ -861,7 +873,7 @@ int getFirstDisc(char* m3u_path, char* disc_path) {
 	return found;
 }
 
-void addEntries(Array* entries, char* path) {
+static void addEntries(Array* entries, char* path) {
 	DIR* dh = opendir(path);
 	if (dh != NULL) {
 		struct dirent* dp;
@@ -875,7 +887,7 @@ void addEntries(Array* entries, char* path) {
 				continue;
 			strncpy(tmp, dp->d_name, remaining - 1);
 			full_path[MAX_PATH - 1] = '\0';
-			int is_dir = dp->d_type == DT_DIR;
+			int is_dir = direntIsDir(path, dp);
 			int type;
 			if (is_dir) {
 				if (suffixMatch(".pak", dp->d_name)) {
@@ -896,7 +908,7 @@ void addEntries(Array* entries, char* path) {
 	}
 }
 
-Array* getEntries(char* path) {
+static Array* getEntries(char* path) {
 	Array* entries = Array_new();
 
 	if (isConsoleDir(path)) { // top-level console folder, might collate
@@ -917,7 +929,7 @@ Array* getEntries(char* path) {
 			while ((dp = readdir(dh)) != NULL) {
 				if (hide(dp->d_name))
 					continue;
-				if (dp->d_type != DT_DIR)
+				if (!direntIsDir(ROMS_PATH, dp))
 					continue;
 				strncpy(tmp, dp->d_name, remaining - 1);
 				full_path[MAX_PATH - 1] = '\0';
@@ -953,7 +965,7 @@ Array* getTools(void) {
 		while ((dp = readdir(sd)) != NULL) {
 			if (hide(dp->d_name))
 				continue;
-			if (dp->d_type != DT_DIR)
+			if (!direntIsDir(TOOLS_PATH, dp))
 				continue;
 			if (isPlatformDirName(dp->d_name))
 				continue;
@@ -974,7 +986,7 @@ Array* getTools(void) {
 		while ((dp = readdir(pd)) != NULL) {
 			if (hide(dp->d_name))
 				continue;
-			if (dp->d_type != DT_DIR || !suffixMatch(".pak", dp->d_name))
+			if (!direntIsDir(plat_path, dp) || !suffixMatch(".pak", dp->d_name))
 				continue;
 			char shadow[MAX_PATH];
 			snprintf(shadow, sizeof(shadow), "%s/%s", TOOLS_PATH, dp->d_name);
@@ -996,7 +1008,7 @@ Array* getTools(void) {
 		while ((dp = readdir(dh)) != NULL) {
 			if (hide(dp->d_name))
 				continue;
-			if (dp->d_type != DT_DIR || !suffixMatch(".pak", dp->d_name))
+			if (!direntIsDir(sys_path, dp) || !suffixMatch(".pak", dp->d_name))
 				continue;
 			char shadow[MAX_PATH];
 			snprintf(shadow, sizeof(shadow), "%s/%s", TOOLS_PATH, dp->d_name);

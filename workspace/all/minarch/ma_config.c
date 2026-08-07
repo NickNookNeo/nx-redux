@@ -408,14 +408,14 @@ char* gamepad_values[] = {
 
 // CONFIG_NONE/CONFIG_CONSOLE/CONFIG_GAME live in ma_internal.h
 
-char* getScreenScalingDesc(void) {
+static char* getScreenScalingDesc(void) {
 	if (GFX_supportsOverscan()) {
 		return "Native uses integer scaling. Aspect uses core nreported aspect ratio.\nAspect screen uses screen aspect ratio\n Fullscreen has non-square\npixels. Cropped is integer scaled then cropped.";
 	} else {
 		return "Native uses integer scaling.\nAspect uses core reported aspect ratio.\nAspect screen uses screen aspect ratio\nFullscreen has non-square pixels.";
 	}
 }
-int getScreenScalingCount(void) {
+static int getScreenScalingCount(void) {
 	return GFX_supportsOverscan() ? 5 : 4;
 }
 
@@ -1111,13 +1111,14 @@ void free_file_list(char** list) {
 
 // CONFIG_WRITE_ALL/CONFIG_WRITE_GAME live in ma_internal.h
 void Config_getPath(char* filename, int override) {
+	// filename is a MAX_PATH buffer in every caller
 	char device_tag[64] = {0};
 	if (config.device_tag)
-		sprintf(device_tag, "-%s", config.device_tag);
+		snprintf(device_tag, sizeof(device_tag), "-%s", config.device_tag);
 	if (override)
-		sprintf(filename, "%s/%s%s.cfg", core.config_dir, game.alt_name, device_tag);
+		snprintf(filename, MAX_PATH, "%s/%s%s.cfg", core.config_dir, game.alt_name, device_tag);
 	else
-		sprintf(filename, "%s/minarch%s.cfg", core.config_dir, device_tag);
+		snprintf(filename, MAX_PATH, "%s/minarch%s.cfg", core.config_dir, device_tag);
 }
 void Config_init(void) {
 	if (!config.default_cfg || config.initialized)
@@ -1195,6 +1196,8 @@ void Config_init(void) {
 	int preset_filecount;
 	char** preset_filelist = list_files_in_folder(SHADERS_FOLDER, &preset_filecount, NULL, ".cfg");
 	config.shaders.options[SH_SHADERS_PRESET].values = preset_filelist;
+	config.shaders.options[SH_SHADERS_PRESET].labels = preset_filelist;
+	config.shaders.options[SH_SHADERS_PRESET].count = preset_filecount;
 
 	// populate shader options
 	// TODO: None option?
@@ -1236,7 +1239,6 @@ void Config_readOptionsString(char* cfg) {
 	if (!cfg)
 		return;
 
-	char key[256];
 	char value[256];
 	for (int i = 0; config.frontend.options[i].key; i++) {
 		Option* option = &config.frontend.options[i];
@@ -1497,15 +1499,15 @@ void Config_restore(void) {
 	char path[MAX_PATH];
 	if (config.loaded == CONFIG_GAME) {
 		if (config.device_tag)
-			sprintf(path, "%s/%s-%s.cfg", core.config_dir, game.alt_name, config.device_tag);
+			snprintf(path, sizeof(path), "%s/%s-%s.cfg", core.config_dir, game.alt_name, config.device_tag);
 		else
-			sprintf(path, "%s/%s.cfg", core.config_dir, game.alt_name);
+			snprintf(path, sizeof(path), "%s/%s.cfg", core.config_dir, game.alt_name);
 		unlink(path);
 	} else if (config.loaded == CONFIG_CONSOLE) {
 		if (config.device_tag)
-			sprintf(path, "%s/minarch-%s.cfg", core.config_dir, config.device_tag);
+			snprintf(path, sizeof(path), "%s/minarch-%s.cfg", core.config_dir, config.device_tag);
 		else
-			sprintf(path, "%s/minarch.cfg", core.config_dir);
+			snprintf(path, sizeof(path), "%s/minarch.cfg", core.config_dir);
 		unlink(path);
 	}
 	config.loaded = CONFIG_NONE;

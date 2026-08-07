@@ -13,13 +13,10 @@
 #include "defines.h"
 #include "ra_offline.h"
 
-// The "Warning: Unknown Emulator" achievement (same ID minarch special-cases
-// in ra_integration.c). nx-redux always runs softcore, where RA suppresses
-// this warning in-game - hide it in the browser and counts too.
-#define RAT_UNKNOWN_EMULATOR_ACH_ID 101000001
-
+// nx-redux always runs softcore, where RA suppresses the "Warning: Unknown
+// Emulator" achievement in-game - hide it in the browser and counts too.
 static bool rat_is_hidden_achievement(uint32_t id) {
-	return id == RAT_UNKNOWN_EMULATOR_ACH_ID;
+	return id == RA_UNKNOWN_EMULATOR_ACHIEVEMENT_ID;
 }
 
 // Match what the in-game achievements menu shows

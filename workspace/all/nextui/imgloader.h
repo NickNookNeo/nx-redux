@@ -26,16 +26,12 @@ extern SDL_Surface* thumbbmp;
 // Synchronization primitives (owned by imgloader.c)
 extern SDL_mutex* bgMutex;		   // protects: folderbgbmp, folderbgchanged
 extern SDL_mutex* thumbMutex;	   // protects: thumbbmp, thumbchanged
-extern SDL_mutex* frameMutex;	   // protects: frameReady; paired with flipCond
-extern SDL_mutex* fontMutex;	   // protects: font rendering calls
-extern SDL_cond* flipCond;		   // signalled when frameReady becomes true
 extern SDL_mutex* bgqueueMutex;	   // alias to internal bgQueue.mutex (used by render loop)
 extern SDL_mutex* thumbqueueMutex; // alias to internal thumbQueue.mutex (used by render loop)
 
 // Shared state flags (see mutex comments above for which mutex protects each)
 extern int folderbgchanged;
 extern int thumbchanged;
-extern bool frameReady;
 
 // Atomic state accessors
 void setNeedDraw(int v);

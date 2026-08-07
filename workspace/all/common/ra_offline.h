@@ -19,6 +19,10 @@
 
 #define RA_OFFLINE_MAX_PENDING 1024
 
+// rcheevos' synthetic "Unknown Emulator" warning achievement (shared by
+// minarch's RA integration and the ratools pak)
+#define RA_UNKNOWN_EMULATOR_ACHIEVEMENT_ID 101000001
+
 typedef enum {
 	RA_NET_ONLINE = 0,
 	RA_NET_OFFLINE,

@@ -13,7 +13,7 @@ int Option_getValueIndex(Option* item, const char* value) {
 	}
 	return 0;
 }
-void Option_setValue(Option* item, const char* value) {
+static void Option_setValue(Option* item, const char* value) {
 	// TODO: store previous value?
 	item->value = Option_getValueIndex(item, value);
 }
@@ -55,7 +55,7 @@ void OptionList_init(const struct retro_core_option_definition* defs) {
 
 			// getOptionNameFromKey may return a fixed string longer than desc,
 			// so size the allocation from what is actually copied
-			const char* opt_name = getOptionNameFromKey(def->key, def->desc);
+			const char* opt_name = getOptionNameFromKey(def->key, def->desc ? def->desc : def->key);
 			len = strlen(opt_name) + 1;
 			item->name = calloc(len, sizeof(char));
 			strcpy(item->name, opt_name);
@@ -111,8 +111,9 @@ void OptionList_v2_init(const struct retro_core_options_v2* opt_defs) {
 	struct retro_core_option_v2_category* cats = opt_defs->categories;
 	struct retro_core_option_v2_definition* defs = opt_defs->definitions;
 
+	// categories may legally be NULL (all options uncategorized)
 	int cat_count = 0;
-	while (cats[cat_count].key)
+	while (cats && cats[cat_count].key)
 		cat_count++;
 
 	int count = 0;
@@ -129,7 +130,7 @@ void OptionList_v2_init(const struct retro_core_options_v2* opt_defs) {
 			OptionCategory* item = &config.core.categories[i];
 
 			item->key = strdup(cat->key);
-			item->desc = strdup(cat->desc);
+			item->desc = strdup(cat->desc ? cat->desc : cat->key);
 			item->info = cat->info ? strdup(cat->info) : NULL;
 			printf("CATEGORY %s\n", item->key);
 		}
@@ -146,7 +147,7 @@ void OptionList_v2_init(const struct retro_core_options_v2* opt_defs) {
 			Option* item = &config.core.options[i];
 
 			item->key = strdup(def->key);
-			item->name = strdup(getOptionNameFromKey(def->key, def->desc_categorized ? def->desc_categorized : def->desc));
+			item->name = strdup(getOptionNameFromKey(def->key, def->desc_categorized ? def->desc_categorized : (def->desc ? def->desc : def->key)));
 			item->category = def->category_key ? strdup(def->category_key) : NULL;
 
 			if (def->info) {
@@ -207,11 +208,17 @@ void OptionList_vars(const struct retro_variable* vars) {
 			item->var = calloc(len, sizeof(char));
 			strcpy(item->var, var->value);
 
+			// spec format is "Name; val1|val2" — tolerate a missing "; "
+			// separator: fall back to the key for the name and treat the whole
+			// string as the value list (was a NULL deref below)
 			char* tmp = strchr(item->var, ';');
 			if (tmp && *(tmp + 1) == ' ') {
 				*tmp = '\0';
 				item->name = item->var;
 				tmp += 2;
+			} else {
+				item->name = strdup(item->key);
+				tmp = item->var;
 			}
 
 			char* opt = tmp;
@@ -274,9 +281,6 @@ void OptionList_reset(void) {
 			free(item->name);
 		free(item->category);
 	}
-	if (config.core.enabled_options)
-		free(config.core.enabled_options);
-	config.core.enabled_count = 0;
 	free(config.core.options);
 	config.core.options = NULL;
 	config.core.count = 0;
@@ -292,7 +296,7 @@ void OptionList_reset(void) {
 	}
 }
 
-Option* OptionList_getOption(OptionList* list, const char* key) {
+static Option* OptionList_getOption(OptionList* list, const char* key) {
 	for (int i = 0; i < list->count; i++) {
 		Option* item = &list->options[i];
 		if (!strcmp(item->key, key))
@@ -312,15 +316,6 @@ char* OptionList_getOptionValue(OptionList* list, const char* key) {
 	}
 	// else LOG_warn("unknown option %s \n", key);
 	return NULL;
-}
-void OptionList_setOptionRawValue(OptionList* list, const char* key, int value) {
-	Option* item = OptionList_getOption(list, key);
-	if (item) {
-		item->value = value;
-		list->changed = 1;
-		if (exactMatch((char*)core.tag, "GB") && containsString(item->key, "palette"))
-			Special_updatedDMGPalette(3); // from options
-	}
 }
 // Core option batching (toggled via minarch_beginOptionsBatch/endOptionsBatch).
 // While batching, OptionList_setOptionValue records that something changed but

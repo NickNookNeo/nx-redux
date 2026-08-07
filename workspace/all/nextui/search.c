@@ -121,7 +121,7 @@ SearchResult Search_handleInput(unsigned long now) {
 	return result;
 }
 
-void Search_render(SDL_Surface* screen, SDL_Surface* blackBG, int lastScreen) {
+void Search_render(SDL_Surface* screen, int lastScreen) {
 	if (lastScreen != SCREEN_SEARCH) {
 		onBackgroundLoaded(NULL);
 		GFX_clearLayers(LAYER_THUMBNAIL);

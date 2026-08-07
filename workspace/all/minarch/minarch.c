@@ -266,8 +266,8 @@ int main(int argc, char* argv[]) {
 	if (argc < 3)
 		return EXIT_FAILURE;
 
-	strcpy(core_path, argv[1]);
-	strcpy(rom_path, argv[2]);
+	snprintf(core_path, sizeof(core_path), "%s", argv[1]);
+	snprintf(rom_path, sizeof(rom_path), "%s", argv[2]);
 	getEmuName(rom_path, tag_name);
 
 	screen = GFX_init(MODE_MENU);
@@ -286,7 +286,6 @@ int main(int argc, char* argv[]) {
 	PWR_init();
 	if (!HAS_POWER_BUTTON)
 		PWR_disableSleep();
-	MSG_init();
 	IMG_Init(IMG_INIT_PNG);
 	Core_open(core_path, tag_name);
 
@@ -309,7 +308,6 @@ int main(int argc, char* argv[]) {
 	RA_setMemoryAccessors(core.get_memory_data, core.get_memory_size);
 	RA_init();
 
-	Menu_setCoreVersionDesc(core.version);
 	Core_load();
 
 	Input_init(NULL);
@@ -485,16 +483,17 @@ int main(int argc, char* argv[]) {
 	}
 	int cw, ch;
 	unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
-
-	renderer.dst = pixels;
-	SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
-		pixels, cw, ch, 32, cw * 4, SDL_PIXELFORMAT_ABGR8888);
-	SDL_Surface* converted = SDL_ConvertSurfaceFormat(rawSurface, screen->format->format, 0);
-	screen = converted;
-	SDL_FreeSurface(rawSurface);
-	free(pixels);
-	GFX_animateSurfaceOpacity(converted, 0, 0, cw, ch, 255, 0, CFG_getMenuTransitions() ? 200 : 20, 1);
-	SDL_FreeSurface(converted);
+	if (pixels) {
+		SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
+			pixels, cw, ch, 32, cw * 4, SDL_PIXELFORMAT_ABGR8888);
+		SDL_Surface* converted = rawSurface ? SDL_ConvertSurfaceFormat(rawSurface, screen->format->format, 0) : NULL;
+		SDL_FreeSurface(rawSurface);
+		free(pixels);
+		if (converted) {
+			GFX_animateSurfaceOpacity(converted, 0, 0, cw, ch, 255, 0, CFG_getMenuTransitions() ? 200 : 20, 1);
+			SDL_FreeSurface(converted);
+		}
+	}
 
 	Video_cleanup();
 
@@ -520,7 +519,6 @@ finish:
 	Core_close();
 	Config_quit();
 	Special_quit();
-	MSG_quit();
 	PWR_quit();
 	VIB_quit();
 	AudioMgr_quit();
@@ -542,18 +540,8 @@ finish:
 SDL_Surface* minarch_getScreen(void) {
 	return screen;
 }
-int minarch_getDeviceWidth(void) {
-	return DEVICE_WIDTH;
-}
-int minarch_getDeviceHeight(void) {
-	return DEVICE_HEIGHT;
-}
-// minarch_getMenuBitmap() is defined next to the menu state, which is file-static.
 
 // Game state accessors
-const char* minarch_getCoreTag(void) {
-	return core.tag;
-}
 const char* minarch_getGameName(void) {
 	return game.name;
 }

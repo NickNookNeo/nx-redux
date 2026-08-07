@@ -12,7 +12,7 @@
 #include "ma_cheats.h"
 #include "ma_shaders.h"
 
-int Menu_messageWithFont(char* message, char** pairs, TTF_Font* f) {
+static int Menu_messageWithFont(char* message, char** pairs, TTF_Font* f) {
 	GFX_setMode(MODE_MAIN);
 	bool dirty = true;
 	while (1) {
@@ -24,13 +24,15 @@ int Menu_messageWithFont(char* message, char** pairs, TTF_Font* f) {
 
 		PWR_update(&dirty, NULL, Menu_beforeSleep, Menu_afterSleep);
 
-
-		GFX_clear(screen);
-		GFX_blitMessage(f, message, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING), screen->w - SCALE1(2 * PADDING), screen->h - SCALE1(PILL_SIZE + PADDING)});
-		UI_renderButtonHintBar(screen, pairs);
-		GFX_flip(screen);
-		dirty = false;
-
+		if (dirty) {
+			GFX_clear(screen);
+			GFX_blitMessage(f, message, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING), screen->w - SCALE1(2 * PADDING), screen->h - SCALE1(PILL_SIZE + PADDING)});
+			UI_renderButtonHintBar(screen, pairs);
+			GFX_flip(screen);
+			dirty = false;
+		} else {
+			GFX_delay();
+		}
 
 		hdmimon();
 	}
@@ -42,13 +44,6 @@ int Menu_message(char* message, char** pairs) {
 	return Menu_messageWithFont(message, pairs, font.medium);
 }
 
-
-int MenuList_freeItems(MenuList* list, int i) {
-	// TODO: what calls this? do menu's register for needing it? then call it on quit for each?
-	if (list->items)
-		free(list->items);
-	return MENU_CALLBACK_NOP;
-}
 
 int OptionFrontend_optionChanged(MenuList* list, int i) {
 	MenuItem* item = &list->items[i];
@@ -115,8 +110,9 @@ int OptionControls_bind(MenuList* list, int i) {
 		GFX_startFrame();
 		PAD_poll();
 
-		// NOTE: off by one because of the initial NONE value
-		for (int id = 0; id <= LOCAL_BUTTON_COUNT; id++) {
+		// NOTE: off by one because of the initial NONE value; id 0 is NONE
+		// itself — no button to poll, and 1 << -1 is undefined behavior
+		for (int id = 1; id <= LOCAL_BUTTON_COUNT; id++) {
 			if (PAD_justPressed(1 << (id - 1))) {
 				item->value = id;
 				button->local = id - 1;
@@ -227,8 +223,9 @@ int OptionShortcuts_bind(MenuList* list, int i) {
 		GFX_startFrame();
 		PAD_poll();
 
-		// NOTE: off by one because of the initial NONE value
-		for (int id = 0; id <= LOCAL_BUTTON_COUNT; id++) {
+		// NOTE: off by one because of the initial NONE value; id 0 is NONE
+		// itself — no button to poll, and 1 << -1 is undefined behavior
+		for (int id = 1; id <= LOCAL_BUTTON_COUNT; id++) {
 			if (PAD_justPressed(1 << (id - 1))) {
 				item->value = id;
 				button->local = id - 1;
@@ -345,11 +342,6 @@ int OptionSaveChanges_openMenu(MenuList* list, int i) {
 	OptionSaveChanges_menu.desc = getSaveDesc();
 	Menu_options(&OptionSaveChanges_menu);
 	return MENU_CALLBACK_NOP;
-}
-
-int OptionQuicksave_onConfirm(MenuList* list, int i) {
-	Menu_beforeSleep();
-	PWR_powerOff(0);
 }
 
 int OptionCheats_optionChanged(MenuList* list, int i) {
@@ -497,7 +489,7 @@ static MenuList PragmasOptions_menu = {
 	.on_confirm = NULL,
 	.on_change = OptionPragmas_optionChanged,
 	.items = NULL};
-int OptionPragmas_openMenu(MenuList* list, int i) {
+static int OptionPragmas_openMenu(MenuList* list, int i) {
 	int progressCount = 0;
 	int totalcount = 0;
 	for (int y = 0; y < config.shaders.options[SH_NROFSHADERS].value; y++) {

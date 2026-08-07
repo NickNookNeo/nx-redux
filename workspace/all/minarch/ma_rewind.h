@@ -42,25 +42,22 @@ typedef struct {
 	int has_prev_enc;		 // 1 if prev_state_enc is valid
 	int has_prev_dec;		 // 1 if prev_state_dec is valid
 
-	int granularity_frames;
 	int interval_ms;
 	uint32_t last_push_ms;
 	uint32_t last_step_ms;
 	int playback_interval_ms;
-	int use_time_cadence;
-	int frame_counter;
 	unsigned int generation;
 	int enabled;
 	int audio;
 	int compress;
 	int lz4_acceleration;
-	int logged_first;
 
 	// async capture/compression
 	pthread_t worker;
 	pthread_mutex_t lock;
 	pthread_mutex_t queue_mx;
 	pthread_cond_t queue_cv;
+	pthread_cond_t slot_cv; // signaled whenever a capture slot is freed
 	int worker_stop;
 	int worker_running;
 	int locks_ready;
@@ -95,7 +92,6 @@ extern RewindContext rewind_ctx;
 
 int Rewind_init(size_t state_size);
 void Rewind_free(void);
-void Rewind_reset(void);
 void Rewind_push(int force);
 int Rewind_step_back(void);
 void Rewind_sync_encode_state(void);

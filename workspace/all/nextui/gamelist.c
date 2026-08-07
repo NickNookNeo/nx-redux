@@ -105,11 +105,14 @@ static void resolveAndLoadBackground(Entry* entry, const char* rompath,
 		cmpPath = entry->path;
 		snprintf(bgPath, sizeof(bgPath), TOOLS_PATH "/.media/%s/bg.png",
 				 Shortcuts_getPakBasename(entry->path));
-	} else if (exists(defaultBgPath) &&
-			   strcmp(defaultBgPath, folderBgPath) != 0) {
+	} else if (exists(defaultBgPath)) {
+		// default background is entry-independent: the change-skip below must
+		// compare paths only, or the "already loaded" case would fall through
+		// and clobber the caller's configured list_show_entry_names
 		cmpPath = defaultBgPath;
 		strncpy(bgPath, defaultBgPath, sizeof(bgPath) - 1);
 	} else {
+		// genuinely no background to show — the list needs its names
 		*list_show_entry_names = true;
 		return;
 	}
@@ -118,7 +121,7 @@ static void resolveAndLoadBackground(Entry* entry, const char* rompath,
 		return;
 
 	// Skip if background hasn't changed
-	int curType = entry ? entry->type : -1;
+	int curType = (cmpPath == defaultBgPath) ? -1 : (entry ? entry->type : -1);
 	if (strcmp(cmpPath, folderBgPath) == 0 && *lastType == curType)
 		return;
 
@@ -459,10 +462,36 @@ static bool entryUsesRomsetNames(Entry* entry) {
 // Real file rename of a ROM plus its art, saves and states, all keyed by the
 // ROM's base name (filename minus final extension). Returns the new full ROM
 // path in new_path (>= MAX_PATH), or false if the rename was rejected.
+// Single-line persist files written at minarch quit (game-switcher resume,
+// sleep auto-resume) hold the SDCARD-relative rom path; re-point them when
+// that rom is renamed so a pending resume doesn't dead-end.
+static void renamePersistLine(const char* file, const char* old_rel, const char* new_rel) {
+	if (!exists((char*)file))
+		return;
+	char line[MAX_PATH] = "";
+	getFile((char*)file, line, sizeof(line));
+	size_t len = strlen(line);
+	while (len && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+		line[--len] = '\0';
+	if (exactMatch(line, (char*)old_rel))
+		putFile((char*)file, (char*)new_rel);
+}
+
 static bool renameRomFiles(Entry* entry, const char* newbase, char* new_path) {
+	// A folder-named cue/m3u picked from a collection IS its folder game
+	// (delete has the same special case): rename the whole folder layout,
+	// not just the inner file, or dirGameFile stops resolving the folder.
+	bool is_dir_game = entry->type == ENTRY_DIR;
+	char folder_parent[MAX_PATH];
+	const char* rom_path = entry->path;
+	if (!is_dir_game && isFolderGameFile(entry->path, folder_parent)) {
+		rom_path = folder_parent;
+		is_dir_game = true;
+	}
+
 	// split path into <dir>/<filename>
 	char dir[MAX_PATH];
-	strncpy(dir, entry->path, sizeof(dir) - 1);
+	strncpy(dir, rom_path, sizeof(dir) - 1);
 	dir[sizeof(dir) - 1] = '\0';
 	char* slash = strrchr(dir, '/');
 	if (!slash)
@@ -473,7 +502,6 @@ static bool renameRomFiles(Entry* entry, const char* newbase, char* new_path) {
 	// oldbase = filename minus final extension; ext keeps the leading dot.
 	// Folder games are directories, so the whole name is the base — a dotted
 	// folder like "Game v1.1" must not be split on its last dot.
-	bool is_dir_game = entry->type == ENTRY_DIR;
 	char oldbase[MAX_PATH];
 	strncpy(oldbase, filename, sizeof(oldbase) - 1);
 	oldbase[sizeof(oldbase) - 1] = '\0';
@@ -496,7 +524,7 @@ static bool renameRomFiles(Entry* entry, const char* newbase, char* new_path) {
 		return false;
 
 	char emu[MAX_PATH];
-	getEmuName(entry->path, emu);
+	getEmuName((char*)rom_path, emu);
 
 	// 0) folder games: rename the inner folder-named .cue/.m3u (and matching
 	// art in the folder's own .media) BEFORE the folder itself moves — the
@@ -506,15 +534,15 @@ static bool renameRomFiles(Entry* entry, const char* newbase, char* new_path) {
 		const char* game_exts[] = {".cue", ".m3u"};
 		for (int i = 0; i < 2; i++) {
 			char from[MAX_PATH];
-			snprintf(from, sizeof(from), "%s/%s%s", entry->path, oldbase, game_exts[i]);
+			snprintf(from, sizeof(from), "%s/%s%s", rom_path, oldbase, game_exts[i]);
 			if (exists(from)) {
 				char to[MAX_PATH];
-				snprintf(to, sizeof(to), "%s/%s%s", entry->path, newbase, game_exts[i]);
+				snprintf(to, sizeof(to), "%s/%s%s", rom_path, newbase, game_exts[i]);
 				rename(from, to);
 			}
 		}
 		char inner_media[MAX_PATH];
-		snprintf(inner_media, sizeof(inner_media), "%s/.media", entry->path);
+		snprintf(inner_media, sizeof(inner_media), "%s/.media", rom_path);
 		renameSweepDir(inner_media, oldbase, newbase);
 	}
 
@@ -582,8 +610,15 @@ static bool renameRomFiles(Entry* entry, const char* newbase, char* new_path) {
 			snprintf(new_line, sizeof(new_line), "%s/%s%s", dir, newbase, ext);
 		}
 
-		if (old_line[0] && prefixMatch(SDCARD_PATH, old_line) && prefixMatch(SDCARD_PATH, new_line))
-			updateCollectionLines(old_line + strlen(SDCARD_PATH), new_line + strlen(SDCARD_PATH));
+		if (old_line[0] && prefixMatch(SDCARD_PATH, old_line) && prefixMatch(SDCARD_PATH, new_line)) {
+			char* old_rel = old_line + strlen(SDCARD_PATH);
+			char* new_rel = new_line + strlen(SDCARD_PATH);
+			updateCollectionLines(old_rel, new_rel);
+			// keep Recently Played and the quit-time resume pointers current
+			Recents_renamePath(old_rel, new_rel);
+			renamePersistLine(GAME_SWITCHER_PERSIST_PATH, old_rel, new_rel);
+			renamePersistLine(AUTO_RESUME_PATH, old_rel, new_rel);
+		}
 	}
 
 	return true;
@@ -592,6 +627,7 @@ static bool renameRomFiles(Entry* entry, const char* newbase, char* new_path) {
 // Full-screen blocking confirm dialog. Returns true on A, false on B.
 static bool confirmModal(const char* title, const char* subtitle) {
 	bool result = false;
+	bool dirty = true;
 	GFX_clearLayers(LAYER_ALL);
 	while (1) {
 		GFX_startFrame();
@@ -604,8 +640,15 @@ static bool confirmModal(const char* title, const char* subtitle) {
 			result = false;
 			break;
 		}
-		UI_renderConfirmDialog(screen, title, subtitle);
-		GFX_flip(screen);
+		// keep auto-sleep and the power button alive while the modal blocks
+		PWR_update(&dirty, NULL, NULL, NULL);
+		if (dirty) {
+			UI_renderConfirmDialog(screen, title, subtitle);
+			GFX_flip(screen);
+			dirty = false;
+		} else {
+			GFX_delay();
+		}
 	}
 	GFX_clearLayers(LAYER_ALL);
 	return result;
@@ -635,6 +678,7 @@ static bool settingsPinAllows(Entry* entry) {
 		PinDialog_init("Enter Settings PIN");
 		PinDialog_setError(error);
 		bool cancelled = false;
+		bool dirty = true;
 		PinDialogResult r = {PINDIALOG_NONE, ""};
 		while (1) {
 			GFX_startFrame();
@@ -646,8 +690,17 @@ static bool settingsPinAllows(Entry* entry) {
 				cancelled = true;
 				break;
 			}
-			PinDialog_render(screen);
-			GFX_flip(screen);
+			// any held/pressed button may have changed a digit
+			if (PAD_anyPressed())
+				dirty = true;
+			PWR_update(&dirty, NULL, NULL, NULL);
+			if (dirty) {
+				PinDialog_render(screen);
+				GFX_flip(screen);
+				dirty = false;
+			} else {
+				GFX_delay();
+			}
 		}
 		PinDialog_quit();
 		if (cancelled)
@@ -686,6 +739,7 @@ static int pickCollectionModal(Array* collections) {
 	ListDialog_setItems(items, count);
 
 	int chosen = -1;
+	bool dirty = true;
 	GFX_clearLayers(LAYER_ALL);
 	while (1) {
 		GFX_startFrame();
@@ -699,8 +753,17 @@ static int pickCollectionModal(Array* collections) {
 			chosen = -1;
 			break;
 		}
-		ListDialog_render(screen);
-		GFX_flip(screen);
+		// any held/pressed button may have moved the selection
+		if (PAD_anyPressed())
+			dirty = true;
+		PWR_update(&dirty, NULL, NULL, NULL);
+		if (dirty) {
+			ListDialog_render(screen);
+			GFX_flip(screen);
+			dirty = false;
+		} else {
+			GFX_delay();
+		}
 	}
 	ListDialog_quit();
 	GFX_clearLayers(LAYER_ALL);
@@ -769,7 +832,10 @@ static void doAddToCollection(const char* rom_path) {
 	EntryArray_free(collections);
 }
 
-static void doRename(Entry* entry, int sel) {
+// Returns true when something was actually renamed (alias or file), so the
+// caller knows to refresh other views (eg. a pinned copy at root).
+static bool doRename(Entry* entry, int sel) {
+	bool renamed = false;
 	char prompt[MAX_PATH];
 	snprintf(prompt, sizeof(prompt), "Rename: %s", entry->name);
 	// tg5050: release the DRM display before the external keyboard binary grabs
@@ -780,7 +846,7 @@ static void doRename(Entry* entry, int sel) {
 	DisplayHelper_recoverDisplay();
 	if (!newname || strlen(newname) == 0) {
 		free(newname);
-		return;
+		return false;
 	}
 
 	// The shown name may come from a map.txt display alias rather than the
@@ -823,14 +889,18 @@ static void doRename(Entry* entry, int sel) {
 		setMapAlias(home_map, home_key, newname);
 		setMapAlias(coll_map, coll_key, newname);
 		reloadDirectoryAt(stack->count - 1, sel);
+		renamed = true;
 	} else if (!strchr(newname, '/')) {
 		// no alias: rename the real file (+ sweep collection paths / saves / states)
 		char new_path[MAX_PATH];
-		if (renameRomFiles(entry, newname, new_path))
+		if (renameRomFiles(entry, newname, new_path)) {
 			reloadDirectoryAt(stack->count - 1, sel);
+			renamed = true;
+		}
 	}
 
 	free(newname);
+	return renamed;
 }
 
 // Netplay-capable = the entry's owning emu pak ships a "netplay" marker
@@ -917,7 +987,10 @@ void GameList_runContextAction(int id) {
 	}
 	case 10: // Remove Game (Recently Played)
 		if (entry) {
-			Recents_removeAt(sel);
+			// the visible list hides unavailable recents, so the selection
+			// index doesn't line up with the recents array — remove by path
+			if (prefixMatch(SDCARD_PATH, entry->path))
+				Recents_removeByPath(entry->path + strlen(SDCARD_PATH));
 			reloadDirectoryAt(stack->count - 1, sel);
 		}
 		break;
@@ -977,6 +1050,9 @@ void GameList_runContextAction(int id) {
 					snprintf(amap, sizeof(amap), "%s/map.txt", COLLECTIONS_PATH);
 					dropMapKey(amap, coll_key);
 				}
+				// root too: a pinned copy of the deleted rom must not linger
+				// as a dead shortcut (mirrors pin/unpin)
+				reloadDirectoryAt(0, root_sel);
 				reloadDirectoryAt(stack->count - 1, sel);
 			}
 		}
@@ -985,7 +1061,9 @@ void GameList_runContextAction(int id) {
 		if (entry) {
 			char game_file[MAX_PATH];
 			if (entry->type == ENTRY_ROM || entryFolderGame(entry, game_file))
-				doRename(entry, sel);
+				if (doRename(entry, sel))
+					// root too: refresh any pinned copy (mirrors pin/unpin)
+					reloadDirectoryAt(0, root_sel);
 		}
 		break;
 	case 34: // Add to Collection
@@ -1000,15 +1078,12 @@ void GameList_runContextAction(int id) {
 		break;
 	case 35: // Launch with Netplay
 		if (entry && entryNetplayCapable(entry)) {
-			// snapshot before Entry_open: its directory fall-through can
-			// rebuild the stack and free entry
-			bool was_dir = entry->type == ENTRY_DIR;
 			putFile(NETPLAY_LAUNCH_PATH, "1\n");
 			Entry_open(entry);
-			// folder games launch via openDirectory's auto-launch; if that
-			// fell through (eg. empty m3u) nothing was queued and the flag
-			// would stay armed until next boot — disarm it
-			if (was_dir && !quit)
+			// if no launch was queued (folder auto-launch fell through, or any
+			// early-out in the rom path) the flag would stay armed and turn the
+			// next unrelated launch into a netplay launch — disarm it
+			if (!quit)
 				unlink(NETPLAY_LAUNCH_PATH);
 		}
 		break;
@@ -1059,21 +1134,21 @@ GameListResult GameList_handleInput(unsigned long now, int currentScreen,
 
 		if (stack->count == 1) {
 			// Root menu (main console list)
-			strncpy(items[idx].label, "Refresh Roms", CONTEXTMENU_MAX_TEXT);
+			snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Refresh Roms");
 			items[idx].id = 1;
 			idx++;
 			// Tools must stay reachable here even when "Show Tools" is off:
 			// Settings.pak lives inside Tools, so hiding Tools would
 			// otherwise lock the user out of re-enabling it.
 			if (!gl_simple_mode && hasTools()) {
-				strncpy(items[idx].label, "Tools", CONTEXTMENU_MAX_TEXT);
+				snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Tools");
 				items[idx].id = 2;
 				idx++;
 			}
 		} else if (exactMatch(top->path, FAUX_RECENT_PATH)) {
 			// Recently Played
 			if (entry) {
-				strncpy(items[idx].label, "Remove Game", CONTEXTMENU_MAX_TEXT);
+				snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Remove Game");
 				items[idx].id = 10;
 				idx++;
 			}
@@ -1081,10 +1156,10 @@ GameListResult GameList_handleInput(unsigned long now, int currentScreen,
 			// Tools listing
 			if (entry) {
 				if (Shortcuts_exists(entry->path + strlen(SDCARD_PATH))) {
-					strncpy(items[idx].label, "Unpin Tool", CONTEXTMENU_MAX_TEXT);
+					snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Unpin Tool");
 					items[idx].id = 21;
 				} else {
-					strncpy(items[idx].label, "Pin Tool", CONTEXTMENU_MAX_TEXT);
+					snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Pin Tool");
 					items[idx].id = 20;
 				}
 				idx++;
@@ -1093,30 +1168,30 @@ GameListResult GameList_handleInput(unsigned long now, int currentScreen,
 			// ROM listing (console directory or subfolder)
 			if (canPinEntry(entry)) {
 				if (Shortcuts_exists(entry->path + strlen(SDCARD_PATH))) {
-					strncpy(items[idx].label, "Unpin Item", CONTEXTMENU_MAX_TEXT);
+					snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Unpin Item");
 					items[idx].id = 31;
 				} else {
-					strncpy(items[idx].label, "Pin Item", CONTEXTMENU_MAX_TEXT);
+					snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Pin Item");
 					items[idx].id = 30;
 				}
 				idx++;
 			}
 			char game_file[MAX_PATH];
 			if (entry->type == ENTRY_ROM || entryFolderGame(entry, game_file)) {
-				strncpy(items[idx].label, "Delete Rom", CONTEXTMENU_MAX_TEXT);
+				snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Delete Rom");
 				items[idx].id = 32;
 				idx++;
-				strncpy(items[idx].label, "Rename Rom", CONTEXTMENU_MAX_TEXT);
+				snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Rename Rom");
 				items[idx].id = 33;
 				idx++;
-				strncpy(items[idx].label, "Add to Collection", CONTEXTMENU_MAX_TEXT);
+				snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Add to Collection");
 				items[idx].id = 34;
 				idx++;
 				// Netplay launch lives on the Y button (with its own hint), so it
 				// intentionally has no context-menu entry; case 35 stays as the
 				// shared launch path the Y handler documents.
 				if (entryEmuOptionsCapable(entry)) {
-					strncpy(items[idx].label, "Emulator Options", CONTEXTMENU_MAX_TEXT);
+					snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Emulator Options");
 					items[idx].id = 36;
 					idx++;
 				}
@@ -1124,7 +1199,7 @@ GameListResult GameList_handleInput(unsigned long now, int currentScreen,
 		}
 
 		if (idx > 0) {
-			ContextMenu_open("Options", items, idx);
+			ContextMenu_open(items, idx);
 			*dirty = true;
 		}
 
@@ -1244,13 +1319,10 @@ GameListResult GameList_handleInput(unsigned long now, int currentScreen,
 	// Y launches netplay-capable ROMs with netplay (works at root for
 	// pinned games too — root Search moved to START for this)
 	else if (total > 0 && PAD_justReleased(BTN_Y) && entryNetplayCapable(entry)) {
-		// snapshot before Entry_open: its directory fall-through can rebuild
-		// the stack and free entry
-		bool was_dir = entry->type == ENTRY_DIR;
 		putFile(NETPLAY_LAUNCH_PATH, "1\n");
 		Entry_open(entry);
-		// folder games: disarm if the auto-launch fell through (see case 35)
-		if (was_dir && !quit)
+		// disarm if no launch was queued, whatever the entry type (see case 35)
+		if (!quit)
 			unlink(NETPLAY_LAUNCH_PATH);
 		*dirty = true;
 	}

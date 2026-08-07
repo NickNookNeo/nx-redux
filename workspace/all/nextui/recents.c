@@ -22,6 +22,8 @@ void Recents_quit(void) {
 		RecentArray_free(recents);
 		recents = NULL;
 	}
+	free(recent_alias);
+	recent_alias = NULL;
 }
 
 void Recents_setHasEmu(HasEmuFunc func) {
@@ -34,7 +36,7 @@ void Recents_setHasM3u(HasM3uFunc func) {
 ///////////////////////////////////////
 // Recent struct methods
 
-Recent* Recent_new(char* path, char* alias) {
+static Recent* Recent_new(char* path, char* alias) {
 	Recent* self = malloc(sizeof(Recent));
 	if (!self)
 		return NULL;
@@ -54,14 +56,14 @@ Recent* Recent_new(char* path, char* alias) {
 	self->available = _hasEmu ? _hasEmu(emu_name) : 0;
 	return self;
 }
-void Recent_free(Recent* self) {
+static void Recent_free(Recent* self) {
 	free(self->path);
 	if (self->alias)
 		free(self->alias);
 	free(self);
 }
 
-int RecentArray_indexOf(Array* self, char* str) {
+static int RecentArray_indexOf(Array* self, char* str) {
 	for (int i = 0; i < self->count; i++) {
 		Recent* item = self->items[i];
 		if (exactMatch(item->path, str))
@@ -79,7 +81,7 @@ void RecentArray_free(Array* self) {
 ///////////////////////////////////////
 // Core API
 
-void Recents_save(void) {
+static void Recents_save(void) {
 	FILE* file = fopen(RECENT_PATH, "w");
 	if (file) {
 		for (int i = 0; i < recents->count; i++) {
@@ -108,7 +110,7 @@ void Recents_add(char* path, char* alias) {
 			Recent_free(Array_pop(recents));
 		}
 		Array_unshift(recents, recent);
-	} else if (id > 0) { // bump to top
+	} else { // refresh the alias even when already at the top (id == 0)
 		Recent* existing = recents->items[id];
 		if (alias) {
 			char* new_alias = strdup(alias);
@@ -117,7 +119,7 @@ void Recents_add(char* path, char* alias) {
 				existing->alias = new_alias;
 			}
 		}
-		for (int i = id; i > 0; i--) {
+		for (int i = id; i > 0; i--) { // bump to top
 			void* tmp = recents->items[i - 1];
 			recents->items[i - 1] = recents->items[i];
 			recents->items[i] = tmp;
@@ -237,9 +239,6 @@ int Recents_load(void) {
 ///////////////////////////////////////
 // Access
 
-Array* Recents_getArray(void) {
-	return recents;
-}
 int Recents_count(void) {
 	return recents ? recents->count : 0;
 }
@@ -256,6 +255,35 @@ void Recents_removeAt(int index) {
 	Recent* recent = recents->items[index];
 	Array_remove(recents, recent);
 	Recent_free(recent);
+	Recents_save();
+}
+
+void Recents_removeByPath(char* path) {
+	if (!recents)
+		return;
+	int index = RecentArray_indexOf(recents, path);
+	if (index < 0)
+		return;
+	Recents_removeAt(index);
+}
+
+// A real file rename: keep the Recently Played entry pointing at the new path.
+// The stored alias came from the old filename (only non-aliased renames get
+// here), so drop it and let the new filename supply the display name.
+void Recents_renamePath(char* old_path, char* new_path) {
+	if (!recents)
+		return;
+	int index = RecentArray_indexOf(recents, old_path);
+	if (index < 0)
+		return;
+	Recent* recent = recents->items[index];
+	char* dup = strdup(new_path);
+	if (!dup)
+		return;
+	free(recent->path);
+	recent->path = dup;
+	free(recent->alias);
+	recent->alias = NULL;
 	Recents_save();
 }
 
@@ -294,7 +322,9 @@ Array* Recents_getEntries(void) {
 // Alias management
 
 void Recents_setAlias(char* alias) {
-	recent_alias = alias;
+	// own a copy: callers pass Entry names whose lifetime we don't control
+	free(recent_alias);
+	recent_alias = alias ? strdup(alias) : NULL;
 }
 char* Recents_getAlias(void) {
 	return recent_alias;

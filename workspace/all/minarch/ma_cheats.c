@@ -117,6 +117,10 @@ static int parse_cheats(struct Cheats* cheats, FILE* file) {
 				if (len == 0)
 					continue;
 
+				// duplicate keys in the .cht overwrite the previous value
+				free((char*)cheat->name);
+				free((char*)cheat->info);
+				cheat->info = NULL;
 				cheat->name = calloc(len + 1, sizeof(char));
 				if (!cheat->name)
 					goto finish;
@@ -143,6 +147,7 @@ static int parse_cheats(struct Cheats* cheats, FILE* file) {
 				if (len == 0)
 					continue;
 
+				free((char*)cheat->code);
 				cheat->code = calloc(len + 1, sizeof(char));
 				if (!cheat->code)
 					goto finish;
@@ -175,34 +180,34 @@ void Cheat_getPaths(char paths[CHEAT_MAX_PATHS][MAX_PATH], int* count) {
 		int i = 0;
 		char* ext;
 		char exts[128];
-		if (core.extensions == NULL || strlen(core.extensions) >= sizeof(exts)) {
-			return;
-		}
-
-		strcpy(exts, core.extensions);
-		while ((ext = strtok(i ? NULL : exts, "|"))) {
-			if (*count >= CHEAT_MAX_PATHS - 1) {
-				break;
-			}
-
-			char rom_name[MAX_PATH];
-			if (strlen(game.alt_name) >= MAX_PATH) {
-				i++;
-				continue;
-			}
-
-			strcpy(rom_name, game.alt_name);
-			char* tmp = strrchr(rom_name, '.');
-			if (tmp != NULL && strlen(tmp) > 2 && strlen(tmp) <= 5) {
-				tmp[0] = '\0';
-
-				// Add length check before sprintf to prevent buffer overflow
-				int needed_len = strlen(core.cheats_dir) + strlen(rom_name) + strlen(ext) + 10; // +10 for "/", ".", ".cht", etc.
-				if (needed_len < MAX_PATH) {
-					snprintf(paths[(*count)++], MAX_PATH, "%s/%s.%s.cht", core.cheats_dir, rom_name, ext);
+		// skip only the extension-based variants when extensions are unusable;
+		// the sanitized/alias/wildcard paths below don't depend on them
+		if (strlen(core.extensions) < sizeof(exts)) {
+			strcpy(exts, core.extensions);
+			while ((ext = strtok(i ? NULL : exts, "|"))) {
+				if (*count >= CHEAT_MAX_PATHS - 1) {
+					break;
 				}
+
+				char rom_name[MAX_PATH];
+				if (strlen(game.alt_name) >= MAX_PATH) {
+					i++;
+					continue;
+				}
+
+				strcpy(rom_name, game.alt_name);
+				char* tmp = strrchr(rom_name, '.');
+				if (tmp != NULL && strlen(tmp) > 2 && strlen(tmp) <= 5) {
+					tmp[0] = '\0';
+
+					// Add length check before sprintf to prevent buffer overflow
+					int needed_len = strlen(core.cheats_dir) + strlen(rom_name) + strlen(ext) + 10; // +10 for "/", ".", ".cht", etc.
+					if (needed_len < MAX_PATH) {
+						snprintf(paths[(*count)++], MAX_PATH, "%s/%s.%s.cht", core.cheats_dir, rom_name, ext);
+					}
+				}
+				i++;
 			}
-			i++;
 		}
 	}
 
@@ -268,7 +273,7 @@ bool Cheats_load() {
 				for (size_t gi = 0; gi < glob_results.gl_pathc; ++gi) {
 					if (!suffixMatch(".cht", glob_results.gl_pathv[gi]))
 						continue;
-					strcpy(filename, glob_results.gl_pathv[gi]);
+					snprintf(filename, sizeof(filename), "%s", glob_results.gl_pathv[gi]);
 					if (exists(filename)) {
 						break;
 					}
@@ -310,7 +315,7 @@ bool Cheats_load() {
 	}
 
 	if (parse_cheats(&cheatcodes, file)) {
-		LOG_error("Error reading cheat %d\n", i);
+		LOG_error("Error parsing cheat file: %s\n", filename);
 		goto finish;
 	}
 

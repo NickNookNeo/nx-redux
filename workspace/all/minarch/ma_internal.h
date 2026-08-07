@@ -104,7 +104,6 @@ extern int rewind_toggle;
 extern int ff_toggled;
 extern int ff_hold_active;
 extern int ff_paused_by_rewind_hold;
-extern int last_rewind_pressed;
 
 extern int screen_scaling;
 extern int screen_effect;
@@ -166,6 +165,12 @@ typedef struct ButtonMapping {
 	int default_;
 	int ignore;
 } ButtonMapping;
+
+// local BTN_* bitmask for a mapping — local is -1 (BTN_ID_NONE) when unbound,
+// and 1 << -1 is undefined behavior, so always convert through this
+static inline int ButtonMapping_btn(const ButtonMapping* mapping) {
+	return (mapping->local < 0) ? BTN_NONE : 1 << mapping->local;
+}
 
 typedef struct Option {
 	char* key;

@@ -51,7 +51,7 @@ void loadShaderSettings(int i) {
 			continue;
 		}
 
-		if (!params[j].name || strlen(params[j].name) == 0) {
+		if (params[j].name[0] == '\0') {
 			// Skip invalid parameter names
 			continue;
 		}
@@ -70,25 +70,32 @@ void loadShaderSettings(int i) {
 
 		config.shaderpragmas[i].options[menucount].values = malloc(sizeof(char*) * (steps + 1));
 		config.shaderpragmas[i].options[menucount].labels = malloc(sizeof(char*) * (steps + 1));
-		if (!config.shaderpragmas[i].options[menucount].values || !config.shaderpragmas[i].options[menucount].labels) {
+		int filled = 0;
+		if (config.shaderpragmas[i].options[menucount].values && config.shaderpragmas[i].options[menucount].labels) {
+			for (int s = 0; s < steps; s++) {
+				float val = params[j].min + s * params[j].step;
+				char* str = malloc(16);
+				if (!str)
+					break; // OOM — keep the values filled so far, NULL-terminated below
+				snprintf(str, 16, "%.2f", val);
+				config.shaderpragmas[i].options[menucount].values[s] = str;
+				config.shaderpragmas[i].options[menucount].labels[s] = str;
+				filled = s + 1;
+				if (fabs(params[j].value - val) < 0.001f)
+					config.shaderpragmas[i].options[menucount].value = s;
+			}
+		}
+		if (!filled) {
+			// array alloc failed, or OOM before the first step filled
 			free(config.shaderpragmas[i].options[menucount].values);
 			free(config.shaderpragmas[i].options[menucount].labels);
 			config.shaderpragmas[i].options[menucount].values = NULL;
 			config.shaderpragmas[i].options[menucount].labels = NULL;
 			continue;
 		}
-		for (int s = 0; s < steps; s++) {
-			float val = params[j].min + s * params[j].step;
-			char* str = malloc(16);
-			snprintf(str, 16, "%.2f", val);
-			config.shaderpragmas[i].options[menucount].values[s] = str;
-			config.shaderpragmas[i].options[menucount].labels[s] = str;
-			if (fabs(params[j].value - val) < 0.001f)
-				config.shaderpragmas[i].options[menucount].value = s;
-		}
-		config.shaderpragmas[i].options[menucount].count = steps;
-		config.shaderpragmas[i].options[menucount].values[steps] = NULL;
-		config.shaderpragmas[i].options[menucount].labels[steps] = NULL;
+		config.shaderpragmas[i].options[menucount].count = filled;
+		config.shaderpragmas[i].options[menucount].values[filled] = NULL;
+		config.shaderpragmas[i].options[menucount].labels[filled] = NULL;
 		menucount++;
 	}
 	config.shaderpragmas[i].count = menucount;

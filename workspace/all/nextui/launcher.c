@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <limits.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include "defines.h"
@@ -17,7 +18,7 @@
 
 ///////////////////////////////////////
 
-void queueNext(char* cmd) {
+static void queueNext(char* cmd) {
 	LOG_info("cmd: %s\n", cmd);
 	putFile("/tmp/next", cmd);
 	quit = true;
@@ -27,25 +28,23 @@ extern char** environ;
 // use posix_spawnp so a bare program name (eg. "gametimectl.elf") is resolved
 // via PATH — plain posix_spawn treats it as a path relative to CWD, which is
 // the pak dir at runtime, so the exec silently fails with ENOENT
-static int runCommand(const char* path, char* const argv[]) {
-	pid_t pid;
-	int status;
-	if (posix_spawnp(&pid, path, NULL, NULL, argv, environ) != 0) {
-		return -1;
-	}
-	waitpid(pid, &status, 0);
-	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
 static void runCommandAsync(const char* path, char* const argv[]) {
+	// Fire-and-forget: while nextui lives the child would otherwise linger as
+	// a zombie (init only reaps it after nextui exits) — SIG_IGN makes the
+	// kernel auto-reap so callers on non-exit paths can't accumulate zombies.
+	static int sigchld_ignored = 0;
+	if (!sigchld_ignored) {
+		signal(SIGCHLD, SIG_IGN);
+		sigchld_ignored = 1;
+	}
 	pid_t pid;
 	if (posix_spawnp(&pid, path, NULL, NULL, argv, environ) != 0)
 		return;
-	// Fire-and-forget: orphaned child is reaped by init
 }
 
 ///////////////////////////////////////
 
-void readyResumePath(char* rom_path, int type) {
+static void readyResumePath(char* rom_path, int type) {
 	char* tmp;
 	resume.can_resume = false;
 	resume.has_preview = false;
@@ -58,14 +57,8 @@ void readyResumePath(char* rom_path, int type) {
 
 	char auto_path[MAX_PATH];
 	if (type == ENTRY_DIR) {
-		if (!hasCue(path, auto_path)) {	   // no cue?
-			tmp = strrchr(auto_path, '.'); // extension
-			if (!tmp)
-				return;
-			strcpy(tmp + 1, "m3u"); // replace with m3u
-			if (!exists(auto_path))
-				return; // no m3u
-		}
+		if (!hasCue(path, auto_path) && !hasFolderM3u(path, auto_path))
+			return;				 // neither cue nor m3u
 		strcpy(path, auto_path); // cue or m3u if one exists
 	}
 
@@ -94,7 +87,9 @@ void readyResumePath(char* rom_path, int type) {
 		char slot[16];
 		getFile(resume.slot_path, slot, 16);
 		int s = atoi(slot);
-		snprintf(resume.preview_path, sizeof(resume.preview_path), "%s/.minui/%s/%s.%0d.bmp", SHARED_USERDATA_PATH, emu_name, rom_file, s); // /.userdata/.minui/<EMU>/<romname>.ext.<n>.bmp
+		if (s < 0 || s > AUTO_RESUME_SLOT)
+			s = 0;																														   // corrupt slot file
+		snprintf(resume.preview_path, sizeof(resume.preview_path), "%s/.minui/%s/%s.%d.bmp", SHARED_USERDATA_PATH, emu_name, rom_file, s); // /.userdata/.minui/<EMU>/<romname>.ext.<n>.bmp
 		resume.has_preview = exists(resume.preview_path);
 	}
 
@@ -177,7 +172,7 @@ int autoResume(void) {
 	strncpy(escaped_sd, sd_path, sizeof(escaped_sd) - 1);
 	escaped_sd[sizeof(escaped_sd) - 1] = '\0';
 
-	char cmd[MAX_PATH];
+	char cmd[MAX_PATH * 2]; // holds two quoted MAX_PATH strings
 	snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(escaped_emu, sizeof(escaped_emu)), escapeSingleQuotes(escaped_sd, sizeof(escaped_sd)));
 	putInt(RESUME_SLOT_PATH, AUTO_RESUME_SLOT);
 	queueNext(cmd);
@@ -207,7 +202,7 @@ void openPak(char* path) {
 	strncpy(escaped_path, path, sizeof(escaped_path) - 1);
 	escaped_path[sizeof(escaped_path) - 1] = '\0';
 
-	char cmd[MAX_PATH];
+	char cmd[MAX_PATH * 2]; // quoted path + "/launch.sh" can exceed MAX_PATH
 	snprintf(cmd, sizeof(cmd), "'%s/launch.sh'", escapeSingleQuotes(escaped_path, sizeof(escaped_path)));
 	queueNext(cmd);
 }
@@ -296,7 +291,7 @@ void openRom(char* path, char* last) {
 	strncpy(escaped_sd, sd_path, sizeof(escaped_sd) - 1);
 	escaped_sd[sizeof(escaped_sd) - 1] = '\0';
 
-	char cmd[MAX_PATH];
+	char cmd[MAX_PATH * 2]; // holds two quoted MAX_PATH strings
 	snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(escaped_emu, sizeof(escaped_emu)), escapeSingleQuotes(escaped_sd, sizeof(escaped_sd)));
 	queueNext(cmd);
 
@@ -382,7 +377,7 @@ static bool isDirectSubdirectory(const Directory* parent, const char* child_path
 	return (levels == 1); // exactly one meaningful level deeper
 }
 
-Array* pathToStack(const char* path) {
+static Array* pathToStack(const char* path) {
 	Array* array = Array_new();
 
 	if (!path || strlen(path) == 0)
@@ -471,12 +466,7 @@ void openDirectory(char* path, int auto_launch) {
 	}
 
 	char m3u_path[MAX_PATH];
-	strcpy(m3u_path, auto_path);
-	char* tmp = strrchr(m3u_path, '.');
-	if (!tmp)
-		return;
-	strcpy(tmp + 1, "m3u");
-	if (exists(m3u_path) && auto_launch) {
+	if (hasFolderM3u(path, m3u_path) && auto_launch) {
 		auto_path[0] = '\0';
 		if (getFirstDisc(m3u_path, auto_path)) {
 			startgame = true;
@@ -520,7 +510,17 @@ void openDirectory(char* path, int auto_launch) {
 		DirectoryArray_free(stack);
 
 		stack = pathToStack(temp_path);
-		top = stack->items[stack->count - 1];
+		if (stack->count == 0) {
+			// pathToStack yields an empty stack for non-SD paths — fall back
+			// to root rather than indexing items[-1]
+			top = Directory_new(SDCARD_PATH, 0);
+			top->start = 0;
+			int rc = MAIN_ROW_COUNT - 1;
+			top->end = (top->entries->count < rc) ? top->entries->count : rc;
+			Array_push(stack, top);
+		} else {
+			top = stack->items[stack->count - 1];
+		}
 	}
 }
 
@@ -647,15 +647,8 @@ void loadLast(void) { // call after loading root directory
 						// Don't navigate into auto-launch game folders
 						// (directories with a matching .cue or .m3u file)
 						char auto_path[MAX_PATH];
-						if (hasCue(entry->path, auto_path)) {
+						if (hasCue(entry->path, auto_path) || hasFolderM3u(entry->path, auto_path)) {
 							break; // just select the game folder
-						}
-						char* ext = strrchr(auto_path, '.');
-						if (ext) {
-							strcpy(ext + 1, "m3u");
-							if (exists(auto_path)) {
-								break; // just select the game folder
-							}
 						}
 						openDirectory(entry->path, 0);
 						break;

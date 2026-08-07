@@ -120,27 +120,4 @@ static inline int RA_getConsoleId(const char* emu_tag) {
 	return RC_CONSOLE_UNKNOWN;
 }
 
-/**
- * Check if achievements are supported for a given EMU tag.
- * @param emu_tag The NextUI emulator tag
- * @return 1 if supported, 0 if not
- */
-static inline int RA_isConsoleSupported(const char* emu_tag) {
-	return RA_getConsoleId(emu_tag) != RC_CONSOLE_UNKNOWN;
-}
-
-/**
- * Get a display name for the console.
- * Uses rcheevos rc_console_name() internally.
- * @param emu_tag The NextUI emulator tag
- * @return Human-readable console name, or "Unknown" if not supported
- */
-static inline const char* RA_getConsoleName(const char* emu_tag) {
-	int console_id = RA_getConsoleId(emu_tag);
-	if (console_id == RC_CONSOLE_UNKNOWN) {
-		return "Unknown";
-	}
-	return rc_console_name(console_id);
-}
-
 #endif // __RA_CONSOLES_H__

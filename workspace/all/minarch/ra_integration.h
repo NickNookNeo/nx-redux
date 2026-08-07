@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#include "ra_offline.h" // for RA_UNKNOWN_EMULATOR_ACHIEVEMENT_ID
+
 // See: https://github.com/RetroAchievements/rcheevos/wiki/rc_client-integration
 
 /**
@@ -64,24 +66,6 @@ bool RA_isGameLoaded(void);
 bool RA_isHardcoreModeActive(void);
 
 /**
- * Check if the user is logged in.
- * @return true if logged in
- */
-bool RA_isLoggedIn(void);
-
-/**
- * Get the current user's display name.
- * @return Display name, or NULL if not logged in
- */
-const char* RA_getUserDisplayName(void);
-
-/**
- * Get the current game's title from RA database.
- * @return Game title, or NULL if no game loaded
- */
-const char* RA_getGameTitle(void);
-
-/**
  * Get achievement summary for current game.
  * @param unlocked Output: number of achievements unlocked
  * @param total Output: total number of achievements
@@ -103,12 +87,6 @@ const void* RA_createAchievementList(int category, int grouping);
 void RA_destroyAchievementList(const void* list);
 
 /**
- * Get the current game's hash (for mute file storage).
- * @return Game hash string, or NULL if no game loaded
- */
-const char* RA_getGameHash(void);
-
-/**
  * Check if an achievement is muted.
  * @param achievement_id The achievement ID to check
  * @return true if muted
@@ -121,13 +99,6 @@ bool RA_isAchievementMuted(uint32_t achievement_id);
  * @return New mute state (true = muted)
  */
 bool RA_toggleAchievementMute(uint32_t achievement_id);
-
-/**
- * Set the mute state of an achievement.
- * @param achievement_id The achievement ID to set
- * @param muted Whether to mute (true) or unmute (false)
- */
-void RA_setAchievementMuted(uint32_t achievement_id, bool muted);
 
 /**
  * Typedef for memory read function pointer.
@@ -154,14 +125,5 @@ void RA_setMemoryAccessors(RA_GetMemoryFunc get_data, RA_GetMemorySizeFunc get_s
  * @param mmap Pointer to the retro_memory_map structure (can be NULL to clear)
  */
 void RA_setMemoryMap(const void* mmap);
-
-/**
- * Initialize memory regions for achievement checking.
- * Should be called after a game is loaded and the console ID is known.
- * This uses rc_libretro to properly map memory based on the console type.
- * 
- * @param console_id The rcheevos console ID for the loaded game
- */
-void RA_initMemoryRegions(uint32_t console_id);
 
 #endif // __RA_INTEGRATION_H__

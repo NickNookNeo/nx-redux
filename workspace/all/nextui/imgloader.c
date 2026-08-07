@@ -50,7 +50,6 @@ static SDL_atomic_t needDrawAtomic;
 
 // Cached screen properties (set once in initImageLoaderPool, safe to read from worker threads)
 static Uint32 cachedScreenFormat = 0;
-static int cachedScreenBitsPerPixel = 0;
 static int cachedScreenW = 0;
 static int cachedScreenH = 0;
 
@@ -76,17 +75,12 @@ static SDL_atomic_t thumbAsyncLoaded;
 
 SDL_mutex* bgMutex = NULL;
 SDL_mutex* thumbMutex = NULL;
-SDL_mutex* frameMutex = NULL;
-SDL_mutex* fontMutex = NULL;
-SDL_cond* flipCond = NULL;
 
 SDL_Surface* folderbgbmp = NULL;
 SDL_Surface* thumbbmp = NULL;
 
 int folderbgchanged = 0;
 int thumbchanged = 0;
-
-bool frameReady = true;
 
 ///////////////////////////////////////
 // Atomic state accessors
@@ -146,38 +140,51 @@ void enqueueTask(TaskQueue* q, LoadBackgroundTask* task) {
 ///////////////////////////////////////
 // Worker thread (shared by BG and Thumb loaders)
 
-int loadWorker(void* arg) {
+// Block until a task is available (or shutdown), pop it, and decode its image
+// to the screen format. Returns 0 on shutdown (nothing was dequeued); on 1 the
+// caller owns *out_task and *out_result (which may be NULL on decode failure).
+static int dequeueAndDecode(TaskQueue* q, LoadBackgroundTask** out_task, SDL_Surface** out_result) {
+	SDL_LockMutex(q->mutex);
+	while (!q->head && !SDL_AtomicGet(&workerThreadsShutdown)) {
+		SDL_CondWait(q->cond, q->mutex);
+	}
+	if (SDL_AtomicGet(&workerThreadsShutdown)) {
+		SDL_UnlockMutex(q->mutex);
+		return 0;
+	}
+	TaskNode* node = q->head;
+	q->head = node->next;
+	if (!q->head)
+		q->tail = NULL;
+	q->size--;
+	SDL_UnlockMutex(q->mutex);
+
+	LoadBackgroundTask* task = node->task;
+	free(node);
+
+	SDL_Surface* result = NULL;
+	SDL_Surface* image = IMG_Load(task->imagePath);
+	if (image) {
+		result = SDL_ConvertSurfaceFormat(image, cachedScreenFormat, 0);
+		SDL_FreeSurface(image);
+	}
+	*out_task = task;
+	*out_result = result;
+	return 1;
+}
+
+static int loadWorker(void* arg) {
 	TaskQueue* q = (TaskQueue*)arg;
 	while (!SDL_AtomicGet(&workerThreadsShutdown)) {
-		SDL_LockMutex(q->mutex);
-		while (!q->head && !SDL_AtomicGet(&workerThreadsShutdown)) {
-			SDL_CondWait(q->cond, q->mutex);
-		}
-		if (SDL_AtomicGet(&workerThreadsShutdown)) {
-			SDL_UnlockMutex(q->mutex);
+		LoadBackgroundTask* task;
+		SDL_Surface* result;
+		if (!dequeueAndDecode(q, &task, &result))
 			break;
-		}
-		TaskNode* node = q->head;
-		q->head = node->next;
-		if (!q->head)
-			q->tail = NULL;
-		q->size--;
-		SDL_UnlockMutex(q->mutex);
 
-		LoadBackgroundTask* task = node->task;
-		free(node);
-
-		SDL_Surface* result = NULL;
-		SDL_Surface* image = IMG_Load(task->imagePath);
-		if (image) {
-			SDL_Surface* imageRGBA = SDL_ConvertSurfaceFormat(image, cachedScreenFormat, 0);
-			SDL_FreeSurface(image);
-			result = imageRGBA;
-		}
-
-		if (task->callback) {
+		if (task->callback)
 			task->callback(result);
-		}
+		else if (result)
+			SDL_FreeSurface(result); // no consumer — don't leak the decode
 		free(task);
 	}
 	return 0;
@@ -233,66 +240,43 @@ static void thumbCacheInsert(const char* path, SDL_Surface* surface) {
 static int thumbLoadWorker(void* arg) {
 	TaskQueue* q = (TaskQueue*)arg;
 	while (!SDL_AtomicGet(&workerThreadsShutdown)) {
-		SDL_LockMutex(q->mutex);
-		while (!q->head && !SDL_AtomicGet(&workerThreadsShutdown)) {
-			SDL_CondWait(q->cond, q->mutex);
-		}
-		if (SDL_AtomicGet(&workerThreadsShutdown)) {
-			SDL_UnlockMutex(q->mutex);
+		LoadBackgroundTask* task;
+		SDL_Surface* result;
+		if (!dequeueAndDecode(q, &task, &result))
 			break;
-		}
-		TaskNode* node = q->head;
-		q->head = node->next;
-		if (!q->head)
-			q->tail = NULL;
-		q->size--;
-		SDL_UnlockMutex(q->mutex);
 
-		LoadBackgroundTask* task = node->task;
-		free(node);
-
-		SDL_Surface* result = NULL;
-		SDL_Surface* image = IMG_Load(task->imagePath);
-		if (image) {
-			SDL_Surface* imageRGBA =
-				SDL_ConvertSurfaceFormat(image, cachedScreenFormat, 0);
-			SDL_FreeSurface(image);
-
-			if (imageRGBA) {
-				// Downscale to display dimensions before processing
-				int img_w = imageRGBA->w;
-				int img_h = imageRGBA->h;
-				double aspect_ratio = (double)img_h / img_w;
-				int max_w = (int)(cachedScreenW * CFG_getGameArtWidth());
-				int max_h = (int)(cachedScreenH * 0.6);
-				int new_w = max_w;
-				int new_h = (int)(new_w * aspect_ratio);
-				if (new_h > max_h) {
-					new_h = max_h;
-					new_w = (int)(new_h / aspect_ratio);
-				}
-
-				if (new_w > 0 && new_h > 0 &&
-					(new_w < img_w || new_h < img_h)) {
-					SDL_Surface* downscaled = SDL_CreateRGBSurfaceWithFormat(
-						0, new_w, new_h,
-						imageRGBA->format->BitsPerPixel,
-						imageRGBA->format->format);
-					if (downscaled) {
-						SDL_BlitScaled(imageRGBA, NULL, downscaled, NULL);
-						SDL_FreeSurface(imageRGBA);
-						imageRGBA = downscaled;
-					}
-				}
-
-				// Apply rounded corners at display resolution (much faster)
-				GFX_ApplyRoundedCorners_8888(
-					imageRGBA,
-					&(SDL_Rect){0, 0, imageRGBA->w, imageRGBA->h},
-					SCALE1(CFG_getThumbnailRadius()));
-
-				result = imageRGBA;
+		if (result) {
+			// Downscale to display dimensions before processing
+			int img_w = result->w;
+			int img_h = result->h;
+			double aspect_ratio = (double)img_h / img_w;
+			int max_w = (int)(cachedScreenW * CFG_getGameArtWidth());
+			int max_h = (int)(cachedScreenH * 0.6);
+			int new_w = max_w;
+			int new_h = (int)(new_w * aspect_ratio);
+			if (new_h > max_h) {
+				new_h = max_h;
+				new_w = (int)(new_h / aspect_ratio);
 			}
+
+			if (new_w > 0 && new_h > 0 &&
+				(new_w < img_w || new_h < img_h)) {
+				SDL_Surface* downscaled = SDL_CreateRGBSurfaceWithFormat(
+					0, new_w, new_h,
+					result->format->BitsPerPixel,
+					result->format->format);
+				if (downscaled) {
+					SDL_BlitScaled(result, NULL, downscaled, NULL);
+					SDL_FreeSurface(result);
+					result = downscaled;
+				}
+			}
+
+			// Apply rounded corners at display resolution (much faster)
+			GFX_ApplyRoundedCorners_8888(
+				result,
+				&(SDL_Rect){0, 0, result->w, result->h},
+				SCALE1(CFG_getThumbnailRadius()));
 		}
 
 		// Cache result and conditionally update thumbbmp
@@ -480,7 +464,6 @@ void initImageLoaderPool(void) {
 
 	// Cache screen properties for thread-safe access from workers
 	cachedScreenFormat = screen->format->format;
-	cachedScreenBitsPerPixel = screen->format->BitsPerPixel;
 	cachedScreenW = screen->w;
 	cachedScreenH = screen->h;
 
@@ -492,13 +475,9 @@ void initImageLoaderPool(void) {
 	thumbqueueMutex = thumbQueue.mutex;
 	bgMutex = SDL_CreateMutex();
 	thumbMutex = SDL_CreateMutex();
-	frameMutex = SDL_CreateMutex();
-	fontMutex = SDL_CreateMutex();
-	flipCond = SDL_CreateCond();
 
 	if (!bgQueue.mutex || !bgQueue.cond || !thumbQueue.mutex || !thumbQueue.cond ||
-		!bgMutex || !thumbMutex ||
-		!frameMutex || !fontMutex || !flipCond) {
+		!bgMutex || !thumbMutex) {
 		fprintf(stderr, "imgloader: failed to create SDL sync primitives\n");
 		return;
 	}
@@ -578,14 +557,6 @@ void cleanupImageLoaderPool(void) {
 		SDL_LockMutex(thumbMutex);
 		SDL_UnlockMutex(thumbMutex);
 	}
-	if (frameMutex) {
-		SDL_LockMutex(frameMutex);
-		SDL_UnlockMutex(frameMutex);
-	}
-	if (fontMutex) {
-		SDL_LockMutex(fontMutex);
-		SDL_UnlockMutex(fontMutex);
-	}
 
 	// Destroy mutexes and condition variables
 	if (bgQueue.mutex)
@@ -596,17 +567,11 @@ void cleanupImageLoaderPool(void) {
 		SDL_DestroyMutex(bgMutex);
 	if (thumbMutex)
 		SDL_DestroyMutex(thumbMutex);
-	if (frameMutex)
-		SDL_DestroyMutex(frameMutex);
-	if (fontMutex)
-		SDL_DestroyMutex(fontMutex);
 
 	if (bgQueue.cond)
 		SDL_DestroyCond(bgQueue.cond);
 	if (thumbQueue.cond)
 		SDL_DestroyCond(thumbQueue.cond);
-	if (flipCond)
-		SDL_DestroyCond(flipCond);
 
 	// Set pointers to NULL after destruction
 	bgQueue = (TaskQueue){0};
@@ -615,7 +580,4 @@ void cleanupImageLoaderPool(void) {
 	thumbqueueMutex = NULL;
 	bgMutex = NULL;
 	thumbMutex = NULL;
-	frameMutex = NULL;
-	fontMutex = NULL;
-	flipCond = NULL;
 }

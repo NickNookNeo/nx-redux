@@ -142,10 +142,6 @@ int main(int argc, char* argv[]) {
 	IndicatorType show_setting = INDICATOR_NONE;
 	PWR_setCPUSpeed(CPU_SPEED_MENU);
 
-	int selected_row = top->selected - top->start;
-	bool list_show_entry_names = true;
-
-	char folderBgPath[1024] = {0};
 	folderbgbmp = NULL;
 
 	blackBG = SDL_CreateRGBSurfaceWithFormat(
@@ -259,8 +255,9 @@ int main(int argc, char* argv[]) {
 
 			if (lastScreen == SCREEN_GAME || lastScreen == SCREEN_OFF) {
 				GFX_clearLayers(LAYER_ALL);
-				GFX_drawOnLayer(blackBG, 0, 0, screen->w, screen->h, 1.0f, 0,
-								LAYER_BACKGROUND);
+				if (blackBG)
+					GFX_drawOnLayer(blackBG, 0, 0, screen->w, screen->h, 1.0f, 0,
+									LAYER_BACKGROUND);
 			} else {
 				GFX_clearLayers(LAYER_TRANSITION);
 				if (lastScreen != SCREEN_GAMELIST)
@@ -286,7 +283,7 @@ int main(int argc, char* argv[]) {
 				menuBarSurface = UI_captureMenuBar(screen);
 
 			if (currentScreen == SCREEN_SEARCH) {
-				Search_render(screen, blackBG, lastScreen);
+				Search_render(screen, lastScreen);
 				lastScreen = SCREEN_SEARCH;
 			} else if (startgame) {
 				GFX_clearLayers(LAYER_ALL);
@@ -303,8 +300,9 @@ int main(int argc, char* argv[]) {
 			if (animationdirection != ANIM_NONE) {
 				if (CFG_getMenuTransitions()) {
 					if (lastScreen != SCREEN_GAMESWITCHER) {
-						GFX_drawOnLayer(blackBG, 0, 0, screen->w, screen->h, 1.0f, 0,
-										LAYER_BACKGROUND);
+						if (blackBG)
+							GFX_drawOnLayer(blackBG, 0, 0, screen->w, screen->h, 1.0f, 0,
+											LAYER_BACKGROUND);
 						folderbgchanged = 1;
 					}
 					GFX_clearLayers(LAYER_TRANSITION);
@@ -314,31 +312,33 @@ int main(int argc, char* argv[]) {
 										menuBarSurface->h, 1.0f, 0, LAYER_OVERLAY);
 					GFX_flipHidden();
 					SDL_Surface* tmpNewScreen = GFX_captureRendererToSurface();
-					SDL_SetSurfaceBlendMode(tmpNewScreen, SDL_BLENDMODE_BLEND);
-					GFX_clearLayers(LAYER_THUMBNAIL);
-					if (animationdirection == SLIDE_LEFT)
-						GFX_animateSlidePages(
-							tmpOldScreen, 0, 0, 0 - FIXED_WIDTH, 0,
-							tmpNewScreen, FIXED_WIDTH, 0, 0, 0,
-							FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
-					if (animationdirection == SLIDE_RIGHT)
-						GFX_animateSlidePages(
-							tmpOldScreen, 0, 0, FIXED_WIDTH, 0,
-							tmpNewScreen, 0 - FIXED_WIDTH, 0, 0, 0,
-							FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
-					if (animationdirection == SLIDE_DOWN)
-						GFX_animateSlidePages(
-							tmpOldScreen, 0, 0, 0, FIXED_HEIGHT,
-							tmpNewScreen, 0, 0 - FIXED_HEIGHT, 0, 0,
-							FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
-					if (animationdirection == SLIDE_UP)
-						GFX_animateSlidePages(
-							tmpOldScreen, 0, 0, 0, 0 - FIXED_HEIGHT,
-							tmpNewScreen, 0, FIXED_HEIGHT, 0, 0,
-							FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
-					GFX_clearLayers(LAYER_THUMBNAIL);
-					GFX_clearLayers(LAYER_OVERLAY);
-					SDL_FreeSurface(tmpNewScreen);
+					if (tmpNewScreen) {
+						SDL_SetSurfaceBlendMode(tmpNewScreen, SDL_BLENDMODE_BLEND);
+						GFX_clearLayers(LAYER_THUMBNAIL);
+						if (animationdirection == SLIDE_LEFT)
+							GFX_animateSlidePages(
+								tmpOldScreen, 0, 0, 0 - FIXED_WIDTH, 0,
+								tmpNewScreen, FIXED_WIDTH, 0, 0, 0,
+								FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
+						if (animationdirection == SLIDE_RIGHT)
+							GFX_animateSlidePages(
+								tmpOldScreen, 0, 0, FIXED_WIDTH, 0,
+								tmpNewScreen, 0 - FIXED_WIDTH, 0, 0, 0,
+								FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
+						if (animationdirection == SLIDE_DOWN)
+							GFX_animateSlidePages(
+								tmpOldScreen, 0, 0, 0, FIXED_HEIGHT,
+								tmpNewScreen, 0, 0 - FIXED_HEIGHT, 0, 0,
+								FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
+						if (animationdirection == SLIDE_UP)
+							GFX_animateSlidePages(
+								tmpOldScreen, 0, 0, 0, 0 - FIXED_HEIGHT,
+								tmpNewScreen, 0, FIXED_HEIGHT, 0, 0,
+								FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
+						GFX_clearLayers(LAYER_THUMBNAIL);
+						GFX_clearLayers(LAYER_OVERLAY);
+						SDL_FreeSurface(tmpNewScreen);
+					}
 				}
 				// animation done
 				animationdirection = ANIM_NONE;
@@ -412,11 +412,6 @@ int main(int argc, char* argv[]) {
 					SDL_Delay(frame_target - elapsed);
 			}
 		}
-
-		SDL_LockMutex(frameMutex);
-		frameReady = true;
-		SDL_CondSignal(flipCond);
-		SDL_UnlockMutex(frameMutex);
 
 		// animation does not carry over between loops, this should only ever be set
 		// by input handling and directly consumed by the following render pass

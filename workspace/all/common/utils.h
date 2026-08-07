@@ -46,7 +46,8 @@ bool exists(char* path);
 void touch(char* path);
 int toggle(char* path); // creates or removes file
 void putFile(char* path, char* contents);
-char* allocFile(char* path); // caller must free
+int writeFileAtomic(const char* path, const char* data, size_t len); // tmp+fsync+rename; returns 1 on success
+char* allocFile(char* path);										 // caller must free
 void getFile(char* path, char* buffer, size_t buffer_size);
 // Simple Mode PIN: reads SIMPLE_MODE_PATH's content. Returns true when the
 // file holds exactly 4 ASCII digits (trailing whitespace ignored) and copies

@@ -1,4 +1,5 @@
 #include "shortcuts.h"
+#include "api.h"
 #include "defines.h"
 #include "utils.h"
 #include <stdbool.h>
@@ -161,8 +162,11 @@ void Shortcuts_add(Entry* entry) {
 	if (Shortcuts_exists(path))
 		return;
 
-	while (shortcuts->count >= MAX_SHORTCUTS) {
-		Shortcut_free(Array_pop(shortcuts));
+	if (shortcuts->count >= MAX_SHORTCUTS) {
+		// refuse rather than silently evict — the list is kept sorted, so a
+		// pop would delete the alphabetically-last shortcut, not the oldest
+		LOG_warn("Shortcuts_add: limit of %d reached, not adding %s\n", MAX_SHORTCUTS, path);
+		return;
 	}
 	Array_push(shortcuts, Shortcut_new(path, entry->name));
 	ShortcutArray_sort(shortcuts);
@@ -187,16 +191,6 @@ void Shortcuts_remove(Entry* entry) {
 
 int Shortcuts_isInToolsFolder(const char* path) {
 	return prefixMatch(TOOLS_PATH, path) || prefixMatch(PAKS_PATH "/Tools", path);
-}
-
-int Shortcuts_isInConsoleDir(const char* path) {
-	char parent_dir[MAX_PATH];
-	strncpy(parent_dir, path, sizeof(parent_dir) - 1);
-	parent_dir[sizeof(parent_dir) - 1] = '\0';
-	char* last_slash = strrchr(parent_dir, '/');
-	if (last_slash)
-		*last_slash = '\0';
-	return exactMatch(parent_dir, ROMS_PATH);
 }
 
 int Shortcuts_getCount(void) {

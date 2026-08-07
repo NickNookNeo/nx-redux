@@ -269,6 +269,17 @@ static int find_track(chd_track_handle_t* handle, uint32_t track_request) {
 			}
 		}
 		return largest_idx;
+	} else if (track_request == (uint32_t)-4) {
+		// RC_HASH_CDTRACK_FIRST_OF_SECOND_SESSION - CHD track metadata carries
+		// no session numbers, so approximate: the first data track that follows
+		// an audio track. That matches the Jaguar CD layout this request exists
+		// for (session 1 is audio, session 2 opens with the boot data track);
+		// a wrong pick fails safely in the caller's ATARI-header check.
+		for (int i = 1; i < handle->num_tracks; i++) {
+			if (is_data_track(handle->tracks[i].type) && !is_data_track(handle->tracks[i - 1].type))
+				return i;
+		}
+		return -1;
 	} else if (track_request > 0 && track_request <= (uint32_t)handle->num_tracks) {
 		// Specific track number (1-based)
 		return track_request - 1;
@@ -319,6 +330,13 @@ void* chd_open_track_iterator(const char* path, uint32_t track, const void* iter
 	// Check unit bytes if available, otherwise assume CD_FRAME_SIZE
 	handle->frame_size = header->unitbytes ? header->unitbytes : CD_FRAME_SIZE;
 	handle->frames_per_hunk = handle->hunk_bytes / handle->frame_size;
+	if (handle->frames_per_hunk == 0) {
+		// malformed/non-CD CHD (unitbytes > hunkbytes) — would divide by zero
+		// in chd_read_sector
+		chd_close(chd);
+		free(handle);
+		return NULL;
+	}
 
 	// Allocate hunk buffer
 	handle->hunk_buffer = (uint8_t*)malloc(handle->hunk_bytes);
@@ -464,13 +482,4 @@ uint32_t chd_first_track_sector(void* track_handle) {
 	// The read_sector callback will add track_start_frame to convert
 	// to CHD frame numbers.
 	return 0;
-}
-
-/*****************************************************************************
- * Integration helper
- *****************************************************************************/
-
-int chd_reader_is_chd(const char* path) {
-	const char* ext = strrchr(path, '.');
-	return ext && strcasecmp(ext, ".chd") == 0;
 }

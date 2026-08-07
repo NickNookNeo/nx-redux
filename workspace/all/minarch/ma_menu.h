@@ -10,8 +10,6 @@
 typedef struct MenuList MenuList;
 #endif
 
-void MSG_init(void);
-void MSG_quit(void);
 void Menu_init(void);
 void Menu_quit(void);
 void Menu_beforeSleep(void);
@@ -24,7 +22,6 @@ void Menu_undoLoadState(void);
 void Menu_initState(void);
 void Menu_updateState(void);
 void Menu_loop(void);
-void Menu_setCoreVersionDesc(const char* version);
 void Options_updateVisibility(void);
 void OptionSaveChanges_updateDesc(void);
 void OptionAchievements_updateDesc(void);

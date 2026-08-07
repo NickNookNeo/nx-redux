@@ -24,12 +24,8 @@ enum {
 
 // Screen/display accessors
 SDL_Surface* minarch_getScreen(void);
-int minarch_getDeviceWidth(void);
-int minarch_getDeviceHeight(void);
-SDL_Surface* minarch_getMenuBitmap(void);
 
 // Game state accessors
-const char* minarch_getCoreTag(void);
 const char* minarch_getGameName(void);
 void* minarch_getGameData(void);
 size_t minarch_getGameSize(void);

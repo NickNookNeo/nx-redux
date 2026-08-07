@@ -23,9 +23,9 @@ typedef struct {
 	int id; // the selected item's id (-1 if cancelled)
 } ContextMenuResult;
 
-// Open the context menu with a title and list of items.
+// Open the context menu with a list of items.
 // items array is copied internally.
-void ContextMenu_open(const char* title, ContextMenuItem* items, int count);
+void ContextMenu_open(ContextMenuItem* items, int count);
 
 // Process input. Call after PAD_poll().
 ContextMenuResult ContextMenu_handleInput(void);

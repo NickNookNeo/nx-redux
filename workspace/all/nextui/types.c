@@ -55,17 +55,6 @@ void Array_remove(Array* self, void* item) {
 		self->items[j] = self->items[j + 1];
 	self->count--;
 }
-void Array_reverse(Array* self) {
-	if (self->count < 2)
-		return;
-	int end = self->count - 1;
-	int mid = self->count / 2;
-	for (int i = 0; i < mid; i++) {
-		void* item = self->items[i];
-		self->items[i] = self->items[end - i];
-		self->items[end - i] = item;
-	}
-}
 void Array_free(Array* self) {
 	free(self->items);
 	free(self);
@@ -77,13 +66,6 @@ void Array_yoink(Array* self, Array* other) {
 	Array_free(other); // `self` now owns the entries
 }
 
-int StringArray_indexOf(Array* self, const char* str) {
-	for (int i = 0; i < self->count; i++) {
-		if (exactMatch(self->items[i], str))
-			return i;
-	}
-	return -1;
-}
 void StringArray_free(Array* self) {
 	for (int i = 0; i < self->count; i++) {
 		free(self->items[i]);
@@ -94,32 +76,65 @@ void StringArray_free(Array* self) {
 ///////////////////////////////////////
 // Hash
 
+// djb2 over the key bytes; lookups are exact-match (case-sensitive), same as
+// the old linear implementation
+static unsigned int Hash_bucket(const char* key) {
+	unsigned int h = 5381;
+	for (const unsigned char* p = (const unsigned char*)key; *p; p++)
+		h = h * 33 + *p;
+	return h % HASH_BUCKETS;
+}
 Hash* Hash_new(void) {
-	Hash* self = malloc(sizeof(Hash));
-	self->keys = Array_new();
-	self->values = Array_new();
+	Hash* self = calloc(1, sizeof(Hash));
 	return self;
 }
 void Hash_free(Hash* self) {
-	StringArray_free(self->keys);
-	StringArray_free(self->values);
+	if (!self)
+		return;
+	for (int i = 0; i < HASH_BUCKETS; i++) {
+		HashNode* node = self->buckets[i];
+		while (node) {
+			HashNode* next = node->next;
+			free(node->key);
+			free(node->value);
+			free(node);
+			node = next;
+		}
+	}
 	free(self);
 }
 void Hash_set(Hash* self, const char* key, const char* value) {
-	int i = StringArray_indexOf(self->keys, key);
-	if (i >= 0) {
-		free(self->values->items[i]);
-		self->values->items[i] = strdup(value);
+	unsigned int b = Hash_bucket(key);
+	for (HashNode* node = self->buckets[b]; node; node = node->next) {
+		if (exactMatch(node->key, key)) {
+			char* dup = strdup(value);
+			if (dup) {
+				free(node->value);
+				node->value = dup;
+			}
+			return;
+		}
+	}
+	HashNode* node = malloc(sizeof(HashNode));
+	if (!node)
+		return;
+	node->key = strdup(key);
+	node->value = strdup(value);
+	if (!node->key || !node->value) {
+		free(node->key);
+		free(node->value);
+		free(node);
 		return;
 	}
-	Array_push(self->keys, strdup(key));
-	Array_push(self->values, strdup(value));
+	node->next = self->buckets[b];
+	self->buckets[b] = node;
 }
 char* Hash_get(Hash* self, const char* key) {
-	int i = StringArray_indexOf(self->keys, key);
-	if (i == -1)
-		return NULL;
-	return self->values->items[i];
+	for (HashNode* node = self->buckets[Hash_bucket(key)]; node; node = node->next) {
+		if (exactMatch(node->key, key))
+			return node->value;
+	}
+	return NULL;
 }
 
 ///////////////////////////////////////
@@ -154,15 +169,7 @@ void Entry_free(Entry* self) {
 	free(self);
 }
 
-int EntryArray_indexOf(Array* self, const char* path) {
-	for (int i = 0; i < self->count; i++) {
-		Entry* entry = self->items[i];
-		if (exactMatch(entry->path, path))
-			return i;
-	}
-	return -1;
-}
-int EntryArray_sortEntry(const void* a, const void* b) {
+static int EntryArray_sortEntry(const void* a, const void* b) {
 	Entry* item1 = *(Entry**)a;
 	Entry* item2 = *(Entry**)b;
 	return strcasecmp(item1->name, item2->name);

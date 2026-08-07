@@ -51,18 +51,10 @@ void chd_close_track(void* track_handle);
 
 /**
  * Get the first sector number of a track.
- * 
+ *
  * @param track_handle Handle returned by chd_open_track
  * @return First sector number (always 0 since we handle offset internally)
  */
 uint32_t chd_first_track_sector(void* track_handle);
-
-/**
- * Check if a file path points to a CHD file.
- * 
- * @param path File path to check
- * @return Non-zero if the file has a .chd extension
- */
-int chd_reader_is_chd(const char* path);
 
 #endif /* CHD_READER_H */

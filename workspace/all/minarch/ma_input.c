@@ -2,6 +2,7 @@
 #include "utils.h"
 #include "netplay.h"
 #include "ma_input.h"
+#include "ma_core.h"
 #include "ma_menu.h"
 #include "ma_rewind.h"
 #include "ma_config.h"
@@ -34,19 +35,15 @@ void input_poll_callback(void) {
 		Netplay_quitAll();
 		quit = 1;
 		Menu_saveState();
-		putFile(GAME_SWITCHER_PERSIST_PATH, game.path + strlen(SDCARD_PATH));
+		if (prefixMatch(SDCARD_PATH, game.path))
+			putFile(GAME_SWITCHER_PERSIST_PATH, game.path + strlen(SDCARD_PATH));
 		GFX_clear(screen);
 	}
 
-	if (PAD_justPressed(BTN_POWER)) {
-	} else if (PAD_justReleased(BTN_POWER)) {
-	}
-
-	static int toggled_ff_on = 0; // this logic only works because TOGGLE_FF is before HOLD_FF in the menu...
 	rewind_pressed = 0;
 	for (int i = 0; i < SHORTCUT_COUNT; i++) {
 		ButtonMapping* mapping = &config.shortcuts[i];
-		int btn = 1 << mapping->local;
+		int btn = ButtonMapping_btn(mapping);
 		if (btn == BTN_NONE)
 			continue; // not bound
 		if (!mapping->mod || PAD_isPressed(BTN_MENU)) {
@@ -58,8 +55,7 @@ void input_poll_callback(void) {
 			}
 			if (i == SHORTCUT_TOGGLE_FF) {
 				if (PAD_justPressed(btn)) {
-					toggled_ff_on = setFastForward(!fast_forward);
-					ff_toggled = toggled_ff_on;
+					ff_toggled = setFastForward(!fast_forward);
 					ff_hold_active = 0;
 					if (ff_toggled && rewind_toggle) {
 						// last toggle wins: disable rewind toggle when FF toggle is enabled
@@ -79,21 +75,18 @@ void input_poll_callback(void) {
 			} else if (i == SHORTCUT_HOLD_FF) {
 				// don't allow turn off fast_forward with a release of the hold button
 				// if it was initially turned on with the toggle button
-				if (PAD_justPressed(btn) || (!toggled_ff_on && PAD_justReleased(btn))) {
+				if (PAD_justPressed(btn) || (!ff_toggled && PAD_justReleased(btn))) {
 					int pressed = PAD_isPressed(btn);
 					fast_forward = setFastForward(pressed);
 					ff_hold_active = pressed ? 1 : 0;
 					if (mapping->mod)
 						ignore_menu = 1; // very unlikely but just in case
 				}
-				if (PAD_justReleased(btn) && toggled_ff_on) {
+				if (PAD_justReleased(btn) && ff_toggled) {
 					ff_hold_active = 0;
 				}
 			} else if (i == SHORTCUT_HOLD_REWIND) {
 				rewind_pressed = PAD_isPressed(btn) ? 1 : 0;
-				if (rewind_pressed != last_rewind_pressed) {
-					last_rewind_pressed = rewind_pressed;
-				}
 				if (rewind_pressed && ff_toggled && !ff_paused_by_rewind_hold) {
 					ff_paused_by_rewind_hold = 1;
 					fast_forward = setFastForward(0);
@@ -173,7 +166,7 @@ void input_poll_callback(void) {
 					Menu_screenshot();
 					break;
 				case SHORTCUT_RESET_GAME:
-					core.reset();
+					Core_reset();
 					break;
 				case SHORTCUT_SAVE_QUIT:
 					Netplay_quitAll();
@@ -186,7 +179,8 @@ void input_poll_callback(void) {
 					newScreenshot = 1;
 					quit = 1;
 					Menu_saveState();
-					putFile(GAME_SWITCHER_PERSIST_PATH, game.path + strlen(SDCARD_PATH));
+					if (prefixMatch(SDCARD_PATH, game.path))
+						putFile(GAME_SWITCHER_PERSIST_PATH, game.path + strlen(SDCARD_PATH));
 					break;
 				case SHORTCUT_CYCLE_SCALE:
 					screen_scaling = (screen_scaling + 1) % config.frontend.options[FE_OPT_SCALING].count;
@@ -222,7 +216,7 @@ void input_poll_callback(void) {
 	buttons = 0;
 	for (int i = 0; config.controls[i].name; i++) {
 		ButtonMapping* mapping = &config.controls[i];
-		int btn = 1 << mapping->local;
+		int btn = ButtonMapping_btn(mapping);
 		if (btn == BTN_NONE)
 			continue; // present buttons can still be unbound
 		if (gamepad_type == 0) {
@@ -287,7 +281,7 @@ void Input_init(const struct retro_input_descriptor* vars) {
 	puts("---------------------------------");
 
 	const char* core_button_names[RETRO_BUTTON_COUNT] = {0};
-	int present[RETRO_BUTTON_COUNT];
+	int present[RETRO_BUTTON_COUNT] = {0};
 	int core_mapped = 0;
 	if (vars) {
 		core_mapped = 1;

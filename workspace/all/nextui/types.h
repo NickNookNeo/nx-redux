@@ -19,20 +19,23 @@ void Array_push(Array* self, void* item);
 void Array_unshift(Array* self, void* item);
 void* Array_pop(Array* self);
 void Array_remove(Array* self, void* item);
-void Array_reverse(Array* self);
 void Array_free(Array* self);
 void Array_yoink(Array* self, Array* other);
 
-int StringArray_indexOf(Array* self, const char* str);
 void StringArray_free(Array* self);
 
 ///////////////////////////////////////
 // Hash
 
+#define HASH_BUCKETS 256
+typedef struct HashNode {
+	char* key;
+	char* value;
+	struct HashNode* next;
+} HashNode;
 typedef struct Hash {
-	Array* keys;
-	Array* values;
-} Hash; // not really a hash
+	HashNode* buckets[HASH_BUCKETS];
+} Hash;
 
 Hash* Hash_new(void);
 void Hash_free(Hash* self);
@@ -59,8 +62,6 @@ typedef struct Entry {
 Entry* Entry_new(const char* path, int type);
 Entry* Entry_newNamed(const char* path, int type, const char* displayName);
 void Entry_free(Entry* self);
-int EntryArray_indexOf(Array* self, const char* path);
-int EntryArray_sortEntry(const void* a, const void* b);
 void EntryArray_sort(Array* self);
 void EntryArray_free(Array* self);
 

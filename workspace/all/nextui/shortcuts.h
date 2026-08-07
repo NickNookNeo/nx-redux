@@ -24,7 +24,6 @@ void Shortcuts_remove(Entry* entry);
 int Shortcuts_isInToolsFolder(const char* path);
 
 // Check if inside a console directory (parent is ROMS_PATH)
-int Shortcuts_isInConsoleDir(const char* path);
 
 // Get shortcuts count
 int Shortcuts_getCount(void);

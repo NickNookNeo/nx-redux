@@ -512,6 +512,25 @@ void putFile(char* path, char* contents) {
 		fclose(file);
 	}
 }
+int writeFileAtomic(const char* path, const char* data, size_t len) {
+	// stage to a sibling tmp then rename so a power cut or ENOSPC mid-write
+	// can never leave a truncated file at path; rename also refreshes the
+	// mtime that cache-staleness checks rely on
+	char tmp[MAX_PATH + 16];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	FILE* file = fopen(tmp, "wb");
+	if (!file)
+		return 0;
+	size_t wr = fwrite(data, 1, len, file);
+	fflush(file);
+	fsync(fileno(file));
+	fclose(file);
+	if (wr != len || rename(tmp, path) != 0) {
+		remove(tmp);
+		return 0;
+	}
+	return 1;
+}
 void getFile(char* path, char* buffer, size_t buffer_size) {
 	FILE* file = fopen(path, "r");
 	if (file) {

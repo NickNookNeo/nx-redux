@@ -1,7 +1,5 @@
 #pragma once
 
-char* getScreenScalingDesc(void);
-int getScreenScalingCount(void);
 void setOverclock(int i);
 void Config_getPath(char* filename, int override);
 void Config_syncFrontend(char* key, int value);

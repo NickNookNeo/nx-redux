@@ -11,8 +11,8 @@
 #include <dlfcn.h>
 #include <libgen.h>
 
-void Core_getName(char* in_name, char* out_name) {
-	strcpy(out_name, basename(in_name));
+static void Core_getName(char* in_name, char* out_name, size_t out_size) {
+	snprintf(out_name, out_size, "%s", basename(in_name));
 	char* tmp = strrchr(out_name, '_');
 	if (tmp)
 		tmp[0] = '\0';
@@ -63,9 +63,9 @@ void Core_open(const char* core_path, const char* tag_name) {
 	struct retro_system_info info = {};
 	core.get_system_info(&info);
 
-	Core_getName((char*)core_path, (char*)core.name);
+	Core_getName((char*)core_path, (char*)core.name, sizeof(core.name));
 	snprintf((char*)core.version, sizeof(core.version), "%s (%s)", info.library_name, info.library_version);
-	strcpy((char*)core.tag, tag_name);
+	snprintf((char*)core.tag, sizeof(core.tag), "%s", tag_name);
 	// valid_extensions may legally be NULL (no-content cores)
 	snprintf((char*)core.extensions, sizeof(core.extensions), "%s", info.valid_extensions ? info.valid_extensions : "");
 
@@ -152,6 +152,8 @@ void Core_load(void) {
 }
 void Core_reset(void) {
 	core.reset();
+	// the undo snapshot belongs to the abandoned pre-reset session
+	State_invalidateUndo();
 	Rewind_on_state_change();
 }
 void Core_unload(void) {

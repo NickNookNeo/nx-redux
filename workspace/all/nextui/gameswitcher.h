@@ -15,7 +15,6 @@ typedef struct {
 void GameSwitcher_init(void);
 int GameSwitcher_shouldStartInSwitcher(void);
 void GameSwitcher_resetSelection(void);
-int GameSwitcher_getSelected(void);
 const char* GameSwitcher_getSelectedName(void);
 GameSwitcherResult GameSwitcher_handleInput(unsigned long now);
 void GameSwitcher_render(int lastScreen, SDL_Surface* blackBG, int gsanimdir);

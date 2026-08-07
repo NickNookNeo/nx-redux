@@ -28,24 +28,22 @@ void Recents_setHasEmu(HasEmuFunc func);
 void Recents_setHasM3u(HasM3uFunc func);
 
 // Core API
-void Recents_save(void);
 void Recents_add(char* path, char* alias);
 int Recents_load(void); // returns 1 if there are available recents
 
 // Access
-Array* Recents_getArray(void);
 int Recents_count(void);
 Recent* Recents_at(int index);
 void Recents_removeAt(int index);
+// Both take SDCARD-relative paths (the stored Recent form).
+void Recents_removeByPath(char* path);
+void Recents_renamePath(char* old_path, char* new_path);
 
 // Entry conversion
 Entry* Recents_entryFromRecent(Recent* recent);
 Array* Recents_getEntries(void);
 
 // Recent struct methods
-Recent* Recent_new(char* path, char* alias);
-void Recent_free(Recent* self);
-int RecentArray_indexOf(Array* self, char* str);
 void RecentArray_free(Array* self);
 
 // Alias management (used by launcher for recent_alias)

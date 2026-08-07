@@ -92,10 +92,6 @@ static volatile bool ra_sync_done = false;
 static volatile int ra_sync_synced = 0;
 static bool ra_sync_started = false;
 
-// Wifi wait config
-#define RA_WIFI_WAIT_MAX_MS 3000 // 3 seconds max blocking wait
-#define RA_WIFI_WAIT_POLL_MS 500 // Check every 500ms
-
 /*****************************************************************************
  * Thread-safe response queue
  * 
@@ -134,6 +130,7 @@ static void ra_save_muted_achievements(void);
 static void ra_clear_muted_achievements(void);
 static void ra_reset_login_state(void);
 static void ra_start_login(void);
+static void RA_setAchievementMuted(uint32_t achievement_id, bool muted);
 static uint32_t ra_get_retry_delay_ms(int attempt);
 static void ra_login_callback(int result, const char* error_message, rc_client_t* client, void* userdata);
 static int ra_sync_thread_fn(void* data);
@@ -587,7 +584,7 @@ static void ra_event_handler(const rc_client_event_t* event, rc_client_t* client
 	switch (event->type) {
 	case RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED:
 		// Hide "Unknown Emulator" notification when hardcore mode is disabled
-		if (!CFG_getRAHardcoreMode() && event->achievement->id == 101000001) {
+		if (!CFG_getRAHardcoreMode() && event->achievement->id == RA_UNKNOWN_EMULATOR_ACHIEVEMENT_ID) {
 			RA_LOG_DEBUG("Skipping Unknown Emulator notification (not in hardcore mode)\n");
 			break;
 		}
@@ -714,6 +711,18 @@ static int ra_sync_thread_fn(void* data) {
  * Callback: Login callback
  *****************************************************************************/
 
+// Server unreachable but we have cached data: fall back to offline mode and
+// log in from the cache (a deferred game load is then served immediately).
+static void ra_fallback_to_offline(void) {
+	RA_LOG_WARN("Falling back to offline mode\n");
+	RA_Offline_setMode(RA_NET_OFFLINE);
+	rc_client_set_hardcore_enabled(ra_client, 0);
+	Notification_push(NOTIFICATION_ACHIEVEMENT,
+					  "RetroAchievements: offline (softcore)", NULL);
+	ra_reset_login_state();
+	ra_start_login(); // served from cache by the shim
+}
+
 static void ra_login_callback(int result, const char* error_message,
 							  rc_client_t* client, void* userdata) {
 	(void)userdata;
@@ -750,7 +759,14 @@ static void ra_login_callback(int result, const char* error_message,
 		ra_logged_in = false;
 		RA_LOG_ERROR("Login failed: %s\n", error_message ? error_message : "unknown error");
 
-		if (ra_login_retry.count < RA_LOGIN_MAX_RETRIES) {
+		// WiFi never came up: don't burn the full retry ladder with the game
+		// waiting - after ~3s of retries (the old blocking wait's latency)
+		// serve the session from the offline cache instead.
+		if (RA_Offline_getMode() == RA_NET_ONLINE && !PLAT_wifiConnected() &&
+			RA_Offline_hasLoginCache() && ra_login_retry.count >= 2) {
+			RA_LOG_WARN("WiFi not connected after %d attempts\n", ra_login_retry.count);
+			ra_fallback_to_offline();
+		} else if (ra_login_retry.count < RA_LOGIN_MAX_RETRIES) {
 			// Schedule retry
 			uint32_t delay = ra_get_retry_delay_ms(ra_login_retry.count);
 			ra_login_retry.next_time = SDL_GetTicks() + delay;
@@ -770,15 +786,7 @@ static void ra_login_callback(int result, const char* error_message,
 			// All retries exhausted
 			RA_LOG_ERROR("All login retries exhausted\n");
 			if (RA_Offline_getMode() == RA_NET_ONLINE && RA_Offline_hasLoginCache()) {
-				// Server unreachable but we have cached data: fall back to
-				// offline mode and log in from the cache
-				RA_LOG_WARN("Falling back to offline mode\n");
-				RA_Offline_setMode(RA_NET_OFFLINE);
-				rc_client_set_hardcore_enabled(ra_client, 0);
-				Notification_push(NOTIFICATION_ACHIEVEMENT,
-								  "RetroAchievements: offline (softcore)", NULL);
-				ra_reset_login_state();
-				ra_start_login(); // served from cache by the shim
+				ra_fallback_to_offline();
 			} else {
 				Notification_push(NOTIFICATION_ACHIEVEMENT,
 								  "RetroAchievements: Connection failed", NULL);
@@ -882,7 +890,7 @@ static void ra_game_loaded_callback(int result, const char* error_message,
 			uint32_t display_unlocked = summary.num_unlocked_achievements;
 			uint32_t display_total = summary.num_core_achievements;
 
-			// Hide "Unknown Emulator" warning (ID 101000001) when hardcore mode is disabled.
+			// Hide the "Unknown Emulator" warning when hardcore mode is disabled.
 			// Note: We intentionally show "Unsupported Game Version" so users know to find a supported ROM.
 			if (!CFG_getRAHardcoreMode()) {
 				rc_client_achievement_list_t* list = rc_client_create_achievement_list(
@@ -893,7 +901,7 @@ static void ra_game_loaded_callback(int result, const char* error_message,
 					for (uint32_t b = 0; b < list->num_buckets && !found; b++) {
 						for (uint32_t a = 0; a < list->buckets[b].num_achievements && !found; a++) {
 							const rc_client_achievement_t* ach = list->buckets[b].achievements[a];
-							if (ach->id == 101000001) {
+							if (ach->id == RA_UNKNOWN_EMULATOR_ACHIEVEMENT_ID) {
 								// Subtract from total
 								if (display_total > 0)
 									display_total--;
@@ -942,18 +950,13 @@ void RA_init(void) {
 	// if a login was ever cached we run in offline mode instead.
 	bool online = false;
 	if (PLAT_wifiEnabled()) {
-		if (PLAT_wifiConnected()) {
-			online = true;
-		} else {
-			// Wait for wifi to connect (handles wake-from-sleep scenario)
-			RA_LOG_DEBUG("WiFi enabled but not connected, waiting up to %dms...\n", RA_WIFI_WAIT_MAX_MS);
-			uint32_t start = SDL_GetTicks();
-			while (!PLAT_wifiConnected() &&
-				   (SDL_GetTicks() - start) < RA_WIFI_WAIT_MAX_MS) {
-				SDL_Delay(RA_WIFI_WAIT_POLL_MS);
-			}
-			online = PLAT_wifiConnected();
-		}
+		// WiFi enabled but not yet associated (e.g. wake-from-sleep): don't
+		// block the launch path waiting for it. Start online anyway - the
+		// login retry ladder in RA_idle() covers the connection coming up,
+		// and exhausted retries already fall back to the offline cache.
+		online = true;
+		if (!PLAT_wifiConnected())
+			RA_LOG_DEBUG("WiFi enabled but not connected - relying on login retries\n");
 	}
 
 	if (!online) {
@@ -1115,7 +1118,7 @@ void RA_setMemoryMap(const void* mmap) {
 	RA_LOG_DEBUG("Memory map set by core: %u descriptors (deep copied)\n", ra_memory_map->num_descriptors);
 }
 
-void RA_initMemoryRegions(uint32_t console_id) {
+static void RA_initMemoryRegions(uint32_t console_id) {
 	// Clean up any existing regions
 	if (ra_memory_regions_initialized) {
 		rc_libretro_memory_destroy(&ra_memory_regions);
@@ -1354,26 +1357,6 @@ bool RA_isHardcoreModeActive(void) {
 	return rc_client_get_hardcore_enabled(ra_client) != 0;
 }
 
-bool RA_isLoggedIn(void) {
-	return ra_logged_in;
-}
-
-const char* RA_getUserDisplayName(void) {
-	if (!ra_client || !ra_logged_in) {
-		return NULL;
-	}
-	const rc_client_user_t* user = rc_client_get_user_info(ra_client);
-	return user ? user->display_name : NULL;
-}
-
-const char* RA_getGameTitle(void) {
-	if (!ra_client || !ra_game_loaded) {
-		return NULL;
-	}
-	const rc_client_game_t* game = rc_client_get_game_info(ra_client);
-	return game ? game->title : NULL;
-}
-
 void RA_getAchievementSummary(uint32_t* unlocked, uint32_t* total) {
 	if (!ra_client || !ra_game_loaded) {
 		if (unlocked)
@@ -1399,7 +1382,7 @@ void RA_getAchievementSummary(uint32_t* unlocked, uint32_t* total) {
 			for (uint32_t a = 0; a < list->buckets[b].num_achievements; a++) {
 				const rc_client_achievement_t* ach = list->buckets[b].achievements[a];
 				// Skip "Unknown Emulator" warning when hardcore mode is disabled
-				if (hide_unknown_emulator && ach->id == 101000001) {
+				if (hide_unknown_emulator && ach->id == RA_UNKNOWN_EMULATOR_ACHIEVEMENT_ID) {
 					continue;
 				}
 				total_count++;
@@ -1430,13 +1413,6 @@ void RA_destroyAchievementList(const void* list) {
 	}
 }
 
-const char* RA_getGameHash(void) {
-	if (!ra_game_loaded || ra_game_hash[0] == '\0') {
-		return NULL;
-	}
-	return ra_game_hash;
-}
-
 bool RA_isAchievementMuted(uint32_t achievement_id) {
 	for (int i = 0; i < ra_muted_count; i++) {
 		if (ra_muted_achievements[i] == achievement_id) {
@@ -1456,7 +1432,7 @@ bool RA_toggleAchievementMute(uint32_t achievement_id) {
 	}
 }
 
-void RA_setAchievementMuted(uint32_t achievement_id, bool muted) {
+static void RA_setAchievementMuted(uint32_t achievement_id, bool muted) {
 	if (muted) {
 		// Add to muted list if not already there
 		if (!RA_isAchievementMuted(achievement_id)) {

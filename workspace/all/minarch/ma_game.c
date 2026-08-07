@@ -15,7 +15,7 @@ void Game_open(char* path) {
 	memset(&game, 0, sizeof(game));
 
 	strcpy((char*)game.path, path);
-	strcpy((char*)game.name, strrchr(path, '/') + 1);
+	strcpy((char*)game.name, baseName(path));
 	strcpy((char*)game.alt_name, game.name); // default it
 
 	// check first if the rom already is alive in tmp folder if so skip unzipping shit
@@ -108,32 +108,30 @@ void Game_open(char* path) {
 		fclose(file);
 	}
 
-	// m3u-based?
+	// m3u-based? needs at least "/<folder>/<file>" to have a containing folder
 	char* tmp;
 	char m3u_path[MAX_PATH];
-	char base_path[MAX_PATH];
 	char dir_name[MAX_PATH];
 
 	strcpy(m3u_path, game.path);
-	tmp = strrchr(m3u_path, '/') + 1;
-	tmp[0] = '\0';
-
-	strcpy(base_path, m3u_path);
-
 	tmp = strrchr(m3u_path, '/');
-	tmp[0] = '\0';
+	if (tmp) {
+		tmp[0] = '\0'; // strip the filename
 
-	tmp = strrchr(m3u_path, '/');
-	strcpy(dir_name, tmp);
+		tmp = strrchr(m3u_path, '/');
+		if (tmp) {
+			strcpy(dir_name, tmp);
 
-	// m3u named after the containing folder, inside it
-	size_t used = strlen(m3u_path);
-	snprintf(m3u_path + used, sizeof(m3u_path) - used, "%s.m3u", dir_name);
+			// m3u named after the containing folder, inside it
+			size_t used = strlen(m3u_path);
+			snprintf(m3u_path + used, sizeof(m3u_path) - used, "%s.m3u", dir_name);
 
-	if (exists(m3u_path)) {
-		strcpy(game.m3u_path, m3u_path);
-		strcpy((char*)game.name, strrchr(m3u_path, '/') + 1);
-		strcpy((char*)game.alt_name, game.name); // default it
+			if (exists(m3u_path)) {
+				strcpy(game.m3u_path, m3u_path);
+				strcpy((char*)game.name, strrchr(m3u_path, '/') + 1);
+				strcpy((char*)game.alt_name, game.name); // default it
+			}
+		}
 	}
 
 	game.is_open = 1;
@@ -148,9 +146,17 @@ void Game_close(void) {
 }
 
 struct retro_disk_control_ext_callback disk_control_ext;
-void Game_changeDisc(char* path) {
-	if (exactMatch(game.path, path) || !exists(path))
-		return;
+int Game_changeDisc(char* path) {
+	// only populated when the core registered a disk-control interface; a stray
+	// folder-named .m3u next to a non-disc core's roms can get us here without one
+	if (!disk_control_ext.replace_image_index) {
+		LOG_warn("Game_changeDisc: core has no disk control interface\n");
+		return 0;
+	}
+	if (exactMatch(game.path, path))
+		return 1; // requested disc is already loaded
+	if (!exists(path))
+		return 0;
 
 	Game_close();
 	Game_open(path);
@@ -165,6 +171,7 @@ void Game_changeDisc(char* path) {
 
 	// The snapshot belongs to the disc that was just ejected.
 	State_invalidateUndo();
+	return 1;
 }
 
 int extract_zip(char** extensions) {
@@ -193,9 +200,13 @@ int extract_zip(char** extensions) {
 	long long sum;
 	for (i = 0; i < zip_get_num_entries(za, 0); i++) {
 		if (zip_stat_index(za, i, 0, &sb) == 0) {
+			// POSIX basename() may modify its argument, so never hand it
+			// libzip's internal entry-name buffer directly
+			char entry_name[MAX_PATH];
+			snprintf(entry_name, sizeof(entry_name), "%s", sb.name);
 			len = strlen(sb.name);
 			if (len > 0 && sb.name[len - 1] == '/') {
-				snprintf(game.tmp_path, sizeof(game.tmp_path), "%s/%s", tmp_dirname, basename((char*)sb.name));
+				snprintf(game.tmp_path, sizeof(game.tmp_path), "%s/%s", tmp_dirname, basename(entry_name));
 			} else {
 				int found = 0;
 				char extension[34];
@@ -209,7 +220,7 @@ int extract_zip(char** extensions) {
 				if (!found)
 					continue;
 
-				snprintf(game.tmp_path, sizeof(game.tmp_path), "%s/%s", tmp_dirname, basename((char*)sb.name));
+				snprintf(game.tmp_path, sizeof(game.tmp_path), "%s/%s", tmp_dirname, basename(entry_name));
 
 				// Check if file already exists and has the correct size
 				struct stat st;
