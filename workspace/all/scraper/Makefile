@@ -26,7 +26,8 @@ COMMON_PATH = ../common
 PLATFORM_PATH = ../../$(PLATFORM)
 
 include ../common/ui/ui.mk
-SOURCE = scraper.c scraper_api.c scraper_compositor.c scraper_systems.c \
+SOURCE = scraper.c scraper_api.c scraper_compositor.c scraper_systems.c scraper_core.c \
+         scraper_fetch.c \
          $(COMMON_PATH)/utils.c $(COMMON_PATH)/api.c $(COMMON_PATH)/audio_manager.c \
          $(COMMON_PATH)/config.c $(COMMON_PATH)/scaler.c \
          $(COMMON_PATH)/http.c \

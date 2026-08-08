@@ -4,8 +4,6 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <limits.h>
-#include <signal.h>
-#include <spawn.h>
 #include <sys/wait.h>
 #include "defines.h"
 #include "api.h"
@@ -24,22 +22,38 @@ static void queueNext(char* cmd) {
 	quit = true;
 }
 
-extern char** environ;
-// use posix_spawnp so a bare program name (eg. "gametimectl.elf") is resolved
-// via PATH — plain posix_spawn treats it as a path relative to CWD, which is
-// the pak dir at runtime, so the exec silently fails with ENOENT
+// Fire-and-forget launch that leaves this process's SIGCHLD disposition
+// untouched. Double-fork: the grandchild execs the command and is orphaned to
+// init (PID 1), which reaps it on exit — so no zombie accumulates while nextui
+// lives. We deliberately do NOT set SIGCHLD=SIG_IGN process-wide: that made
+// popen()/pclose()/system() elsewhere return ECHILD and misreport failure
+// after the first async launch (e.g. PLAT_wifiConnected()'s wpa_cli call read
+// as "disconnected" for the rest of the session). execvp resolves a bare
+// program name (eg. "gametimectl.elf") via PATH, matching the old posix_spawnp.
 static void runCommandAsync(const char* path, char* const argv[]) {
-	// Fire-and-forget: while nextui lives the child would otherwise linger as
-	// a zombie (init only reaps it after nextui exits) — SIG_IGN makes the
-	// kernel auto-reap so callers on non-exit paths can't accumulate zombies.
-	static int sigchld_ignored = 0;
-	if (!sigchld_ignored) {
-		signal(SIGCHLD, SIG_IGN);
-		sigchld_ignored = 1;
-	}
-	pid_t pid;
-	if (posix_spawnp(&pid, path, NULL, NULL, argv, environ) != 0)
+	pid_t pid = fork();
+	if (pid < 0)
 		return;
+	if (pid == 0) {
+		// intermediate child
+		pid_t gc = fork();
+		if (gc == 0) {
+			// grandchild: exec the real command
+			execvp(path, argv);
+			_exit(127); // exec failed
+		}
+		_exit(0); // intermediate exits now → grandchild reparents to init
+	}
+	// parent (nextui): reap the intermediate, which exits immediately. Waiting
+	// on this specific pid can never steal a popen()/system() child.
+	waitpid(pid, NULL, 0);
+}
+
+void openArtFetch(const char* rom, const char* out, const char* tag, const char* status) {
+	char script[MAX_PATH];
+	snprintf(script, sizeof(script), "%s/Tools/Artwork Manager.pak/fetchart.sh", PAKS_PATH);
+	char* argv[] = {script, (char*)rom, (char*)out, (char*)tag, (char*)status, NULL};
+	runCommandAsync(script, argv);
 }
 
 ///////////////////////////////////////

@@ -11,6 +11,7 @@
 #include "shortcuts.h"
 #include "ui_buttonhintbar.h"
 #include "ui_confirmdialog.h"
+#include "ui_loadingoverlay.h"
 #include "ui_message.h"
 #include "ui_contextmenu.h"
 #include "ui_keyboard.h"
@@ -187,6 +188,61 @@ static bool entryFolderGame(Entry* entry, char* game_file_out) {
 	if (isConsoleDir(entry->path))
 		return false;
 	return dirGameFile(entry->path, game_file_out) != 0;
+}
+
+static const char* ART_FETCH_EXCLUDED_TAGS[] = {"PORTS", "CUSTOM", NULL};
+
+static bool artFetchTagExcluded(const char* tag) {
+	for (int i = 0; ART_FETCH_EXCLUDED_TAGS[i]; i++)
+		if (strcasecmp(tag, ART_FETCH_EXCLUDED_TAGS[i]) == 0)
+			return true;
+	return false;
+}
+
+// Resolve art-fetch details for `entry`. rom_to_hash/out_png/tag are MAX_PATH
+// buffers. Returns true iff eligible: a ROM or folder-game whose console tag is
+// not excluded. out_png follows nxredux art conventions:
+//   flat rom:    <console>/.media/<rom-basename>.png
+//   folder game: <console>/.media/<game-folder-name>.png
+static bool entryArtInfo(Entry* entry, char* rom_to_hash, char* out_png, char* tag) {
+	if (!entry)
+		return false;
+
+	char game_file[MAX_PATH];
+	bool folder = false;
+	if (entry->type == ENTRY_ROM) {
+		snprintf(rom_to_hash, MAX_PATH, "%s", entry->path);
+	} else if (entryFolderGame(entry, game_file)) {
+		folder = true;
+		snprintf(rom_to_hash, MAX_PATH, "%s", game_file);
+	} else {
+		return false;
+	}
+
+	getEmuName(entry->path, tag); // Roms/<Console (TAG)>/... -> "TAG" (or folder name)
+	if (tag[0] == '\0' || artFetchTagExcluded(tag))
+		return false;
+
+	// console dir = dirname(entry->path) for both flat and folder games
+	char dir_buf[MAX_PATH];
+	snprintf(dir_buf, sizeof(dir_buf), "%s", entry->path);
+	char* dir = dirname(dir_buf);
+
+	// Mirror GameList_render's thumbnail-path derivation exactly (the res_copy
+	// logic at gamelist.c ~:1557-1573): basename of entry->path with everything
+	// from the last '.' stripped, for BOTH flat and folder entries — so out_png
+	// is always the path the list actually displays. (The folder branch used to
+	// skip the strip, diverging for dotted folder names like "Marvel vs. Capcom".)
+	char base_name[MAX_PATH];
+	const char* bn = strrchr(entry->path, '/');
+	bn = bn ? bn + 1 : entry->path;
+	snprintf(base_name, sizeof(base_name), "%s", bn);
+	char* dot = strrchr(base_name, '.');
+	if (dot)
+		*dot = '\0';
+
+	snprintf(out_png, MAX_PATH, "%s/.media/%s.png", dir, base_name);
+	return true;
 }
 
 // True when `path` is the folder-named .cue/.m3u of its parent dir (basename
@@ -966,6 +1022,146 @@ static bool entryEmuOptionsCapable(Entry* entry) {
 	return emuopts_cap;
 }
 
+#define ARTFETCH_STATUS_PATH "/tmp/nextui_artfetch.status"
+#define ARTFETCH_TIMEOUT_MS 60000
+#define ARTFETCH_RESULT_MS 1500
+
+// Fit a game name onto one line of the modal title (font.large), ellipsizing
+// when it's wider than the modal (the loading overlay assumes a single-line
+// title, so an unbounded name would wrap into the subtitle). UTF-8 aware.
+static void artFetchTitle(const char* name, char* out, size_t out_size) {
+	int maxw = screen->w - SCALE1(PADDING * 6);
+	snprintf(out, out_size, "%s", name);
+	int w = 0;
+	TTF_SizeUTF8(font.large, out, &w, NULL);
+	if (w <= maxw)
+		return;
+	size_t len = strlen(out);
+	while (len > 0) {
+		len--;
+		while (len > 0 && ((unsigned char)out[len] & 0xC0) == 0x80)
+			len--; // don't split a UTF-8 sequence
+		char cand[256];
+		snprintf(cand, sizeof(cand), "%.*s...", (int)len, name);
+		TTF_SizeUTF8(font.large, cand, &w, NULL);
+		if (w <= maxw) {
+			snprintf(out, out_size, "%s", cand);
+			return;
+		}
+	}
+}
+
+// Draw one frame of the box-art fetch modal: the game name as a centered dimmed
+// title with the stage/result as subtitle (reuses the loading-overlay component).
+static void artFetchDraw(const char* title, const char* subtitle) {
+	GFX_clear(screen);
+	UI_renderLoadingOverlay(screen, title, subtitle);
+	GFX_flip(screen);
+}
+
+// Blocking notice shown on the same modal for up to ARTFETCH_RESULT_MS (B
+// dismisses early). Used for the pre-flight "no WiFi" message.
+static void artFetchNotice(const char* game_name, const char* subtitle) {
+	char title[256];
+	artFetchTitle(game_name, title, sizeof(title));
+	unsigned long start = SDL_GetTicks();
+	bool dirty = true;
+	while (SDL_GetTicks() - start < ARTFETCH_RESULT_MS) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_B))
+			break;
+		PWR_update(&dirty, NULL, NULL, NULL);
+		if (dirty) {
+			artFetchDraw(title, subtitle);
+			dirty = false;
+		} else {
+			GFX_delay();
+		}
+	}
+	GFX_clearLayers(LAYER_ALL);
+	PAD_reset();
+}
+
+// Blocking box-art fetch modal. Shows staged progress while the spawned scraper
+// runs, polling the status file each frame; B cancels (the background scraper is
+// left to finish on its own). On "done" the thumbnail cache is invalidated so
+// the game list reloads the new art when the modal closes (nextui.c marks the
+// list dirty after runContextAction). Mirrors the blocking-modal idiom used by
+// Delete/Rename in this same dispatcher.
+static void artFetchModal(const char* game_name, const char* out_png) {
+	char title[256];
+	artFetchTitle(game_name, title, sizeof(title));
+	unsigned long start = SDL_GetTicks();
+	char stage[16] = "starting";
+	const char* result = NULL; // terminal/cancel message once set
+	unsigned long result_until = 0;
+	bool dirty = true;
+
+	while (1) {
+		GFX_startFrame();
+		PAD_poll();
+		unsigned long now = SDL_GetTicks();
+
+		if (!result) {
+			if (PAD_justPressed(BTN_B)) {
+				result = "Cancelled";
+			} else {
+				char status[32] = "";
+				getFile(ARTFETCH_STATUS_PATH, status, sizeof(status));
+				char* nl = strchr(status, '\n');
+				if (nl)
+					*nl = '\0';
+
+				if (strcmp(status, "done") == 0) {
+					thumbCacheInvalidate(out_png);
+					result = "Box art added";
+				} else if (strcmp(status, "notfound") == 0) {
+					result = "No art found";
+				} else if (strcmp(status, "error") == 0) {
+					result = "Art fetch failed";
+				} else if (now - start > ARTFETCH_TIMEOUT_MS) {
+					result = "Art fetch timed out";
+				} else if (status[0] && strcmp(status, stage) != 0) {
+					snprintf(stage, sizeof(stage), "%s", status);
+					dirty = true;
+				}
+			}
+			if (result) {
+				result_until = now + ARTFETCH_RESULT_MS;
+				dirty = true;
+			}
+		} else if (now >= result_until) {
+			break;
+		}
+
+		// keep auto-sleep and the power button alive while the modal blocks
+		PWR_update(&dirty, NULL, NULL, NULL);
+
+		if (dirty) {
+			const char* sub = result;
+			if (!sub) {
+				if (strcmp(stage, "searching") == 0)
+					sub = "Searching...";
+				else if (strcmp(stage, "downloading") == 0)
+					sub = "Downloading...";
+				else if (strcmp(stage, "compositing") == 0)
+					sub = "Adding art...";
+				else
+					sub = "Starting...";
+			}
+			artFetchDraw(title, sub);
+			dirty = false;
+		} else {
+			GFX_delay();
+		}
+	}
+
+	unlink(ARTFETCH_STATUS_PATH);
+	GFX_clearLayers(LAYER_ALL);
+	PAD_reset();
+}
+
 // Dispatch a selected context-menu item (ids assigned in GameList_handleInput).
 // Runs in nextui.c's main loop; blocking modals here are safe (the flip is
 // synchronous, and UIKeyboard_open already blocks mid-loop from Search).
@@ -1109,6 +1305,20 @@ void GameList_runContextAction(int id) {
 			}
 		}
 		break;
+	case 37: // Fetch Box Art
+		if (entry) {
+			char af_rom[MAX_PATH], af_out[MAX_PATH], af_tag[MAX_PATH];
+			if (!entryArtInfo(entry, af_rom, af_out, af_tag))
+				break;
+			if (!PLAT_wifiConnected()) {
+				artFetchNotice(entry->name, "Connect to WiFi to fetch art");
+				break;
+			}
+			putFile(ARTFETCH_STATUS_PATH, "starting");
+			openArtFetch(af_rom, af_out, af_tag, ARTFETCH_STATUS_PATH);
+			artFetchModal(entry->name, af_out); // blocking modal until done/cancel/timeout
+		}
+		break;
 	default:
 		break;
 	}
@@ -1193,6 +1403,12 @@ GameListResult GameList_handleInput(unsigned long now, int currentScreen,
 				if (entryEmuOptionsCapable(entry)) {
 					snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Emulator Options");
 					items[idx].id = 36;
+					idx++;
+				}
+				char af_rom[MAX_PATH], af_out[MAX_PATH], af_tag[MAX_PATH];
+				if (entryArtInfo(entry, af_rom, af_out, af_tag) && !exists(af_out)) {
+					snprintf(items[idx].label, CONTEXTMENU_MAX_TEXT, "%s", "Fetch Box Art");
+					items[idx].id = 37;
 					idx++;
 				}
 			}

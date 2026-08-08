@@ -47,6 +47,9 @@ void onBackgroundLoaded(SDL_Surface* surface);
 
 // Thumbnail loading
 bool startLoadThumb(const char* thumbpath);
+// Drop any cached thumbnail (or cached miss) for `path` so the next
+// startLoadThumb reads it fresh from disk. Safe if not present.
+void thumbCacheInvalidate(const char* path);
 int thumbCheckAsyncLoaded(void);
 
 // Layer render helpers shared by the main render loop (moved from nextui.c)

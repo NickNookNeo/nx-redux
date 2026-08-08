@@ -47,6 +47,9 @@ void openScript(char* script_path, char* arg, char* last_path);
 void openRom(char* path, char* last);
 void Entry_open(Entry* self);
 
+// Spawn the Artwork Manager pak's headless fetch for one ROM, fire-and-forget.
+void openArtFetch(const char* rom, const char* out, const char* tag, const char* status);
+
 // State persistence
 void saveLast(char* path);
 void loadLast(void);

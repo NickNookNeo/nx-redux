@@ -1,0 +1,27 @@
+#ifndef SCRAPER_CORE_H
+#define SCRAPER_CORE_H
+
+#include "defines.h" // SHARED_USERDATA_PATH
+
+#define TMP_DIR "/tmp/scraper"
+#define CREDS_DIR SHARED_USERDATA_PATH "/.scraper"
+#define CREDS_USER CREDS_DIR "/ss_user.txt"
+#define CREDS_PASS CREDS_DIR "/ss_pass.txt"
+
+typedef enum {
+	SCRAPE_RESULT_OK = 0,
+	SCRAPE_RESULT_ERROR = 1,
+	SCRAPE_RESULT_NOTFOUND = 2,
+} ScrapeResult;
+
+// stage is one of: "searching", "downloading", "compositing"
+typedef void (*ScrapeProgressCb)(const char* stage, void* userdata);
+
+// Search ScreenScraper for `filename` (hashing `rom_path`) under `system_id`,
+// download available art, composite, and write `out_png` (creating its .media
+// dir). Reports each stage via `cb` (may be NULL). Pure worker: no GFX, no
+// globals — safe to call from the GUI queue thread or a headless process.
+ScrapeResult scrapeOne(const char* filename, const char* rom_path, int system_id,
+					   const char* out_png, ScrapeProgressCb cb, void* userdata);
+
+#endif // SCRAPER_CORE_H

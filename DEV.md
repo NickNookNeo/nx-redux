@@ -129,6 +129,8 @@ zip leaves that unit without an OSD overlay, since each zip carries only its own
 
 For fast iteration on a single component, build and push just that binary directly via Docker (skips the full package/release step):
 
+> **Push destinations:** bin/daemon binaries (`nextui`, `minarch`, `audiomon`, …) live in `/mnt/SDCARD/.system/bin/` and need a `reboot` to take effect. Bundled Tools paks live in `/mnt/SDCARD/.system/paks/Tools/<Name>.pak/` — no platform subdir, no reboot (just relaunch the pak from the Tools menu).
+
 ```bash
 # nextui
 docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/nextui && make PLATFORM=tg5040' && adb push workspace/all/nextui/build/tg5040/nextui.elf /mnt/SDCARD/.system/bin/ && adb shell reboot
@@ -140,25 +142,19 @@ docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5050-too
 docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/minarch && make PLATFORM=tg5040' && adb push workspace/all/minarch/build/tg5040/minarch.elf /mnt/SDCARD/.system/bin/ && adb shell reboot
 
 # settings
-docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5050-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/settings && make PLATFORM=tg5050' && adb push workspace/all/settings/build/tg5050/settings.elf /mnt/SDCARD/Tools/tg5050/Settings.pak/
-
-# updater
-docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/updater && make PLATFORM=tg5040' && adb push workspace/all/updater/build/tg5040/updater.elf /mnt/SDCARD/Tools/tg5040/Updater.pak/
-
-# bootlogo
-docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/bootlogo && make PLATFORM=tg5040' && adb push workspace/all/bootlogo/build/tg5040/bootlogo.elf /mnt/SDCARD/Tools/tg5040/Bootlogo.pak/
+docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5050-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/settings && make PLATFORM=tg5050' && adb push workspace/all/settings/build/tg5050/settings.elf "/mnt/SDCARD/.system/paks/Tools/Settings.pak/"
 
 # music player
-docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/musicplayer && make PLATFORM=tg5040' && adb push workspace/all/musicplayer/build/tg5040/musicplayer.elf "/mnt/SDCARD/Tools/tg5040/Music Player.pak/"
+docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/musicplayer && make PLATFORM=tg5040' && adb push workspace/all/musicplayer/build/tg5040/musicplayer.elf "/mnt/SDCARD/.system/paks/Tools/Music Player.pak/"
 
 # sync
-docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/sync && make PLATFORM=tg5040' && adb push workspace/all/sync/build/tg5040/sync.elf "/mnt/SDCARD/Tools/tg5040/Device Sync.pak/"
+docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/sync && make PLATFORM=tg5040' && adb push workspace/all/sync/build/tg5040/sync.elf "/mnt/SDCARD/.system/paks/Tools/Device Sync.pak/"
 
 # portmaster
-docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/portmaster && make PLATFORM=tg5040' && adb push workspace/all/portmaster/build/tg5040/portmaster.elf "/mnt/SDCARD/Tools/tg5040/PortMaster.pak/"
+docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/portmaster && make PLATFORM=tg5040' && adb push workspace/all/portmaster/build/tg5040/portmaster.elf "/mnt/SDCARD/.system/paks/Tools/PortMaster.pak/"
 
 # artwork manager (scraper)
-docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/scraper && make PLATFORM=tg5040' && adb push workspace/all/scraper/build/tg5040/scraper.elf "/mnt/SDCARD/Tools/tg5040/Artwork Manager.pak/"
+docker run --rm -v $(pwd)/workspace:/root/workspace ghcr.io/loveretro/tg5040-toolchain:latest /bin/bash -c 'source ~/.bashrc && cd /root/workspace/all/scraper && make PLATFORM=tg5040' && adb push workspace/all/scraper/build/tg5040/scraper.elf "/mnt/SDCARD/.system/paks/Tools/Artwork Manager.pak/"
 ```
 
 ## Component Locations

@@ -21,8 +21,9 @@
 #include "utils.h"
 
 #include "scraper_api.h"
-#include "scraper_compositor.h"
 #include "scraper_systems.h"
+#include "scraper_core.h"
+#include "scraper_fetch.h"
 #include "ui_keyboard.h"
 #include "display_helper.h"
 
@@ -33,10 +34,6 @@
 #define MAX_SYSTEMS 128
 #define MAX_ROMS 4096
 #define MAX_QUEUE 2048
-#define TMP_DIR "/tmp/scraper"
-#define CREDS_DIR SHARED_USERDATA_PATH "/.scraper"
-#define CREDS_USER CREDS_DIR "/ss_user.txt"
-#define CREDS_PASS CREDS_DIR "/ss_pass.txt"
 
 // ROM file extensions to consider
 static const char* rom_extensions[] = {
@@ -508,96 +505,20 @@ static void queueClearDone(void) {
 // Background Scraper Thread
 // ============================================
 
+static void scrape_status_cb(const char* stage, void* userdata) {
+	ScrapeQueueItem* item = (ScrapeQueueItem*)userdata;
+	ScrapeStatus s = SCRAPE_STATUS_SEARCHING;
+	if (strcmp(stage, "downloading") == 0)
+		s = SCRAPE_STATUS_DOWNLOADING;
+	else if (strcmp(stage, "compositing") == 0)
+		s = SCRAPE_STATUS_COMPOSITING;
+	pthread_mutex_lock(&queue_mutex);
+	item->status = s;
+	queue_dirty = true;
+	pthread_mutex_unlock(&queue_mutex);
+}
+
 static void scrapeOneQueueItem(ScrapeQueueItem* item) {
-	// Create temp directory
-	mkdir_p(TMP_DIR);
-
-	// Search ScreenScraper API
-	pthread_mutex_lock(&queue_mutex);
-	item->status = SCRAPE_STATUS_SEARCHING;
-	queue_dirty = true;
-	pthread_mutex_unlock(&queue_mutex);
-
-	ScraperGameInfo info;
-	bool found = ScraperAPI_search(item->filename, item->rom_path, item->system_id, &info);
-
-	if (!found) {
-		pthread_mutex_lock(&queue_mutex);
-		item->status = SCRAPE_STATUS_NOT_FOUND;
-		queue_dirty = true;
-		pthread_mutex_unlock(&queue_mutex);
-		return;
-	}
-
-	// Download images
-	pthread_mutex_lock(&queue_mutex);
-	item->status = SCRAPE_STATUS_DOWNLOADING;
-	queue_dirty = true;
-	pthread_mutex_unlock(&queue_mutex);
-
-	char ss_path[512] = "", box_path[512] = "", wheel_path_tmp[512] = "";
-	bool has_ss = false, has_box = false, has_wheel = false;
-
-	if (info.screenshot_url[0] != '\0') {
-		snprintf(ss_path, sizeof(ss_path), "%s/screenshot.png", TMP_DIR);
-		has_ss = ScraperAPI_downloadFile(info.screenshot_url, ss_path);
-		LOG_info("Scraper: screenshot download %s\n", has_ss ? "OK" : "FAILED");
-	} else {
-		LOG_info("Scraper: no screenshot URL returned\n");
-	}
-	if (info.boxart_url[0] != '\0') {
-		snprintf(box_path, sizeof(box_path), "%s/boxart.png", TMP_DIR);
-		has_box = ScraperAPI_downloadFile(info.boxart_url, box_path);
-		LOG_info("Scraper: boxart download %s\n", has_box ? "OK" : "FAILED");
-	} else {
-		LOG_info("Scraper: no boxart URL returned\n");
-	}
-	if (info.wheel_url[0] != '\0') {
-		snprintf(wheel_path_tmp, sizeof(wheel_path_tmp), "%s/wheel.png", TMP_DIR);
-		has_wheel = ScraperAPI_downloadFile(info.wheel_url, wheel_path_tmp);
-		LOG_info("Scraper: wheel download %s\n", has_wheel ? "OK" : "FAILED");
-	} else {
-		LOG_info("Scraper: no wheel URL returned\n");
-	}
-
-	LOG_info("Scraper: has_ss=%d has_box=%d has_wheel=%d\n", has_ss, has_box, has_wheel);
-
-	if (!has_ss && !has_box && !has_wheel) {
-		pthread_mutex_lock(&queue_mutex);
-		item->status = SCRAPE_STATUS_NOT_FOUND;
-		queue_dirty = true;
-		pthread_mutex_unlock(&queue_mutex);
-		return;
-	}
-
-	// Composite images
-	pthread_mutex_lock(&queue_mutex);
-	item->status = SCRAPE_STATUS_COMPOSITING;
-	queue_dirty = true;
-	pthread_mutex_unlock(&queue_mutex);
-
-	SDL_Surface* artwork = Compositor_create(
-		has_ss ? ss_path : NULL,
-		has_box ? box_path : NULL,
-		has_wheel ? wheel_path_tmp : NULL);
-
-	// Clean up temp files
-	if (has_ss)
-		remove(ss_path);
-	if (has_box)
-		remove(box_path);
-	if (has_wheel)
-		remove(wheel_path_tmp);
-
-	if (!artwork) {
-		pthread_mutex_lock(&queue_mutex);
-		item->status = SCRAPE_STATUS_ERROR;
-		queue_dirty = true;
-		pthread_mutex_unlock(&queue_mutex);
-		return;
-	}
-
-	// Save to .media directory
 	char* base = removeExtension(item->filename);
 	char out_path[512];
 	snprintf(out_path, sizeof(out_path), "%s/.media/%s.png",
@@ -605,16 +526,13 @@ static void scrapeOneQueueItem(ScrapeQueueItem* item) {
 	if (base)
 		free(base);
 
-	// Ensure .media directory exists
-	char media_dir[512];
-	snprintf(media_dir, sizeof(media_dir), "%s/.media", item->system_path);
-	mkdir_p(media_dir);
-
-	bool saved = Compositor_savePNG(artwork, out_path);
-	SDL_FreeSurface(artwork);
+	ScrapeResult r = scrapeOne(item->filename, item->rom_path, item->system_id,
+							   out_path, scrape_status_cb, item);
 
 	pthread_mutex_lock(&queue_mutex);
-	item->status = saved ? SCRAPE_STATUS_DONE : SCRAPE_STATUS_ERROR;
+	item->status = (r == SCRAPE_RESULT_OK)		   ? SCRAPE_STATUS_DONE
+				   : (r == SCRAPE_RESULT_NOTFOUND) ? SCRAPE_STATUS_NOT_FOUND
+												   : SCRAPE_STATUS_ERROR;
 	queue_dirty = true;
 	pthread_mutex_unlock(&queue_mutex);
 }
@@ -975,8 +893,9 @@ static void renderSettings(void) {
 // ============================================
 
 int main(int argc, char* argv[]) {
-	(void)argc;
-	(void)argv;
+	for (int i = 1; i < argc; i++)
+		if (strcmp(argv[i], "--fetch") == 0)
+			return run_headless_fetch(argc, argv);
 
 	screen = GFX_init(MODE_MAIN);
 	UI_showSplashScreen(screen, "Artwork Manager");

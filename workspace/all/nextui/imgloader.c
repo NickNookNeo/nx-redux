@@ -234,6 +234,23 @@ static void thumbCacheInsert(const char* path, SDL_Surface* surface) {
 	thumb_cache[target].occupied = true;
 }
 
+// Drop any cached thumbnail (or cached miss) for `path` so the next
+// startLoadThumb reads it fresh from disk. Safe if not present.
+void thumbCacheInvalidate(const char* path) {
+	if (!path || !path[0])
+		return;
+	SDL_LockMutex(thumbMutex);
+	for (int i = 0; i < THUMB_CACHE_SIZE; i++) {
+		if (thumb_cache[i].occupied && strcmp(thumb_cache[i].path, path) == 0) {
+			if (thumb_cache[i].surface)
+				SDL_FreeSurface(thumb_cache[i].surface);
+			thumb_cache[i].surface = NULL;
+			thumb_cache[i].occupied = false;
+		}
+	}
+	SDL_UnlockMutex(thumbMutex);
+}
+
 ///////////////////////////////////////
 // Dedicated thumbnail worker thread
 
