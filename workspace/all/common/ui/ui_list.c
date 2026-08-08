@@ -836,5 +836,5 @@ void UI_renderSimpleMenu(SDL_Surface* screen, int menu_selected,
 	if (config->hide_controls_hint)
 		UI_renderButtonHintBar(screen, (char*[]){"B", (char*)config->btn_b_label, "A", (char*)a_label, NULL});
 	else
-		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", (char*)config->btn_b_label, "A", (char*)a_label, NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", (char*)config->btn_b_label, "A", (char*)a_label, NULL});
 }

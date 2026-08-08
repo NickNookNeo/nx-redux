@@ -115,9 +115,9 @@ void render_video_browser(SDL_Surface* screen, IndicatorType show_setting,
 			snprintf(resume_label, sizeof(resume_label), "RESUME %d:%02d:%02d", h, m, s);
 		else
 			snprintf(resume_label, sizeof(resume_label), "RESUME %d:%02d", m, s);
-		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "X", resume_label, "A", "PLAY", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "X", resume_label, "A", "PLAY", NULL});
 	} else {
-		UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "OPEN", NULL});
+		UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "OPEN", NULL});
 	}
 }
 

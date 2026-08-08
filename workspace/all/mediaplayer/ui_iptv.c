@@ -46,7 +46,7 @@ void render_iptv_user_channels(SDL_Surface* screen, IndicatorType show_setting,
 
 	UI_renderScrollIndicators(screen, scroll, layout.items_per_page, channel_count);
 
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "PLAY", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "PLAY", NULL});
 }
 
 // Render IPTV empty state (no channels added)

@@ -136,7 +136,7 @@ void render_browser(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 	UI_renderScrollIndicators(screen, browser->scroll_offset, browser->items_per_page, browser->entry_count);
 
 	// Button hints
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "SELECT", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "SELECT", NULL});
 }
 
 // Render the now playing screen

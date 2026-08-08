@@ -1548,12 +1548,79 @@ void GFX_blitBattery(SDL_Surface* dst, SDL_Rect* dst_rect) {
 	GFX_blitBatteryAtPosition(dst, x, y);
 }
 
+// Nav-button glyphs replace the hand-drawn circle/pill in the hint bar with the
+// pre-scaled, anti-aliased art in RES_PATH (nav_*@<scale>x.png, white alpha
+// masks, each authored at the button height). Two visual styles:
+//   NAV_DISC  - a filled disc/shoulder with the symbol knocked out. Drawn in two
+//               layers: the light symbol colour is filled underneath, then the
+//               dark disc laid over, so the knocked-out symbol reads light on a
+//               dark disc (matching the old drawn button).
+//   NAV_LABEL - bare lettering (START/SELECT), no disc; drawn in the light hint
+//               colour like the adjacent hint text.
+//   NAV_IMAGE - a full-colour glyph (the d-pad, white cross with the active axis
+//               in red); blitted as authored, never tinted.
+// Any button without art (or a missing asset on device) returns NULL and falls
+// back to the drawn circle/pill in GFX_blitButton.
+typedef enum { NAV_DISC,
+			   NAV_LABEL,
+			   NAV_IMAGE } NavGlyphStyle;
+static struct NavGlyph {
+	const char* key;
+	const char* file;
+	NavGlyphStyle style;
+	SDL_Surface* surf;
+	uint8_t tried;
+} nav_glyphs[] = {
+	{"A", "nav_button_a", NAV_DISC, NULL, 0},
+	{"B", "nav_button_b", NAV_DISC, NULL, 0},
+	{"X", "nav_button_x", NAV_DISC, NULL, 0},
+	{"Y", "nav_button_y", NAV_DISC, NULL, 0},
+	{"L1", "nav_trigger_l1", NAV_DISC, NULL, 0},
+	{"L2", "nav_trigger_l2", NAV_DISC, NULL, 0},
+	{"R1", "nav_trigger_r1", NAV_DISC, NULL, 0},
+	{"R2", "nav_trigger_r2", NAV_DISC, NULL, 0},
+	{"L3", "nav_button_l3", NAV_DISC, NULL, 0},
+	{"R3", "nav_button_r3", NAV_DISC, NULL, 0},
+	{"MENU", "nav_button_menu", NAV_DISC, NULL, 0},
+	{"HOME", "nav_button_home", NAV_DISC, NULL, 0},
+	{"START", "nav_button_start", NAV_LABEL, NULL, 0},
+	{"SELECT", "nav_button_select", NAV_LABEL, NULL, 0},
+	{"LEFT/RIGHT", "nav_dpad_horizontal", NAV_IMAGE, NULL, 0},
+	{"UP/DOWN", "nav_dpad_vertical", NAV_IMAGE, NULL, 0},
+};
+static struct NavGlyph* GFX_getNavGlyph(const char* button) {
+	if (!button || !button[0])
+		return NULL;
+	for (int i = 0; i < (int)(sizeof(nav_glyphs) / sizeof(nav_glyphs[0])); i++) {
+		struct NavGlyph* g = &nav_glyphs[i];
+		if (strcmp(button, g->key) != 0)
+			continue;
+		if (g->surf)
+			return g;
+		if (g->tried)
+			return NULL; // asset absent on device — use the drawn fallback
+		g->tried = 1;
+		char path[MAX_PATH];
+		sprintf(path, RES_PATH "/%s@%ix.png", g->file, FIXED_SCALE);
+		SDL_Surface* s = IMG_Load(path);
+		if (s) {
+			SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+			g->surf = s;
+			return g;
+		}
+		return NULL;
+	}
+	return NULL;
+}
 int GFX_getButtonWidth(char* hint, char* button) {
 	int button_width = 0;
 	int width;
 	int btn_sz = SCALE1(BUTTON_SIZE);
 
-	if (strlen(button) == 1) {
+	struct NavGlyph* g = GFX_getNavGlyph(button);
+	if (g) {
+		button_width += g->surf->w; // both styles advance by the glyph width
+	} else if (strlen(button) == 1) {
 		button_width += btn_sz;
 	} else {
 		button_width += btn_sz / 2;
@@ -1591,14 +1658,24 @@ void GFX_blitButton(char* hint, char* button, SDL_Surface* dst, SDL_Rect* dst_re
 	Uint32 btn_color = SDL_MapRGB(dst->format, btn_color_sdl.r, btn_color_sdl.g, btn_color_sdl.b);
 
 	// button
-	if (strlen(button) == 1) {
+	struct NavGlyph* g = GFX_getNavGlyph(button);
+	if (g) {
+		// Show every glyph in its native colours (white masks; the d-pad's
+		// white + red) with no tint, so the button hint matches the white
+		// description text. Disc glyphs read as a white disc with the symbol
+		// knocked out; the .style field is kept for reference only.
+		SDL_Surface* glyph = g->surf;
+		int gy = dst_rect->y + (btn_sz - glyph->h) / 2;
+		GFX_blitSurfaceColor(glyph, NULL, dst, &(SDL_Rect){dst_rect->x, gy}, RGB_WHITE);
+		ox += glyph->w;
+	} else if (strlen(button) == 1) {
 		GFX_drawFilledCircle(dst, dst_rect->x + btn_sz / 2, dst_rect->y + btn_sz / 2, btn_sz / 2, btn_color);
 
 		// label
 		text = TTF_RenderUTF8_Blended(font.tiny, button, ALT_BUTTON_TEXT_COLOR);
 		SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){dst_rect->x + (btn_sz - text->w) / 2, dst_rect->y + (btn_sz - text->h) / 2});
-		ox += btn_sz;
 		SDL_FreeSurface(text);
+		ox += btn_sz;
 	} else {
 		text = TTF_RenderUTF8_Blended(font.tiny, button, ALT_BUTTON_TEXT_COLOR);
 		int pill_w = btn_sz / 2 + text->w;

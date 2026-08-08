@@ -74,7 +74,7 @@ void render_settings_menu(SDL_Surface* screen, IndicatorType show_setting, int m
 						menu_selected == SETTINGS_ITEM_BUFFER);
 
 	UI_renderButtonHintBar(screen, (char*[]){
-									   "START", "CONTROLS",
+									   "MENU", "CONTROLS",
 									   "B", "BACK",
 									   is_cyclable ? "LEFT/RIGHT" : "A",
 									   is_cyclable ? "CHANGE" : "OPEN",

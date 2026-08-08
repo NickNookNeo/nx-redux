@@ -49,7 +49,7 @@ void render_playlist_list(SDL_Surface* screen, IndicatorType show_setting,
 
 	UI_renderScrollIndicators(screen, scroll, layout.items_per_page, count);
 
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "SELECT", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "SELECT", NULL});
 }
 
 void render_playlist_detail(SDL_Surface* screen, IndicatorType show_setting,

@@ -90,7 +90,7 @@ void render_radio_list(SDL_Surface* screen, IndicatorType show_setting,
 	UI_renderToast(screen, toast_message, toast_time);
 
 	// Button hints
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "PLAY", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "PLAY", NULL});
 }
 
 // Helper to get current station by index
@@ -358,7 +358,7 @@ void render_radio_add(SDL_Surface* screen, IndicatorType show_setting,
 	UI_renderScrollIndicators(screen, *add_country_scroll, layout.items_per_page, country_count);
 
 	// Button hints
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", "SELECT", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "SELECT", NULL});
 }
 
 // Render add stations - station selection screen
@@ -463,7 +463,7 @@ void render_radio_add_stations(SDL_Surface* screen, IndicatorType show_setting,
 	UI_renderToast(screen, toast_message, toast_time);
 
 	// Button hints - dynamic based on whether selected station is already added
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", "A", selected_exists ? "REMOVE" : "ADD", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", selected_exists ? "REMOVE" : "ADD", NULL});
 }
 
 // Render help/instructions screen
@@ -579,7 +579,7 @@ void render_radio_help(SDL_Surface* screen, IndicatorType show_setting, int* hel
 	}
 
 	// Button hints
-	UI_renderButtonHintBar(screen, (char*[]){"START", "CONTROLS", "B", "BACK", NULL});
+	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", NULL});
 }
 
 // === GPU STATUS AND BUFFER INDICATOR ===

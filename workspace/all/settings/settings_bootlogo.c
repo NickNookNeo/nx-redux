@@ -137,7 +137,7 @@ void bootlogo_run(SDL_Surface* screen) {
 			}
 
 			UI_renderMenuBar(screen, "Bootlogo");
-			UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "SET", "L/R", "SCROLL", NULL});
+			UI_renderButtonHintBar(screen, (char*[]){"LEFT/RIGHT", "SCROLL", "B", "BACK", "A", "SET", NULL});
 
 			GFX_flip(screen);
 			dirty = false;
