@@ -163,6 +163,9 @@ ifneq (,$(filter $(PLATFORM),tg5040 tg5050))
 	# RetroAchievements tools pak
 	cp ./workspace/all/ratools/build/$(PLATFORM)/ratools.elf ./build/SYSTEM/$(PLATFORM)/paks/Tools/RetroAchievements.pak/
 
+	# Xtras catalog pak
+	cp ./workspace/all/extras/build/$(PLATFORM)/extras.elf ./build/SYSTEM/$(PLATFORM)/paks/Tools/Xtras.pak/
+
 	# Dreamcast netplay pre-launch wizard (run bare off PATH by DC.pak/launch.sh);
 	# gated here, not with the other SYSTEM bin copies, because it is only built
 	# for tg5040/tg5050 (see workspace/Makefile).

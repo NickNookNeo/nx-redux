@@ -23,6 +23,7 @@
 
 // PortMaster paths
 #define PORTS_PAK_DIR SDCARD_PATH "/Emus/PORTS.pak"
+#define LEGACY_PORTS_PAK_DIR SDCARD_PATH "/Emus/" PLATFORM "/PORTS.pak" // pre-flattening installs (platform-subdir layout)
 #define PORTMASTER_DIR SDCARD_PATH "/Emus/shared/PortMaster"
 #define PUGWASH_PATH PORTMASTER_DIR "/pugwash"
 #define PORTS_ROM_DIR ROMS_PATH "/Ports (PORTS)"
@@ -208,6 +209,13 @@ static void cleanup_portmaster(void) {
 	system(cmd);
 	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", PORTS_PAK_DIR);
 	system(cmd);
+	// Legacy pre-flattening installs placed PORTS.pak under Emus/<platform>/
+	// instead of the flat Emus/ - remove that too, then rmdir (not rm -rf)
+	// the now-possibly-empty platform dir so any other unrelated content
+	// there survives; ignore failure (dir not empty, or never existed).
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", LEGACY_PORTS_PAK_DIR);
+	system(cmd);
+	(void)rmdir(SDCARD_PATH "/Emus/" PLATFORM);
 	invalidate_emulist_cache();
 }
 

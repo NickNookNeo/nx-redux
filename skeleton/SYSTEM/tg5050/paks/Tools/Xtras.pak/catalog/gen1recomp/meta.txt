@@ -1,0 +1,6 @@
+name=Gen1Recomp (Pokemon R/B/Y)
+category=GAME
+runtime=ports
+desc=Native LOVE2D recreation of Pokemon Red, Blue and Yellow with the Dramatic Shape Voxel Mod bundled (3D overworld, off by default). Needs your own US cartridge ROM: put it in Roms/Game Boy first and the installer copies it over, or drop it in the game's lovegame folder later. Download ~13 MB.
+version=0.1.75+mod1.6.2
+size_mb=40
