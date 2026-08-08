@@ -40,6 +40,15 @@
 static bool gl_simple_mode = false;
 
 static ScrollTextState list_scroll = {0};
+// Selection-pill slide animation: the highlight glides to the selected row
+// instead of snapping. list_pill_target tracks the last target y so we only
+// (re)start the glide when the selection actually moves (-1 = first render,
+// which snaps).
+static PillAnimState list_pill_anim = {0};
+static int list_pill_target = -1;
+// Previous selected index, to detect a wrap (last<->first) so the pill enters
+// from the near edge in the travel direction instead of sliding the whole list.
+static int list_pill_prev_sel = -1;
 
 static bool had_thumb = false;
 static int ox;
@@ -62,6 +71,12 @@ void GameList_init(bool simple_mode) {
 
 bool GameList_scrollBusy(void) {
 	return ScrollText_isScrolling(&list_scroll) || ScrollText_needsRender(&list_scroll);
+}
+
+// True while the selection pill is mid-glide — nextui.c forces a redraw each
+// frame until it settles (like GameList_scrollBusy for the marquee).
+bool GameList_pillAnimating(void) {
+	return UI_pillAnimIsActive(&list_pill_anim);
 }
 
 bool GameList_scrollIsScrolling(void) {
@@ -1678,6 +1693,49 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 	if (total > 0) {
 		int selected_row = top->selected - top->start;
 
+		// Glide the selection pill to the selected row. Drawn here, decoupled from
+		// the per-row loop, so it can sit between rows mid-slide; the rows below
+		// then draw text only (no per-row pill background).
+		bool pill_animating = false;
+		if (list_show_entry_names) {
+			Entry* sel = top->entries->items[top->selected];
+			char* sel_name = sel->name;
+			char* sel_unique = sel->unique;
+			trimSortingMeta(&sel_name);
+			if (sel_unique)
+				trimSortingMeta(&sel_unique);
+			char* sel_text = sel_unique ? sel_unique : sel_name;
+			int sel_avail = MAX(0, (had_thumb ? ox + SCALE1(BUTTON_MARGIN)
+											  : screen->w - SCALE1(BUTTON_MARGIN)) -
+									   SCALE1(PADDING * 2));
+			char sel_trunc[256];
+			int sel_pill_w = UI_calcListPillWidth(font.large, sel_text, sel_trunc, sel_avail, 0);
+			int target_y = SCALE1(PADDING + PILL_SIZE + selected_row * PILL_SIZE);
+			// On a wrap (last<->first), enter from the near edge in the direction of
+			// travel instead of sliding the whole list: forward wrap (last->first)
+			// drops in from just above the first row; backward wrap (first->last)
+			// rises up from just below the last row. Done by seeding the glide's
+			// start position (current_y) one row off the target edge.
+			int cur_sel = top->selected;
+			bool wrap_fwd = (list_pill_prev_sel == total - 1 && cur_sel == 0 && total > 1);
+			bool wrap_bwd = (list_pill_prev_sel == 0 && cur_sel == total - 1 && total > 1);
+			list_pill_prev_sel = cur_sel;
+			if (target_y != list_pill_target) {
+				if (wrap_fwd)
+					list_pill_anim.current_y = target_y - SCALE1(PILL_SIZE);
+				else if (wrap_bwd)
+					list_pill_anim.current_y = target_y + SCALE1(PILL_SIZE);
+				UI_pillAnimSetTarget(&list_pill_anim, target_y,
+									 list_pill_target >= 0 && !ContextMenu_isOpen());
+				list_pill_target = target_y;
+			}
+			int pill_y = UI_pillAnimTick(&list_pill_anim);
+			pill_animating = UI_pillAnimIsActive(&list_pill_anim);
+			UI_drawListItemBg(screen,
+							  &(SDL_Rect){SCALE1(PADDING), pill_y, sel_pill_w, SCALE1(PILL_SIZE)},
+							  true);
+		}
+
 		for (int i = top->start, j = 0; i < top->end; i++, j++) {
 			Entry* entry = top->entries->items[i];
 			char* entry_name = entry->name;
@@ -1705,9 +1763,11 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 					.item_h = SCALE1(PILL_SIZE),
 					.max_width = available_width,
 				};
+				// selected=false: the selection background is the moving pill drawn
+				// above, not a per-row static pill.
 				ListItemPos pos = UI_renderListItemPill(
 					screen, &item_layout, font.large,
-					display_text, truncated, y, row_is_selected, 0);
+					display_text, truncated, y, false, 0);
 				int text_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2);
 				// This call site is the only place list_scroll resyncs (via
 				// ScrollText_update's strcmp), so while it's gated off below a
@@ -1732,12 +1792,16 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 				// a full-screen flash on every keypress. Passing NULL takes the
 				// static/truncated path (no present), which is also the correct
 				// modal behaviour. Same class of bug as 81a0c40a.
+				// Give the selected row its selected colour + marquee only once the
+				// pill has arrived — mid-glide the selected colour (which is picked
+				// to sit on the pill) would otherwise show over the bare background.
+				bool text_sel = row_is_selected && !pill_animating;
 				UI_renderListItemText(screen,
-									  (row_is_selected && !ContextMenu_isOpen())
+									  (text_sel && !ContextMenu_isOpen())
 										  ? &list_scroll
 										  : NULL,
 									  display_text, font.large,
-									  pos.text_x, pos.text_y, text_width, row_is_selected);
+									  pos.text_x, pos.text_y, text_width, text_sel);
 			}
 		}
 		UI_renderScrollIndicators(screen, top->start, MAIN_ROW_COUNT - 1, total);

@@ -25,6 +25,7 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 
 // Scroll-text (marquee) state, driven by the main loop's idle path.
 bool GameList_scrollBusy(void);		   // still needs animation/render ticks
+bool GameList_pillAnimating(void);	   // selection pill mid-glide, keep redrawing
 bool GameList_scrollIsScrolling(void); // actively scrolling right now
 void GameList_scrollTickIdle(void);	   // advance marquee on non-dirty frames
 void GameList_clearScroll(void);	   // drop cached scroll state (screen switch/exit)

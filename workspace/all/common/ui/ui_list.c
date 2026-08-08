@@ -639,12 +639,16 @@ void UI_renderScrollIndicators(SDL_Surface* screen, int scroll, int items_per_pa
 // Pill Animation (non-threaded, for main-loop driven apps)
 // ============================================
 
+// Duration of the selection pill's glide to a new row, in milliseconds. The
+// glide is time-based (elapsed vs SDL_GetTicks) so it lasts the same wall-clock
+// time no matter how fast the caller redraws — lower = snappier.
+#define PILL_ANIM_MS 80
+
 void UI_pillAnimInit(PillAnimState* state) {
 	state->current_y = 0;
 	state->target_y = 0;
 	state->start_y = 0;
-	state->frame = 0;
-	state->total_frames = 3;
+	state->start_time = 0;
 	state->active = false;
 }
 
@@ -652,10 +656,16 @@ void UI_pillAnimSetTarget(PillAnimState* state, int target_y, bool animate) {
 	if (target_y == state->current_y && !state->active)
 		return;
 
+	if (!animate) {
+		state->current_y = target_y;
+		state->target_y = target_y;
+		state->active = false;
+		return;
+	}
+
 	state->start_y = state->current_y;
 	state->target_y = target_y;
-	state->frame = 0;
-	state->total_frames = animate ? 3 : 0;
+	state->start_time = SDL_GetTicks();
 	state->active = true;
 }
 
@@ -663,17 +673,15 @@ int UI_pillAnimTick(PillAnimState* state) {
 	if (!state->active)
 		return state->current_y;
 
-	if (state->frame >= state->total_frames) {
+	uint32_t elapsed = SDL_GetTicks() - state->start_time;
+	if (elapsed >= PILL_ANIM_MS) {
 		state->current_y = state->target_y;
 		state->active = false;
 		return state->current_y;
 	}
 
-	state->frame++;
-	float t = (state->total_frames > 0) ? ((float)state->frame / state->total_frames) : 1.0f;
-	if (t > 1.0f)
-		t = 1.0f;
-
+	float t = (float)elapsed / PILL_ANIM_MS;
+	t = 1.0f - (1.0f - t) * (1.0f - t); // ease-out quad — fast start, gentle finish
 	state->current_y = state->start_y + (int)((state->target_y - state->start_y) * t);
 	return state->current_y;
 }

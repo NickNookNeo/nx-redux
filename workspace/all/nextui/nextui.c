@@ -245,6 +245,11 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
+		// Keep redrawing while the selection pill glides to its new row.
+		if (currentScreen == SCREEN_GAMELIST && !ContextMenu_isOpen() &&
+			GameList_pillAnimating())
+			dirty = true;
+
 		if (dirty) {
 			SDL_Surface* tmpOldScreen = NULL;
 			if (animationdirection != ANIM_NONE) {

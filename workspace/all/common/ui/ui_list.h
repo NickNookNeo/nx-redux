@@ -152,8 +152,7 @@ typedef struct {
 	int current_y;
 	int target_y;
 	int start_y;
-	int frame;
-	int total_frames;
+	uint32_t start_time; // SDL_GetTicks() when the current glide began
 	bool active;
 } PillAnimState;
 
