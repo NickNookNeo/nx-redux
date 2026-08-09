@@ -270,13 +270,10 @@ void settings_menu_handle_input(bool* quit, bool* dirty) {
 			break;
 		}
 		case ITEM_TEXT_INPUT: {
-			// Use external keyboard binary
 			extern char* UIKeyboard_open(const char* prompt);
-			DisplayHelper_prepareForExternal();
 			char* result = UIKeyboard_open(sel_snap.name);
 			PAD_poll();
 			PAD_reset();
-			DisplayHelper_recoverDisplay();
 			if (result) {
 				// text-input items are static; sel stays valid for the write-back
 				strncpy(sel->text_value, result, sizeof(sel->text_value) - 1);

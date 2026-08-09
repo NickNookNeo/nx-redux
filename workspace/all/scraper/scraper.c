@@ -882,14 +882,9 @@ static void fetchUserInfoIfOnline(void) {
 // and refresh account info if both credentials are now set.
 static void editCredentialField(const char* prompt, char* field, size_t field_size) {
 	UIKeyboard_init();
-	DisplayHelper_prepareForExternal();
 	char* input = UIKeyboard_open(prompt);
 	PAD_poll();
 	PAD_reset();
-	DisplayHelper_recoverDisplay();
-	SDL_Surface* ns = DisplayHelper_getReinitScreen();
-	if (ns)
-		screen = ns;
 	if (input) {
 		snprintf(field, field_size, "%s", input);
 		free(input);

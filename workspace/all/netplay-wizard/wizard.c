@@ -24,7 +24,6 @@
 #include "defines.h"
 #include "api.h"
 #include "config.h"
-#include "minarch.h"
 #include "ui_list.h"
 #include "ui_menubar.h"
 #include "ui_message.h"
@@ -43,16 +42,6 @@ typedef enum { ST_ROLE,
 			   ST_DONE } WizState;
 
 SDL_Surface* wiz_screen = NULL;
-
-// netplay/keyboard.c is linked for Task 3's password entry and reaches back
-// into minarch for the screen and the sleep hooks. The wizard has no core to
-// pause and no HDMI monitor, so only the screen accessor is real.
-SDL_Surface* minarch_getScreen(void) {
-	return wiz_screen;
-}
-void minarch_beforeSleep(void) {}
-void minarch_afterSleep(void) {}
-void minarch_hdmimon(void) {}
 
 //////////////////////////////////
 // CLI

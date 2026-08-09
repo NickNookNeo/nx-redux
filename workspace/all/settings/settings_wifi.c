@@ -145,11 +145,9 @@ static void wifi_action_connect(void) {
 		WIFI_connect(info->ssid, info->security);
 	} else {
 		// Need password
-		DisplayHelper_prepareForExternal();
 		char* password = UIKeyboard_open("Enter WiFi Password");
 		PAD_poll();
 		PAD_reset();
-		DisplayHelper_recoverDisplay();
 		if (password) {
 			WIFI_connectPass(info->ssid, info->security, password);
 			free(password);

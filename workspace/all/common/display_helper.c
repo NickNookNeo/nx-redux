@@ -33,6 +33,7 @@ void DisplayHelper_recoverDisplay(void) {
 		return;
 
 	reinit_screen = PLAT_initVideo();
+	GFX_setScreen(reinit_screen);
 
 	SDL_QuitSubSystem(SDL_INIT_EVENTS);
 	display_released = false;

@@ -254,6 +254,8 @@ enum {
 };
 
 SDL_Surface* GFX_init(int mode);
+SDL_Surface* GFX_getScreen(void);								   // current screen surface (owned by GFX; do not free)
+void GFX_setScreen(SDL_Surface* s);								   // refresh the cached screen after an external display re-init
 #define GFX_resize PLAT_resizeVideo								   // (int w, int h, int pitch);
 #define GFX_setSharpness PLAT_setSharpness						   // (int sharpness)
 #define GFX_setEffectColor PLAT_setEffectColor					   // (int color)

@@ -389,11 +389,9 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
 						dirty = 1;
 						break;
 					}
-					DisplayHelper_prepareForExternal();
 					char* query = UIKeyboard_open("Search podcasts");
 					PAD_poll();
 					PAD_reset();
-					DisplayHelper_recoverDisplay();
 					{
 						SDL_Surface* ns = DisplayHelper_getReinitScreen();
 						if (ns)

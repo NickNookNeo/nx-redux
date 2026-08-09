@@ -889,12 +889,7 @@ static void doAddToCollection(const char* rom_path) {
 	int pick = pickCollectionModal(collections);
 
 	if (pick == COLLECTION_PICK_NEW) {
-		// tg5050: release the DRM display before the external keyboard binary
-		// grabs it, then recover after — without the release, recoverDisplay is
-		// a no-op and the returning pageflip wedges black (mirrors Search_open)
-		DisplayHelper_prepareForExternal();
 		char* name = UIKeyboard_open("New collection name");
-		DisplayHelper_recoverDisplay();
 		if (name && strlen(name) > 0 && !strchr(name, '/')) {
 			mkdir_p(COLLECTIONS_PATH);
 			char coll_path[MAX_PATH];
@@ -917,12 +912,7 @@ static bool doRename(Entry* entry, int sel) {
 	bool renamed = false;
 	char prompt[MAX_PATH];
 	snprintf(prompt, sizeof(prompt), "Rename: %s", entry->name);
-	// tg5050: release the DRM display before the external keyboard binary grabs
-	// it, then recover after — without the release, recoverDisplay is a no-op and
-	// the returning pageflip wedges the screen black (mirrors Search_open)
-	DisplayHelper_prepareForExternal();
 	char* newname = UIKeyboard_open(prompt);
-	DisplayHelper_recoverDisplay();
 	if (!newname || strlen(newname) == 0) {
 		free(newname);
 		return false;

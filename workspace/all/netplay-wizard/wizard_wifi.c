@@ -20,7 +20,7 @@
 
 #include "api.h"
 #include "defines.h"
-#include "keyboard.h"
+#include "ui_keyboard.h"
 #include "network_common.h"
 #include "ui_buttonhintbar.h"
 #include "utils.h" // app_quit — a caught signal must unwind the picker/scan loops
@@ -248,7 +248,7 @@ static int wiz_picker_connect(const WIFI_direct_network_t* net, const char* conn
 			return -1;
 		}
 	} else {
-		char* password = Keyboard_getPassword();
+		char* password = UIKeyboard_open("Enter WiFi Password");
 		if (!password)
 			return -1; // keyboard cancelled: back to the list, nothing to report
 

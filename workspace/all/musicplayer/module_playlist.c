@@ -163,11 +163,9 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
 				}
 			} else if (PAD_justPressed(BTN_Y)) {
 				// New Playlist
-				DisplayHelper_prepareForExternal();
 				char* name = UIKeyboard_open("Playlist name");
 				PAD_poll();
 				PAD_reset();
-				DisplayHelper_recoverDisplay();
 				{
 					SDL_Surface* ns = DisplayHelper_getReinitScreen();
 					if (ns)

@@ -336,6 +336,14 @@ SDL_Surface* GFX_init(int mode) {
 
 	return gfx.screen;
 }
+
+SDL_Surface* GFX_getScreen(void) {
+	return gfx.screen;
+}
+void GFX_setScreen(SDL_Surface* s) {
+	if (s)
+		gfx.screen = s;
+}
 void GFX_quit(void) {
 	TTF_CloseFont(font.large);
 	TTF_CloseFont(font.medium);
