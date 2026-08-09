@@ -90,6 +90,26 @@ static SDL_Surface* blackBG = NULL;
 
 // Game list screen (input + render) lives in gamelist.c
 
+// Crop away the top menu-bar strip of a captured full-screen surface, returning
+// just the content region below it. The vertical (game switcher) screen
+// transition slides these cropped pages so they carry no menu bar of their own —
+// the fixed LAYER_OVERLAY bar owns the top strip and stays put while only the
+// content beneath it slides. Caller frees the returned surface.
+static SDL_Surface* cropBelowMenuBar(SDL_Surface* src, int bar_h) {
+	if (!src || bar_h < 0 || bar_h >= src->h)
+		return NULL;
+	int cw = src->w;
+	int ch = src->h - bar_h;
+	SDL_Surface* out = SDL_CreateRGBSurfaceWithFormat(
+		0, cw, ch, 32, SDL_PIXELFORMAT_ARGB8888);
+	if (!out)
+		return NULL;
+	SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
+	SDL_BlitSurface(src, &(SDL_Rect){0, bar_h, cw, ch}, out, NULL);
+	SDL_SetSurfaceBlendMode(out, SDL_BLENDMODE_NONE);
+	return out;
+}
+
 int main(int argc, char* argv[]) {
 	// Must precede autoResume(): that path returns before the rest of init, so
 	// a stale flag would ride into the auto-resumed game as a silent netplay
@@ -330,16 +350,42 @@ int main(int argc, char* argv[]) {
 								tmpOldScreen, 0, 0, FIXED_WIDTH, 0,
 								tmpNewScreen, 0 - FIXED_WIDTH, 0, 0, 0,
 								FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
-						if (animationdirection == SLIDE_DOWN)
-							GFX_animateSlidePages(
-								tmpOldScreen, 0, 0, 0, FIXED_HEIGHT,
-								tmpNewScreen, 0, 0 - FIXED_HEIGHT, 0, 0,
-								FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
-						if (animationdirection == SLIDE_UP)
-							GFX_animateSlidePages(
-								tmpOldScreen, 0, 0, 0, 0 - FIXED_HEIGHT,
-								tmpNewScreen, 0, FIXED_HEIGHT, 0, 0,
-								FIXED_WIDTH, FIXED_HEIGHT, 250, LAYER_THUMBNAIL);
+						if (animationdirection == SLIDE_DOWN ||
+							animationdirection == SLIDE_UP) {
+							// Vertical (game switcher) transitions must hold the
+							// top menu bar fixed, matching the horizontal folder
+							// slides. Horizontal works because each sliding page's
+							// own menu bar never leaves the top strip the fixed
+							// LAYER_OVERLAY bar covers; a vertical slide would drag
+							// those bars down through the content region where the
+							// overlay no longer masks them. So slide only the
+							// region *below* the bar and let the fixed overlay own
+							// the top strip.
+							int bar_h = SCALE1(BUTTON_SIZE) +
+										SCALE1(BUTTON_MARGIN * 2);
+							SDL_Surface* oldContent =
+								cropBelowMenuBar(tmpOldScreen, bar_h);
+							SDL_Surface* newContent =
+								cropBelowMenuBar(tmpNewScreen, bar_h);
+							if (oldContent && newContent) {
+								int cw = newContent->w;
+								int ch = newContent->h;
+								if (animationdirection == SLIDE_UP)
+									GFX_animateSlidePages(
+										oldContent, 0, bar_h, 0, bar_h - ch,
+										newContent, 0, bar_h + ch, 0, bar_h,
+										cw, ch, 250, LAYER_THUMBNAIL);
+								else
+									GFX_animateSlidePages(
+										oldContent, 0, bar_h, 0, bar_h + ch,
+										newContent, 0, bar_h - ch, 0, bar_h,
+										cw, ch, 250, LAYER_THUMBNAIL);
+							}
+							if (oldContent)
+								SDL_FreeSurface(oldContent);
+							if (newContent)
+								SDL_FreeSurface(newContent);
+						}
 						GFX_clearLayers(LAYER_THUMBNAIL);
 						GFX_clearLayers(LAYER_OVERLAY);
 						SDL_FreeSurface(tmpNewScreen);
