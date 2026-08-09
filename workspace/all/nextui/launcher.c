@@ -108,35 +108,9 @@ static void readyResumePath(char* rom_path, int type) {
 	}
 
 	// Boxart fallback: if no savestate preview, check for boxart in .media folder
+	// (with ROM_findArt's multi-disc fallback to the parent folder's art)
 	if (!resume.has_preview) {
-		char rom_dir[MAX_PATH];
-		char rom_name[MAX_PATH];
-		strcpy(rom_dir, rom_path);
-		char* last_slash = strrchr(rom_dir, '/');
-		if (last_slash) {
-			*last_slash = '\0';				  // rom_dir now has directory
-			strcpy(rom_name, last_slash + 1); // rom_name has filename with ext
-			char* dot = strrchr(rom_name, '.');
-			if (dot)
-				*dot = '\0'; // remove extension
-			snprintf(resume.boxart_path, sizeof(resume.boxart_path), "%s/.media/%s.png", rom_dir, rom_name);
-			resume.has_boxart = exists(resume.boxart_path);
-
-			// For multi-disk games in folders: if boxart not found, check parent folder
-			// e.g., /Roms/PS1/GameFolder/game.m3u -> check /Roms/PS1/.media/GameFolder.png
-			if (!resume.has_boxart) {
-				char parent_dir[MAX_PATH];
-				char folder_name[MAX_PATH];
-				strcpy(parent_dir, rom_dir);
-				char* parent_slash = strrchr(parent_dir, '/');
-				if (parent_slash) {
-					*parent_slash = '\0';				   // parent_dir now has grandparent directory
-					strcpy(folder_name, parent_slash + 1); // folder_name has the game folder name
-					snprintf(resume.boxart_path, sizeof(resume.boxart_path), "%s/.media/%s.png", parent_dir, folder_name);
-					resume.has_boxart = exists(resume.boxart_path);
-				}
-			}
-		}
+		resume.has_boxart = ROM_findArt(rom_path, resume.boxart_path, sizeof(resume.boxart_path));
 	}
 }
 void readyResume(Entry* entry) {
@@ -179,15 +153,22 @@ int autoResume(void) {
 	char* gametimectl_argv[] = {"gametimectl.elf", "start", sd_path, NULL};
 	runCommandAsync("gametimectl.elf", gametimectl_argv);
 
-	char escaped_emu[MAX_PATH];
-	char escaped_sd[MAX_PATH];
+	// Escaped buffers are 4x MAX_PATH so worst-case single-quote escaping
+	// (each ' -> '\'', +3 bytes) of a MAX_PATH source can never overflow and
+	// leave escapeSingleQuotes bailing mid-string with unbalanced quotes.
+	char escaped_emu[MAX_PATH * 4];
+	char escaped_sd[MAX_PATH * 4];
 	strncpy(escaped_emu, emu_path, sizeof(escaped_emu) - 1);
 	escaped_emu[sizeof(escaped_emu) - 1] = '\0';
 	strncpy(escaped_sd, sd_path, sizeof(escaped_sd) - 1);
 	escaped_sd[sizeof(escaped_sd) - 1] = '\0';
 
-	char cmd[MAX_PATH * 2]; // holds two quoted MAX_PATH strings
-	snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(escaped_emu, sizeof(escaped_emu)), escapeSingleQuotes(escaped_sd, sizeof(escaped_sd)));
+	char cmd[MAX_PATH * 8]; // holds two worst-case escaped MAX_PATH strings + quotes
+	int n = snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(escaped_emu, sizeof(escaped_emu)), escapeSingleQuotes(escaped_sd, sizeof(escaped_sd)));
+	if (n < 0 || (size_t)n >= sizeof(cmd)) {
+		LOG_error("autoResume: launch command too long, aborting\n");
+		return 0;
+	}
 	putInt(RESUME_SLOT_PATH, AUTO_RESUME_SLOT);
 	queueNext(cmd);
 	return 1;
@@ -212,12 +193,17 @@ void openPak(char* path) {
 	}
 	saveLast(save_path);
 
-	char escaped_path[MAX_PATH];
+	char escaped_path[MAX_PATH * 4]; // 4x so worst-case escaping can't overflow
 	strncpy(escaped_path, path, sizeof(escaped_path) - 1);
 	escaped_path[sizeof(escaped_path) - 1] = '\0';
 
-	char cmd[MAX_PATH * 2]; // quoted path + "/launch.sh" can exceed MAX_PATH
-	snprintf(cmd, sizeof(cmd), "'%s/launch.sh'", escapeSingleQuotes(escaped_path, sizeof(escaped_path)));
+	char cmd[MAX_PATH * 5]; // worst-case escaped path + quotes + "/launch.sh"
+	int n = snprintf(cmd, sizeof(cmd), "'%s/launch.sh'", escapeSingleQuotes(escaped_path, sizeof(escaped_path)));
+	if (n < 0 || (size_t)n >= sizeof(cmd)) {
+		LOG_error("openPak: launch command too long, aborting\n");
+		startgame = false; // keep the launcher on the menu instead of blanking
+		return;
+	}
 	queueNext(cmd);
 }
 void openScript(char* script_path, char* arg, char* last_path) {
@@ -226,16 +212,21 @@ void openScript(char* script_path, char* arg, char* last_path) {
 	saveLast(last_path);
 
 	// escapeSingleQuotes modifies its buffer, so use separate copies.
-	char escaped_script[MAX_PATH];
+	// 4x MAX_PATH so worst-case escaping can't overflow / unbalance quotes.
+	char escaped_script[MAX_PATH * 4];
 	strncpy(escaped_script, script_path, sizeof(escaped_script) - 1);
 	escaped_script[sizeof(escaped_script) - 1] = '\0';
 
-	char escaped_arg[MAX_PATH];
+	char escaped_arg[MAX_PATH * 4];
 	strncpy(escaped_arg, arg, sizeof(escaped_arg) - 1);
 	escaped_arg[sizeof(escaped_arg) - 1] = '\0';
 
-	char cmd[MAX_PATH * 2];
-	snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(escaped_script, sizeof(escaped_script)), escapeSingleQuotes(escaped_arg, sizeof(escaped_arg)));
+	char cmd[MAX_PATH * 8]; // holds two worst-case escaped MAX_PATH strings + quotes
+	int n = snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(escaped_script, sizeof(escaped_script)), escapeSingleQuotes(escaped_arg, sizeof(escaped_arg)));
+	if (n < 0 || (size_t)n >= sizeof(cmd)) {
+		LOG_error("openScript: command too long, aborting\n");
+		return;
+	}
 	queueNext(cmd);
 }
 void openRom(char* path, char* last) {
@@ -298,15 +289,21 @@ void openRom(char* path, char* last) {
 	// Queue the launch command FIRST to minimize delay — queueNext writes
 	// /tmp/next and sets quit=true so the main loop exits ASAP.
 	// escapeSingleQuotes modifies its buffer, so use separate copies.
-	char escaped_emu[MAX_PATH];
-	char escaped_sd[MAX_PATH];
+	// 4x MAX_PATH so worst-case escaping can't overflow / unbalance quotes.
+	char escaped_emu[MAX_PATH * 4];
+	char escaped_sd[MAX_PATH * 4];
 	strncpy(escaped_emu, emu_path, sizeof(escaped_emu) - 1);
 	escaped_emu[sizeof(escaped_emu) - 1] = '\0';
 	strncpy(escaped_sd, sd_path, sizeof(escaped_sd) - 1);
 	escaped_sd[sizeof(escaped_sd) - 1] = '\0';
 
-	char cmd[MAX_PATH * 2]; // holds two quoted MAX_PATH strings
-	snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(escaped_emu, sizeof(escaped_emu)), escapeSingleQuotes(escaped_sd, sizeof(escaped_sd)));
+	char cmd[MAX_PATH * 8]; // holds two worst-case escaped MAX_PATH strings + quotes
+	int n = snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(escaped_emu, sizeof(escaped_emu)), escapeSingleQuotes(escaped_sd, sizeof(escaped_sd)));
+	if (n < 0 || (size_t)n >= sizeof(cmd)) {
+		LOG_error("openRom: launch command too long, aborting\n");
+		startgame = false; // keep the launcher on the menu instead of blanking
+		return;
+	}
 	queueNext(cmd);
 
 	// Non-critical bookkeeping — happens after quit is already set

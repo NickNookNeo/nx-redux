@@ -60,6 +60,11 @@ bool SimpleMode_readPin(char pin_out[5]);
 void putInt(char* path, int value);
 int getInt(char* path);
 
+// Run `cmd` via popen, capturing stdout into `output` (silently truncated,
+// NUL-terminated; `output` may be NULL). Returns the command's exit code via
+// WEXITSTATUS, or -1 if popen fails.
+int run_cmd_capture(const char* cmd, char* output, size_t output_len);
+
 uint64_t getMicroseconds(void);
 
 int clamp(int x, int lower, int upper);
@@ -71,5 +76,23 @@ char* findFileInDir(const char* directory, const char* filename);
 // %XX). dst must hold up to 3x src plus a NUL; encoding stops early if it would
 // overflow dst_size.
 void urlEncode(const char* src, char* dst, size_t dst_size);
+
+// DJB2 over the string's bytes (unsigned); used for cache filenames and hash buckets
+unsigned int hashString(const char* str);
+
+// <dir-of-rom>/.media/<basename-without-extension>.png ("." dir if rom_path has no slash)
+void ROM_mediaArtPath(const char* rom_path, char* out, size_t out_size);
+// ROM_mediaArtPath, existence-checked, with multi-disc fallback to
+// <parent>/.media/<containing-folder>.png. Returns whether the path in `out` exists.
+bool ROM_findArt(const char* rom_path, char* out, size_t out_size);
+
+// Folder-named .m3u: /Roms/PSX/Game/disc1.bin -> /Roms/PSX/Game/Game.m3u.
+// Writes the candidate path to m3u_path; returns whether it exists.
+bool M3U_findForRom(const char* rom_path, char* m3u_path, size_t m3u_size);
+// Calls fn once per existing disc (paths resolved relative to the m3u's dir),
+// index counts existing discs from 0. fn returns false to stop early.
+// Returns the number of discs passed to fn.
+typedef bool (*M3U_DiscFn)(const char* disc_path, int index, void* ctx);
+int M3U_forEachDisc(const char* m3u_path, M3U_DiscFn fn, void* ctx);
 
 #endif

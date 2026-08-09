@@ -543,10 +543,14 @@ int PLAT_bluetoothScan(struct BT_device* devices, int max) {
 		// Parse "Device XX:XX:XX:XX:XX:XX Name"
 		if (strncmp(line, "Device ", 7) == 0) {
 			if (sscanf(line, "Device %17s", addr) == 1) {
-				// Get name (everything after the address)
-				char* name_start = line + 7 + 18; // "Device " + "XX:XX:XX:XX:XX:XX "
-				if (*name_start) {
-					strncpy(name, name_start, sizeof(name) - 1);
+				// Get name (everything after the address). "Device " (7) +
+				// "XX:XX:XX:XX:XX:XX " (18) = 25 bytes precede the name;
+				// bounds-check so a line with no trailing space can't over-read.
+				if (strlen(line) >= 25) {
+					char* name_start = line + 7 + 18;
+					if (*name_start) {
+						strncpy(name, name_start, sizeof(name) - 1);
+					}
 				}
 
 				// Get device type — only show audio and controller devices
@@ -663,10 +667,14 @@ int PLAT_bluetoothPaired(struct BT_devicePaired* paired, int max) {
 		// Parse "Device XX:XX:XX:XX:XX:XX Name"
 		if (strncmp(line, "Device ", 7) == 0) {
 			if (sscanf(line, "Device %17s", addr) == 1) {
-				// Get name (everything after the address)
-				char* name_start = line + 7 + 18;
-				if (*name_start) {
-					strncpy(name, name_start, sizeof(name) - 1);
+				// Get name (everything after the address). "Device " (7) +
+				// "XX:XX:XX:XX:XX:XX " (18) = 25 bytes precede the name;
+				// bounds-check so a line with no trailing space can't over-read.
+				if (strlen(line) >= 25) {
+					char* name_start = line + 7 + 18;
+					if (*name_start) {
+						strncpy(name, name_start, sizeof(name) - 1);
+					}
 				}
 
 				// Skip if already in the list (device may be both paired and connected)

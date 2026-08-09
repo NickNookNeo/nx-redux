@@ -287,10 +287,7 @@ static void Netplay_restartBroadcast(void) {
 	if (np.mode != NETPLAY_HOST)
 		return; // Only for host
 
-	np.udp_fd = NET_createBroadcastSocket();
-	if (np.udp_fd < 0) {
-		snprintf(np.status_msg, sizeof(np.status_msg), "Failed to restart broadcast");
-	}
+	NET_ensureBroadcastSocket(&np.udp_fd, np.status_msg, sizeof(np.status_msg));
 }
 
 // Internal helper - stops host with optional hotspot cleanup
@@ -471,11 +468,15 @@ int Netplay_connectToHost(const char* ip, uint16_t port) {
 }
 
 void Netplay_disconnect(void) {
+	// Close/clear the fd under the mutex so the listen thread (which assigns
+	// np.tcp_fd on accept) and recv_packet's fd snapshot stay coherent
+	pthread_mutex_lock(&np.mutex);
 	if (np.tcp_fd >= 0) {
 		send_packet(CMD_DISCONNECT, 0, NULL, 0);
 		close(np.tcp_fd);
 		np.tcp_fd = -1;
 	}
+	pthread_mutex_unlock(&np.mutex);
 
 	// Update cached audio state
 	np.audio_should_silence = false;
@@ -1010,15 +1011,22 @@ static bool send_packet(uint8_t cmd, uint32_t frame, const void* data, uint16_t 
 	return true;
 }
 
-// Helper to handle disconnect within recv_packet (called with mutex NOT held)
-static void handle_recv_disconnect(void) {
+// Helper to handle disconnect within recv_packet (called with mutex NOT held).
+// fd is the descriptor recv_packet was reading; only tear down if it is still
+// the current connection - another thread may have closed/replaced np.tcp_fd
+// while recv_packet was blocked in select/recv.
+static void handle_recv_disconnect(int fd) {
 	pthread_mutex_lock(&np.mutex);
 
-	// Close socket under mutex protection
-	if (np.tcp_fd >= 0) {
-		close(np.tcp_fd);
-		np.tcp_fd = -1;
+	// Stale fd: connection already closed or replaced elsewhere, nothing to do
+	if (np.tcp_fd != fd) {
+		pthread_mutex_unlock(&np.mutex);
+		return;
 	}
+
+	// Close socket under mutex protection
+	close(np.tcp_fd);
+	np.tcp_fd = -1;
 
 	// For host, go back to waiting and restart broadcast
 	if (np.mode == NETPLAY_HOST) {
@@ -1036,31 +1044,41 @@ static void handle_recv_disconnect(void) {
 }
 
 static bool recv_packet(PacketHeader* hdr, void* data, uint16_t max_size, int timeout_ms) {
-	if (np.tcp_fd < 0)
+	// Snapshot the fd under the mutex - another thread (listen thread accept,
+	// disconnect paths) can close/reassign np.tcp_fd concurrently, so reading
+	// the global repeatedly could select/recv on the wrong descriptor. All I/O
+	// below uses the snapshot; the mutex is NOT held across blocking calls.
+	// If the fd is closed mid-call, select/recv fail (e.g. EBADF) and we just
+	// return false without touching connection state.
+	pthread_mutex_lock(&np.mutex);
+	int fd = np.tcp_fd;
+	pthread_mutex_unlock(&np.mutex);
+
+	if (fd < 0)
 		return false;
 
 	fd_set fds;
 	FD_ZERO(&fds);
-	FD_SET(np.tcp_fd, &fds);
+	FD_SET(fd, &fds);
 
 	struct timeval tv = {
 		.tv_sec = timeout_ms / 1000,
 		.tv_usec = (timeout_ms % 1000) * 1000};
 
-	if (select(np.tcp_fd + 1, &fds, NULL, NULL, &tv) <= 0) {
+	if (select(fd + 1, &fds, NULL, NULL, &tv) <= 0) {
 		return false; // Timeout or error
 	}
 
-	ssize_t ret = recv(np.tcp_fd, hdr, sizeof(*hdr), 0);
+	ssize_t ret = recv(fd, hdr, sizeof(*hdr), 0);
 	if (ret == 0) {
 		// Connection closed by remote end
-		handle_recv_disconnect();
+		handle_recv_disconnect(fd);
 		return false;
 	}
 	if (ret < 0 || ret != sizeof(*hdr)) {
 		// Error or partial read
 		if (errno == ECONNRESET || errno == EPIPE || errno == ENOTCONN) {
-			handle_recv_disconnect();
+			handle_recv_disconnect(fd);
 		}
 		return false;
 	}
@@ -1082,9 +1100,9 @@ static bool recv_packet(PacketHeader* hdr, void* data, uint16_t max_size, int ti
 		char scratch[4096];
 		bool deliver = (data && hdr->size <= max_size);
 		void* dst = deliver ? data : (void*)scratch;
-		ret = recv(np.tcp_fd, dst, hdr->size, 0);
+		ret = recv(fd, dst, hdr->size, 0);
 		if (ret == 0) {
-			handle_recv_disconnect();
+			handle_recv_disconnect(fd);
 			return false;
 		}
 		if (ret != hdr->size) {

@@ -224,26 +224,41 @@ GLuint link_program(GLuint vertex_shader, GLuint fragment_shader, const char* ca
 	// Try to load cached binary first
 	FILE* f = fopen(cache_path, "rb");
 	if (f) {
-		GLint binaryFormat;
-		fread(&binaryFormat, sizeof(GLint), 1, f);
-		fseek(f, 0, SEEK_END);
-		size_t length = ftell(f) - sizeof(GLint);
-		fseek(f, sizeof(GLint), SEEK_SET);
-		void* binary = malloc(length);
-		fread(binary, 1, length, f);
+		GLint binaryFormat = 0;
+		long file_size = -1;
+		size_t length = 0;
+		void* binary = NULL;
+
+		// A corrupt or truncated cache must never crash — validate every step
+		// (format read, seekable size, allocation, full read) and fall back to
+		// the normal compile path on any failure.
+		if (fread(&binaryFormat, sizeof(GLint), 1, f) == 1 &&
+			fseek(f, 0, SEEK_END) == 0 &&
+			(file_size = ftell(f)) > (long)sizeof(GLint)) {
+			length = (size_t)file_size - sizeof(GLint);
+			if (fseek(f, sizeof(GLint), SEEK_SET) == 0) {
+				binary = malloc(length);
+				if (binary && fread(binary, 1, length, f) != length) {
+					free(binary);
+					binary = NULL;
+				}
+			}
+		}
 		fclose(f);
 
-		glProgramBinary(program, binaryFormat, binary, length);
-		free(binary);
+		if (binary) {
+			glProgramBinary(program, binaryFormat, binary, length);
+			free(binary);
 
-		glGetProgramiv(program, GL_LINK_STATUS, &success);
-		if (success) {
-			LOG_info("Loaded shader program from cache: %s\n", cache_key);
-			return program;
-		} else {
-			LOG_info("Cache load failed, falling back to compile.\n");
-			glDeleteProgram(program);
-			program = glCreateProgram();
+			glGetProgramiv(program, GL_LINK_STATUS, &success);
+			if (success) {
+				LOG_info("Loaded shader program from cache: %s\n", cache_key);
+				return program;
+			} else {
+				LOG_info("Cache load failed, falling back to compile.\n");
+				glDeleteProgram(program);
+				program = glCreateProgram();
+			}
 		}
 	}
 

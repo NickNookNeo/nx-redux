@@ -53,29 +53,7 @@ static bool rat_game_art_path(const char* game_hash, char* out, size_t out_size)
 	if (!RA_Offline_getGameRomPath(game_hash, rom_path, sizeof(rom_path)))
 		return false;
 
-	char dir_buf[512], base_buf[512];
-	snprintf(dir_buf, sizeof(dir_buf), "%s", rom_path);
-	snprintf(base_buf, sizeof(base_buf), "%s", rom_path);
-
-	char* dir = dirname(dir_buf); // may point into dir_buf, or a static "."
-	char* base = strrchr(base_buf, '/');
-	base = base ? base + 1 : base_buf;
-	char* dot = strrchr(base, '.');
-	if (dot)
-		*dot = '\0';
-
-	snprintf(out, out_size, "%s/.media/%s.png", dir, base);
-	if (exists(out))
-		return true;
-
-	// multi-file fallback: art named after the rom's containing folder
-	char parent_buf[512];
-	snprintf(parent_buf, sizeof(parent_buf), "%s", dir);
-	char* folder = strrchr(parent_buf, '/');
-	if (folder && folder != parent_buf) {
-		*folder = '\0';
-		snprintf(out, out_size, "%s/.media/%s.png", parent_buf, folder + 1);
-	}
+	ROM_findArt(rom_path, out, out_size);
 	return true; // a missing file just means no image (loader returns NULL)
 }
 

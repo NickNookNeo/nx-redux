@@ -67,6 +67,10 @@ void free_play_activities(PlayActivities* pa_ptr) {
 	for (int i = 0; i < pa_ptr->count; i++) {
 		free(pa_ptr->play_activity[i]->first_played_at);
 		free(pa_ptr->play_activity[i]->last_played_at);
+		free(pa_ptr->play_activity[i]->rom->type);
+		free(pa_ptr->play_activity[i]->rom->name);
+		free(pa_ptr->play_activity[i]->rom->file_path);
+		free(pa_ptr->play_activity[i]->rom->image_path);
 		free(pa_ptr->play_activity[i]->rom);
 		free(pa_ptr->play_activity[i]);
 	}
@@ -75,22 +79,9 @@ void free_play_activities(PlayActivities* pa_ptr) {
 }
 
 void get_rom_image_path(char* rom_file, char* out_image_path) {
-	if (suffixMatch(rom_file, ".p8") || suffixMatch(rom_file, ".png")) {
-		snprintf(out_image_path, STR_MAX - 1, ROMS_PATH "/%s", rom_file);
-	}
-
-	char* clean_rom_name = removeExtension(baseName(rom_file));
-	// this assumes all media resides in a top-level .media folder
-	//char *rom_folder = strtok(rom_file, "/");
-	//snprintf(out_image_path, STR_MAX - 1, ROMS_PATH "/%s/.media/%s.png", rom_folder, clean_rom_name);
-	// this assumes that roms in subfolders have corresponding game art in
-	// a .media folder in the respective subfolder
-	char rom_folder_path[MAX_PATH];
-	folderPath(rom_file, rom_folder_path);
-
-	snprintf(out_image_path, STR_MAX - 1, ROMS_PATH "/%s/.media/%s.png", rom_folder_path, clean_rom_name);
-	//LOG_debug("out_image_path: %s\n", out_image_path);
-	free(clean_rom_name);
+	char rom_abs[MAX_PATH];
+	snprintf(rom_abs, sizeof(rom_abs), ROMS_PATH "/%s", rom_file);
+	ROM_mediaArtPath(rom_abs, out_image_path, STR_MAX - 1);
 }
 
 int play_activity_db_transaction(sqlite3* game_log_db, int (*exec_transaction)(sqlite3*)) {
@@ -169,14 +160,19 @@ PlayActivities* play_activity_find_all(void) {
 	play_activities = (PlayActivities*)malloc(sizeof(PlayActivities));
 	play_activities->count = play_activity_count;
 	play_activities->play_time_total = 0;
-	play_activities->play_activity = (PlayActivity**)malloc(sizeof(PlayActivity*) * play_activities->count);
+	play_activities->play_activity = (PlayActivity**)calloc(play_activities->count, sizeof(PlayActivity*));
 
 	for (int i = 0; i < play_activities->count; i++) {
-		if (sqlite3_step(stmt) != SQLITE_ROW)
+		if (sqlite3_step(stmt) != SQLITE_ROW) {
+			// fewer rows on the second pass than the first: shrink count so
+			// free_play_activities never walks unpopulated entries
+			play_activities->count = i;
 			break;
+		}
 
 		PlayActivity* entry = play_activities->play_activity[i] = (PlayActivity*)malloc(sizeof(PlayActivity));
 		ROM* rom = play_activities->play_activity[i]->rom = (ROM*)malloc(sizeof(ROM));
+		memset(rom, 0, sizeof(ROM));
 		entry->first_played_at = NULL;
 		entry->last_played_at = NULL;
 
@@ -193,10 +189,10 @@ PlayActivities* play_activity_find_all(void) {
 		entry->play_count = sqlite3_column_int(stmt, 4);
 		entry->play_time_total = sqlite3_column_int(stmt, 5);
 		entry->play_time_average = sqlite3_column_int(stmt, 6);
-		if (sqlite3_column_text(stmt, 8) != NULL) {
+		if (sqlite3_column_text(stmt, 7) != NULL) {
 			entry->first_played_at = strdup((const char*)sqlite3_column_text(stmt, 7));
 		}
-		if (sqlite3_column_text(stmt, 9) != NULL) {
+		if (sqlite3_column_text(stmt, 8) != NULL) {
 			entry->last_played_at = strdup((const char*)sqlite3_column_text(stmt, 8));
 		}
 
@@ -212,9 +208,15 @@ PlayActivities* play_activity_find_all(void) {
 void __ensure_rel_path(char* rel_path, const char* rom_path) {
 	if (!pathRelativeTo(rel_path, ROMS_PATH, rom_path)) {
 		if (strstr(rom_path, "../../Roms/") != NULL) {
-			strcpy(rel_path, splitString(strdup((const char*)rom_path), "../../Roms/"));
+			char* dup = strdup((const char*)rom_path);
+			strcpy(rel_path, splitString(dup, "../../Roms/"));
+			free(dup);
 		} else {
-			strcpy(rel_path, replaceString2(strdup((const char*)rom_path), ROMS_PATH "/", ""));
+			char* dup = strdup((const char*)rom_path);
+			char* replaced = replaceString2(dup, ROMS_PATH "/", "");
+			strcpy(rel_path, replaced);
+			free(replaced);
+			free(dup);
 		}
 	}
 }
@@ -338,7 +340,8 @@ bool _get_active_rom_path(char* rom_path_out) {
 	}
 
 	if ((ptr = strrchr(cmd, '\'')) != NULL) {
-		strncpy(rom_path_out, ptr + 1, STR_MAX);
+		strncpy(rom_path_out, ptr + 1, STR_MAX - 1);
+		rom_path_out[STR_MAX - 1] = '\0';
 		return true;
 	}
 	return false;

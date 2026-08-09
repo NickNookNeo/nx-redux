@@ -101,6 +101,7 @@ static int find_audio_hid_device(char* event_path, size_t path_size, bool find_b
 	while (fgets(line, sizeof(line), f)) {
 		if (strncmp(line, "N: Name=", 8) == 0) {
 			strncpy(name, line + 8, sizeof(name) - 1);
+			name[sizeof(name) - 1] = '\0'; // strncpy may leave it unterminated
 			handlers[0] = 0;
 			is_usb = false;
 			is_bluetooth_avrcp = false;
@@ -114,6 +115,7 @@ static int find_audio_hid_device(char* event_path, size_t path_size, bool find_b
 			}
 		} else if (strncmp(line, "H: Handlers=", 12) == 0) {
 			strncpy(handlers, line + 12, sizeof(handlers) - 1);
+			handlers[sizeof(handlers) - 1] = '\0'; // strncpy may leave it unterminated
 			if (strstr(handlers, "kbd")) {
 				has_kbd = true;
 			}

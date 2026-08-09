@@ -153,9 +153,11 @@ void clock_adjustment_run(SDL_Surface* screen) {
 	int i = 0;
 	while ((c = chars[i])) {
 		digit = TTF_RenderUTF8_Blended(font.large, c, COLOR_WHITE);
-		int y = i == CHAR_COLON ? SCALE1(-1.5) : 0;
-		SDL_BlitSurface(digit, NULL, clock_digits, &(SDL_Rect){(i * SCALE1(DIGIT_WIDTH)) + (SCALE1(DIGIT_WIDTH) - digit->w) / 2, y + (SCALE1(DIGIT_HEIGHT) - digit->h) / 2});
-		SDL_FreeSurface(digit);
+		if (digit) {
+			int y = i == CHAR_COLON ? SCALE1(-1.5) : 0;
+			SDL_BlitSurface(digit, NULL, clock_digits, &(SDL_Rect){(i * SCALE1(DIGIT_WIDTH)) + (SCALE1(DIGIT_WIDTH) - digit->w) / 2, y + (SCALE1(DIGIT_HEIGHT) - digit->h) / 2});
+			SDL_FreeSurface(digit);
+		}
 		i += 1;
 	}
 
@@ -314,9 +316,11 @@ void clock_adjustment_run(SDL_Surface* screen) {
 			if (!show_24hour) {
 				x += SCALE1(10); // space
 				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, am_selected ? "AM" : "PM", COLOR_WHITE);
-				ampm_w = text->w + SCALE1(2);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){x, y - SCALE1(3)});
-				SDL_FreeSurface(text);
+				if (text) {
+					ampm_w = text->w + SCALE1(2);
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){x, y - SCALE1(3)});
+					SDL_FreeSurface(text);
+				}
 			}
 
 			// cursor

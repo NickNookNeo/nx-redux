@@ -1152,8 +1152,9 @@ void CFG_sync(void) {
 	char settingsPath[MAX_PATH];
 	const char* shared_userdata = getenv("SHARED_USERDATA_PATH");
 	if (!shared_userdata || !shared_userdata[0]) {
-		printf("[CFG] SHARED_USERDATA_PATH is not set!\n");
-		return;
+		// Env var unset — fall back to the same compile-time path CFG_init
+		// reads from, otherwise every sync would silently discard changes.
+		shared_userdata = SHARED_USERDATA_PATH;
 	}
 	snprintf(settingsPath, sizeof(settingsPath), "%s/minuisettings.txt", shared_userdata);
 

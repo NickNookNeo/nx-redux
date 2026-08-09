@@ -27,3 +27,5 @@ void OptionSaveChanges_updateDesc(void);
 void OptionAchievements_updateDesc(void);
 bool getAlias(char* path, char* alias);
 int save_screenshot_thread(void* data);
+SDL_Surface* Menu_captureScreenSurface(Uint32 pixel_format);
+void Menu_queueScreenshotSave(const char* png_path);

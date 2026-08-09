@@ -148,6 +148,16 @@ int NET_createBroadcastSocket(void) {
 	return fd;
 }
 
+void NET_ensureBroadcastSocket(int* udp_fd, char* status_msg, size_t msg_size) {
+	if (!udp_fd || *udp_fd >= 0)
+		return; // Already running
+
+	*udp_fd = NET_createBroadcastSocket();
+	if (*udp_fd < 0 && status_msg && msg_size > 0) {
+		snprintf(status_msg, msg_size, "Failed to restart broadcast");
+	}
+}
+
 int NET_createDiscoveryListenSocket(uint16_t port) {
 	int fd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (fd < 0)

@@ -31,16 +31,6 @@ static char last_title[256] = "";
 // to avoid blocking the main thread on network timeouts
 static volatile int fetch_generation = 0;
 
-// Simple hash function for cache filename (DJB2)
-static unsigned int simple_hash(const char* str) {
-	unsigned int hash = 5381;
-	int c;
-	while ((c = *str++)) {
-		hash = ((hash << 5) + hash) + c;
-	}
-	return hash;
-}
-
 // Ensure cache directory exists
 static void ensure_cache_dir(void) {
 	mkdir(CACHE_PARENT_DIR, 0755);
@@ -51,7 +41,7 @@ static void ensure_cache_dir(void) {
 static void get_cache_filepath(const char* artist, const char* title, char* path, int path_size) {
 	char combined[512];
 	snprintf(combined, sizeof(combined), "%s - %s", artist ? artist : "", title ? title : "");
-	unsigned int hash = simple_hash(combined);
+	unsigned int hash = hashString(combined);
 	snprintf(path, path_size, "%s/%08x.lrc", LYRICS_CACHE_DIR, hash);
 }
 

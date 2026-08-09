@@ -478,7 +478,14 @@ static void* Rewind_worker_thread(void* arg) {
 		unsigned int gen = rewind_ctx.capture_gen[slot];
 		pthread_mutex_unlock(&rewind_ctx.queue_mx);
 
-		if (gen != rewind_ctx.generation) {
+		// generation is written under rewind_ctx.lock (Rewind_reset), so take
+		// it for this early staleness check too; the authoritative re-check
+		// before compressing already runs under the same lock
+		pthread_mutex_lock(&rewind_ctx.lock);
+		unsigned int current_gen = rewind_ctx.generation;
+		pthread_mutex_unlock(&rewind_ctx.lock);
+
+		if (gen != current_gen) {
 			// stale snapshot, drop quietly
 			pthread_mutex_lock(&rewind_ctx.queue_mx);
 			rewind_ctx.capture_busy[slot] = 0;

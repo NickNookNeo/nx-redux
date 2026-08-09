@@ -40,30 +40,11 @@ bool PLAT_hasWifi() {
 // Helper function to run a command and capture output
 static int wifi_run_cmd(const char* cmd, char* output, size_t output_len) {
 	wifilog("Running command: %s\n", cmd);
-	FILE* fp = popen(cmd, "r");
-	if (!fp) {
+	int exit_code = run_cmd_capture(cmd, output, output_len);
+	if (exit_code < 0)
 		LOG_error("wifi_run_cmd: failed to run command: %s\n", cmd);
-		return -1;
-	}
-
-	if (output && output_len > 0) {
-		output[0] = '\0';
-		size_t total = 0;
-		char buf[256];
-		while (fgets(buf, sizeof(buf), fp) && total < output_len - 1) {
-			size_t len = strlen(buf);
-			if (total + len >= output_len) {
-				len = output_len - total - 1;
-			}
-			memcpy(output + total, buf, len);
-			total += len;
-		}
-		output[total] = '\0';
-	}
-
-	int status = pclose(fp);
-	int exit_code = WEXITSTATUS(status);
-	wifilog("Command exit code: %d\n", exit_code);
+	else
+		wifilog("Command exit code: %d\n", exit_code);
 	return exit_code;
 }
 

@@ -468,18 +468,10 @@ int main(int argc, char* argv[]) {
 
 		hdmimon();
 	}
-	int cw, ch;
-	unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
-	if (pixels) {
-		SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
-			pixels, cw, ch, 32, cw * 4, SDL_PIXELFORMAT_ABGR8888);
-		SDL_Surface* converted = rawSurface ? SDL_ConvertSurfaceFormat(rawSurface, screen->format->format, 0) : NULL;
-		SDL_FreeSurface(rawSurface);
-		free(pixels);
-		if (converted) {
-			GFX_animateSurfaceOpacity(converted, 0, 0, cw, ch, 255, 0, CFG_getMenuTransitions() ? 200 : 20, 1);
-			SDL_FreeSurface(converted);
-		}
+	SDL_Surface* converted = Menu_captureScreenSurface(screen->format->format);
+	if (converted) {
+		GFX_animateSurfaceOpacity(converted, 0, 0, converted->w, converted->h, 255, 0, CFG_getMenuTransitions() ? 200 : 20, 1);
+		SDL_FreeSurface(converted);
 	}
 
 	Video_cleanup();

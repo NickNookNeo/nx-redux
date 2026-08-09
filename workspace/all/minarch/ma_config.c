@@ -1271,7 +1271,7 @@ static void Config_readControlsString(char* cfg) {
 	char* tmp;
 	for (int i = 0; config.controls[i].name; i++) {
 		ButtonMapping* mapping = &config.controls[i];
-		sprintf(key, "bind %s", mapping->name);
+		snprintf(key, sizeof(key), "bind %s", mapping->name); // name can be a core-supplied descriptor
 		sprintf(value, "NONE");
 
 		if (!Config_getValue(cfg, key, value, NULL))
@@ -1299,7 +1299,7 @@ static void Config_readControlsString(char* cfg) {
 
 	for (int i = 0; config.shortcuts[i].name; i++) {
 		ButtonMapping* mapping = &config.shortcuts[i];
-		sprintf(key, "bind %s", mapping->name);
+		snprintf(key, sizeof(key), "bind %s", mapping->name);
 		sprintf(value, "NONE");
 
 		if (!Config_getValue(cfg, key, value, NULL))
@@ -1339,7 +1339,7 @@ void Config_load(void) {
 
 	char device_system_path[MAX_PATH] = {0};
 	if (config.device_tag)
-		sprintf(device_system_path, SYSTEM_PATH "/system-%s.cfg", config.device_tag);
+		snprintf(device_system_path, sizeof(device_system_path), SYSTEM_PATH "/system-%s.cfg", config.device_tag);
 
 	if (config.device_tag && exists(device_system_path)) {
 		config.system_cfg = allocFile(device_system_path);
@@ -1358,7 +1358,7 @@ void Config_load(void) {
 		getEmuPath((char*)core.tag, device_default_path);
 		tmp = strrchr(device_default_path, '/');
 		char filename[64];
-		sprintf(filename, "/default-%s.cfg", config.device_tag);
+		snprintf(filename, sizeof(filename), "/default-%s.cfg", config.device_tag); // DEVICE env value, unbounded
 		strcpy(tmp, filename);
 	}
 
@@ -1481,18 +1481,9 @@ void Config_write(int override) {
 	sync();
 }
 void Config_restore(void) {
-	char path[MAX_PATH];
-	if (config.loaded == CONFIG_GAME) {
-		if (config.device_tag)
-			snprintf(path, sizeof(path), "%s/%s-%s.cfg", core.config_dir, game.alt_name, config.device_tag);
-		else
-			snprintf(path, sizeof(path), "%s/%s.cfg", core.config_dir, game.alt_name);
-		unlink(path);
-	} else if (config.loaded == CONFIG_CONSOLE) {
-		if (config.device_tag)
-			snprintf(path, sizeof(path), "%s/minarch-%s.cfg", core.config_dir, config.device_tag);
-		else
-			snprintf(path, sizeof(path), "%s/minarch.cfg", core.config_dir);
+	if (config.loaded != CONFIG_NONE) {
+		char path[MAX_PATH];
+		Config_getPath(path, config.loaded == CONFIG_GAME);
 		unlink(path);
 	}
 	config.loaded = CONFIG_NONE;

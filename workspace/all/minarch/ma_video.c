@@ -538,6 +538,12 @@ void selectScaler(int src_w, int src_h, int src_p) {
 
 			// Use the smaller scale to ensure it fits on screen
 			scale = MIN(scale_x, scale_y);
+			// sources larger than the screen floor to 0 above; clamp to 1x
+			// (no integer prescale, the GPU downscales to fit via aspect) —
+			// scale 0 would produce a 0-size dst and dst_p==0, which forces
+			// a selectScaler re-init every frame
+			if (scale < 1)
+				scale = 1;
 			aspect = (double)src_w / src_h;
 
 			// Optionally, clamp to a max scale (e.g., 4x) if needed

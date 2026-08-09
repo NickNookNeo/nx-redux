@@ -155,22 +155,8 @@ void Search_render(SDL_Surface* screen, int lastScreen) {
 	if (CFG_getShowGameArt()) {
 		Entry* selected_entry = search_results->items[search_selected];
 
-		char path_copy[1024];
-		strncpy(path_copy, selected_entry->path, sizeof(path_copy) - 1);
-		path_copy[sizeof(path_copy) - 1] = '\0';
-		char* rompath = dirname(path_copy);
-
-		char* res_name = strrchr(selected_entry->path, '/');
-		res_name = res_name ? res_name + 1 : (char*)selected_entry->path;
-		char res_copy[1024];
-		strncpy(res_copy, res_name, sizeof(res_copy) - 1);
-		res_copy[sizeof(res_copy) - 1] = '\0';
-		char* dot = strrchr(res_copy, '.');
-		if (dot)
-			*dot = '\0';
-
 		char thumbpath[1024];
-		snprintf(thumbpath, sizeof(thumbpath), "%s/.media/%s.png", rompath, res_copy);
+		ROM_mediaArtPath(selected_entry->path, thumbpath, sizeof(thumbpath));
 		had_thumb = startLoadThumb(thumbpath);
 		int max_w = (int)(screen->w - (screen->w * CFG_getGameArtWidth()));
 		if (had_thumb)

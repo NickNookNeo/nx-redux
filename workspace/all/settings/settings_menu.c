@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "settings_menu.h"
 #include "defines.h"
@@ -8,6 +9,7 @@
 #include "ui_buttonhintbar.h"
 #include "ui_menubar.h"
 #include "ui_list.h"
+#include "ui_loadingoverlay.h"
 #include "display_helper.h"
 
 // ============================================
@@ -128,6 +130,44 @@ void settings_page_init_lock(SettingsPage* page) {
 // lets process exit reclaim the page, its items, and this lock. Destroying the
 // rwlock here would also be unsafe: those scanner threads are not joined, so one
 // could still rdlock it after destruction.
+
+// ============================================
+// Async op helpers (shared by WiFi/BT toggle + action wait loops)
+// ============================================
+
+void settings_run_async(SDL_Surface* screen, const char* title,
+						void* (*fn)(void*), void* arg,
+						volatile int* done, volatile int* busy) {
+	if (*busy) // an async op is still running in the background
+		return;
+
+	*busy = 1;
+	*done = 0;
+
+	pthread_t t;
+	if (pthread_create(&t, NULL, fn, arg) != 0) {
+		*busy = 0;
+		return;
+	}
+	pthread_detach(t);
+
+	while (!*done) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_B))
+			break;
+
+		GFX_clear(screen);
+		settings_menu_render(screen, 0);
+		UI_renderLoadingOverlay(screen, title, "Press B to cancel");
+		GFX_flip(screen);
+	}
+}
+
+void settings_scanner_sleep(int seconds, volatile int* running, volatile int* wake) {
+	for (int i = 0; i < seconds * 10 && *running && (!wake || !*wake); i++)
+		usleep(100000); // 100ms intervals
+}
 
 // ============================================
 // Cycle item value change

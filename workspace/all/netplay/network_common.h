@@ -107,6 +107,15 @@ int NET_createListenSocket(uint16_t port, char* error_msg, size_t error_size);
 int NET_createBroadcastSocket(void);
 
 /**
+ * Recreate the discovery broadcast socket if it is closed; writes the standard
+ * failure message on error. No-op when *udp_fd is already open.
+ * @param udp_fd Broadcast socket fd (updated in place)
+ * @param status_msg Buffer to receive failure message on error (can be NULL)
+ * @param msg_size Size of status_msg buffer
+ */
+void NET_ensureBroadcastSocket(int* udp_fd, char* status_msg, size_t msg_size);
+
+/**
  * Create a non-blocking UDP socket for discovery listening
  * Binds to INADDR_ANY on the specified port with SO_REUSEADDR
  * @param port Port to bind to for receiving discovery broadcasts

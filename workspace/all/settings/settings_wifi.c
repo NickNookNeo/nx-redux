@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <unistd.h>
 #include <pthread.h>
 
 #include "settings_wifi.h"
@@ -10,7 +9,6 @@
 #include "api.h"
 #include "ui_list.h"
 #include "ui_keyboard.h"
-#include "ui_loadingoverlay.h"
 #include "display_helper.h"
 
 // ============================================
@@ -93,30 +91,11 @@ static void wifi_set_toggle(int val) {
 	if (wifi_toggle_ctx.busy) // a toggle is still running in the background
 		return;
 
-	wifi_toggle_ctx.busy = 1;
 	wifi_toggle_ctx.val = val;
-	wifi_toggle_ctx.done = 0;
-
-	pthread_t t;
-	if (pthread_create(&t, NULL, wifi_toggle_thread, NULL) != 0) {
-		wifi_toggle_ctx.busy = 0;
-		return;
-	}
-	pthread_detach(t);
 
 	const char* title = val ? "Enabling WiFi..." : "Disabling WiFi...";
-
-	while (!wifi_toggle_ctx.done) {
-		GFX_startFrame();
-		PAD_poll();
-		if (PAD_justPressed(BTN_B))
-			break;
-
-		GFX_clear(page->screen);
-		settings_menu_render(page->screen, 0);
-		UI_renderLoadingOverlay(page->screen, title, "Press B to cancel");
-		GFX_flip(page->screen);
-	}
+	settings_run_async(page->screen, title, wifi_toggle_thread, NULL,
+					   &wifi_toggle_ctx.done, &wifi_toggle_ctx.busy);
 
 	// Re-sync with actual hardware state
 	settings_item_sync(&page->items[WIFI_IDX_TOGGLE]);
@@ -361,8 +340,7 @@ static void wifi_network_draw(SDL_Surface* screen, SettingItem* item,
 
 // Interruptible sleep: returns early if wifi_scanner_running becomes 0
 static void wifi_sleep(int seconds) {
-	for (int i = 0; i < seconds * 10 && wifi_scanner_running; i++)
-		usleep(100000); // 100ms intervals
+	settings_scanner_sleep(seconds, &wifi_scanner_running, NULL);
 }
 
 // Pool of WifiNetworkInfo for dynamic items

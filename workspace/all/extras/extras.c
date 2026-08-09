@@ -29,6 +29,7 @@
 #include "ui_menubar.h"
 #include "ui_message.h"
 #include "ui_splash.h"
+#include "utils.h" // escapeSingleQuotes
 
 #define MAX_ENTRIES 32
 #define META_STR 256
@@ -711,6 +712,12 @@ static int run_entry_script(AddonEntry* e, const char* script_name, const char* 
 	if (!logs_path)
 		logs_path = USERDATA_PATH "/logs";
 
+	// Escape the catalog id before it goes into the single-quoted CATALOG_DIR
+	// and sh-path arguments below (worst case each quote expands to 4 chars).
+	char id_esc[sizeof(e->id) * 4];
+	snprintf(id_esc, sizeof(id_esc), "%s", e->id);
+	escapeSingleQuotes(id_esc, sizeof(id_esc));
+
 	char cmd[MAX_PATH * 4];
 	snprintf(cmd, sizeof(cmd),
 			 "PLATFORM='%s' SDCARD_PATH='%s' LOGS_PATH='%s' "
@@ -719,7 +726,7 @@ static int run_entry_script(AddonEntry* e, const char* script_name, const char* 
 			 "CATALOG_DIR='%s/catalog/%s' "
 			 "sh '%s/catalog/%s/%s' 2>&1",
 			 PLATFORM, SDCARD_PATH, logs_path,
-			 SDCARD_PATH, SDCARD_PATH, pak_dir, e->id, pak_dir, e->id, script_name);
+			 SDCARD_PATH, SDCARD_PATH, pak_dir, id_esc, pak_dir, id_esc, script_name);
 
 	FILE* p = popen(cmd, "r");
 	if (!p)
@@ -901,31 +908,13 @@ static int run_uninstall(AddonEntry* e) {
 	return uninstall_generic(e);
 }
 
-// X on an installed entry: confirm before uninstalling. Own minimal
-// GFX_startFrame/PAD_poll loop (not run_list/run_detail's fuller idiom - a
-// modal draws nothing else, so there's no status bar/power indicator to
-// keep alive under it) with PAD_poll()+PAD_reset() at the end so the
-// confirming A or cancelling B press doesn't leak into run_detail's own
-// PAD_justPressed checks next frame - same precedent/shape as settings.c's
-// run_confirm_dialog (a different translation unit, so the identical name
-// doesn't clash).
+// X on an installed entry: confirm before uninstalling. UI_confirmModal's
+// trailing PAD_poll()+PAD_reset() (reset_pad=true) keeps the confirming A or
+// cancelling B press from leaking into run_detail's own PAD_justPressed
+// checks next frame - same precedent/shape as settings.c's run_confirm_dialog
+// (a different translation unit, so the identical name doesn't clash).
 static bool run_confirm_dialog(const char* title, const char* subtitle) {
-	bool confirmed = false;
-	while (1) {
-		GFX_startFrame();
-		PAD_poll();
-		if (PAD_justPressed(BTN_A)) {
-			confirmed = true;
-			break;
-		}
-		if (PAD_justPressed(BTN_B))
-			break;
-		UI_renderConfirmDialog(screen, title, subtitle);
-		GFX_flip(screen);
-	}
-	PAD_poll();
-	PAD_reset();
-	return confirmed;
+	return UI_confirmModal(screen, title, subtitle, NULL, false, true);
 }
 
 // --- detail screen ----------------------------------------------------

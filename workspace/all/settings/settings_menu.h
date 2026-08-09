@@ -136,6 +136,24 @@ void settings_page_reset_all(SettingsPage* page);
 // Initialize a page's rwlock (call for pages with dynamic items)
 void settings_page_init_lock(SettingsPage* page);
 
+// ============================================
+// Async op helpers (shared by WiFi/BT toggle + action wait loops)
+// ============================================
+
+// Spawn fn on a worker thread and block on the standard cancellable loading
+// overlay (title + "Press B to cancel") until *done is set or B is pressed
+// (the worker keeps running after cancel; it owns clearing *busy).
+// No-ops when *busy is already set. Replicates the former wifi/bt toggle loops.
+// `screen` is the destination surface for the overlay: callers invoked from a
+// pushed submenu (e.g. bt_run_action) must pass their owning page's screen,
+// not settings_menu_current()->screen, since a submenu's own screen is unset.
+void settings_run_async(SDL_Surface* screen, const char* title,
+						void* (*fn)(void*), void* arg,
+						volatile int* done, volatile int* busy);
+
+// Sleep in 100ms slices while *running and (!wake || !*wake).
+void settings_scanner_sleep(int seconds, volatile int* running, volatile int* wake);
+
 // Clean up a page
 
 // ============================================

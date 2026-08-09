@@ -72,6 +72,18 @@ static struct {
 		[ITEM_QUIT] = "Quit",
 	}};
 
+static bool menuDiscCb(const char* disc_path, int index, void* ctx) {
+	(void)index;
+	(void)ctx;
+	if (menu.total_discs >= MENU_MAX_DISCS)
+		return false;
+	menu.disc_paths[menu.total_discs] = strdup(disc_path);
+	if (exactMatch((char*)disc_path, game.path))
+		menu.disc = menu.total_discs;
+	menu.total_discs += 1;
+	return true;
+}
+
 void Menu_init(void) {
 	menu.overlay = SDL_CreateRGBSurfaceWithFormat(SDL_SWSURFACE,
 												  DEVICE_WIDTH, DEVICE_HEIGHT,
@@ -92,36 +104,11 @@ void Menu_init(void) {
 		menu.items[ITEM_OPTS] = "Reset";
 
 	if (game.m3u_path[0]) {
-		char* tmp;
 		strcpy(menu.base_path, game.m3u_path);
-		tmp = strrchr(menu.base_path, '/') + 1;
-		tmp[0] = '\0';
-
-		//read m3u file
-		FILE* file = fopen(game.m3u_path, "r");
-		if (file) {
-			char line[256];
-			while (fgets(line, 256, file) != NULL) {
-				normalizeNewline(line);
-				trimTrailingNewlines(line);
-				if (strlen(line) == 0)
-					continue; // skip empty lines
-
-				char disc_path[MAX_PATH];
-				snprintf(disc_path, sizeof(disc_path), "%s%s", menu.base_path, line);
-
-				// found a valid disc path
-				if (exists(disc_path) && menu.total_discs < MENU_MAX_DISCS) {
-					menu.disc_paths[menu.total_discs] = strdup(disc_path);
-					// matched our current disc
-					if (exactMatch(disc_path, game.path)) {
-						menu.disc = menu.total_discs;
-					}
-					menu.total_discs += 1;
-				}
-			}
-			fclose(file);
-		}
+		char* tmp = strrchr(menu.base_path, '/');
+		if (tmp)
+			tmp[1] = '\0';
+		M3U_forEachDisc(game.m3u_path, menuDiscCb, NULL);
 	}
 }
 void Menu_quit(void) {
@@ -361,16 +348,20 @@ static int OptionAchievements_showDetail(MenuList* list, int i) {
 				char time_buf[64];
 				strftime(time_buf, sizeof(time_buf), "Unlocked %B %d %Y, %I:%M%p", tm_info);
 				SDL_Surface* time_text = TTF_RenderUTF8_Blended(font.tiny, time_buf, COLOR_LIGHT_TEXT);
-				SDL_BlitSurface(time_text, NULL, detail_canvas, &(SDL_Rect){center_x - time_text->w / 2, content_y});
-				content_y += time_text->h + SCALE1(2);
-				SDL_FreeSurface(time_text);
+				if (time_text) {
+					SDL_BlitSurface(time_text, NULL, detail_canvas, &(SDL_Rect){center_x - time_text->w / 2, content_y});
+					content_y += time_text->h + SCALE1(2);
+					SDL_FreeSurface(time_text);
+				}
 			} else if (ach->measured_progress[0]) {
 				char progress_buf[64];
 				snprintf(progress_buf, sizeof(progress_buf), "Progress: %s", ach->measured_progress);
 				SDL_Surface* progress_text = TTF_RenderUTF8_Blended(font.tiny, progress_buf, COLOR_LIGHT_TEXT);
-				SDL_BlitSurface(progress_text, NULL, detail_canvas, &(SDL_Rect){center_x - progress_text->w / 2, content_y});
-				content_y += progress_text->h + SCALE1(2);
-				SDL_FreeSurface(progress_text);
+				if (progress_text) {
+					SDL_BlitSurface(progress_text, NULL, detail_canvas, &(SDL_Rect){center_x - progress_text->w / 2, content_y});
+					content_y += progress_text->h + SCALE1(2);
+					SDL_FreeSurface(progress_text);
+				}
 			}
 
 			// Unlock rate/rarity (smaller font, gray)
@@ -378,9 +369,11 @@ static int OptionAchievements_showDetail(MenuList* list, int i) {
 				char rarity_buf[32];
 				snprintf(rarity_buf, sizeof(rarity_buf), "%.2f%% unlock rate", ach->rarity);
 				SDL_Surface* rarity_text = TTF_RenderUTF8_Blended(font.tiny, rarity_buf, COLOR_LIGHT_TEXT);
-				SDL_BlitSurface(rarity_text, NULL, detail_canvas, &(SDL_Rect){center_x - rarity_text->w / 2, content_y});
-				content_y += rarity_text->h + SCALE1(2);
-				SDL_FreeSurface(rarity_text);
+				if (rarity_text) {
+					SDL_BlitSurface(rarity_text, NULL, detail_canvas, &(SDL_Rect){center_x - rarity_text->w / 2, content_y});
+					content_y += rarity_text->h + SCALE1(2);
+					SDL_FreeSurface(rarity_text);
+				}
 			}
 
 			// Type tag
@@ -400,17 +393,21 @@ static int OptionAchievements_showDetail(MenuList* list, int i) {
 			}
 			if (type_str) {
 				SDL_Surface* type_text = TTF_RenderUTF8_Blended(font.tiny, type_str, COLOR_LIGHT_TEXT);
-				SDL_BlitSurface(type_text, NULL, detail_canvas, &(SDL_Rect){center_x - type_text->w / 2, content_y});
-				content_y += type_text->h + SCALE1(2);
-				SDL_FreeSurface(type_text);
+				if (type_text) {
+					SDL_BlitSurface(type_text, NULL, detail_canvas, &(SDL_Rect){center_x - type_text->w / 2, content_y});
+					content_y += type_text->h + SCALE1(2);
+					SDL_FreeSurface(type_text);
+				}
 			}
 
 			// Muted status below other info with gap before title
 			if (is_muted) {
 				SDL_Surface* mute_text = TTF_RenderUTF8_Blended(font.tiny, "MUTED: Will not show in notifications", COLOR_LIGHT_TEXT);
-				SDL_BlitSurface(mute_text, NULL, detail_canvas, &(SDL_Rect){center_x - mute_text->w / 2, content_y + SCALE1(4)});
-				content_y += SCALE1(4) + mute_text->h;
-				SDL_FreeSurface(mute_text);
+				if (mute_text) {
+					SDL_BlitSurface(mute_text, NULL, detail_canvas, &(SDL_Rect){center_x - mute_text->w / 2, content_y + SCALE1(4)});
+					content_y += SCALE1(4) + mute_text->h;
+					SDL_FreeSurface(mute_text);
+				}
 			}
 
 			// Blit the finished block vertically centered between the top of
@@ -653,11 +650,13 @@ static int OptionAchievements_openMenu(MenuList* list, int i) {
 			char status_text[64];
 			snprintf(status_text, sizeof(status_text), "%u/%u unlocked", unlocked, total);
 			SDL_Surface* status_surface = TTF_RenderUTF8_Blended(font.tiny, status_text, COLOR_WHITE);
-			SDL_BlitSurface(status_surface, NULL, screen, &(SDL_Rect){
-															  (screen->w - status_surface->w) / 2,
-															  SCALE1(PADDING) + (SCALE1(PILL_SIZE) - status_surface->h) / 2 // Vertically centered with pill
-														  });
-			SDL_FreeSurface(status_surface);
+			if (status_surface) {
+				SDL_BlitSurface(status_surface, NULL, screen, &(SDL_Rect){
+																  (screen->w - status_surface->w) / 2,
+																  SCALE1(PADDING) + (SCALE1(PILL_SIZE) - status_surface->h) / 2 // Vertically centered with pill
+															  });
+				SDL_FreeSurface(status_surface);
+			}
 
 			// Calculate vertical centering for list only
 			int top_margin = SCALE1(PADDING + PILL_SIZE);	 // Below hardware pill / status text
@@ -719,14 +718,18 @@ static int OptionAchievements_openMenu(MenuList* list, int i) {
 
 					// Title text
 					SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.small, ach->title, text_color);
-					SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){ox + opt_pad + badge_display_size + SCALE1(6), oy + SCALE1((row * BUTTON_SIZE) + 1)});
-					SDL_FreeSurface(title_text);
+					if (title_text) {
+						SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){ox + opt_pad + badge_display_size + SCALE1(6), oy + SCALE1((row * BUTTON_SIZE) + 1)});
+						SDL_FreeSurface(title_text);
+					}
 
 					// Mute indicator inside the pill
 					if (is_muted) {
 						SDL_Surface* mute_text = TTF_RenderUTF8_Blended(font.tiny, "[M]", text_color);
-						SDL_BlitSurface(mute_text, NULL, screen, &(SDL_Rect){ox + opt_pad + badge_display_size + SCALE1(6) + title_width + SCALE1(4), oy + SCALE1((row * BUTTON_SIZE) + 3)});
-						SDL_FreeSurface(mute_text);
+						if (mute_text) {
+							SDL_BlitSurface(mute_text, NULL, screen, &(SDL_Rect){ox + opt_pad + badge_display_size + SCALE1(6) + title_width + SCALE1(4), oy + SCALE1((row * BUTTON_SIZE) + 3)});
+							SDL_FreeSurface(mute_text);
+						}
 					}
 				} else {
 					// Unselected row - just badge + title + mute indicator, no pills
@@ -745,16 +748,20 @@ static int OptionAchievements_openMenu(MenuList* list, int i) {
 
 					// Title text (theme color for unselected)
 					SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.small, ach->title, COLOR_WHITE);
-					SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){ox + opt_pad + badge_display_size + SCALE1(6), oy + SCALE1((row * BUTTON_SIZE) + 1)});
-					SDL_FreeSurface(title_text);
+					if (title_text) {
+						SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){ox + opt_pad + badge_display_size + SCALE1(6), oy + SCALE1((row * BUTTON_SIZE) + 1)});
+						SDL_FreeSurface(title_text);
+					}
 
 					// Mute indicator
 					if (is_muted) {
 						SDL_Surface* mute_text = TTF_RenderUTF8_Blended(font.tiny, "[M]", COLOR_WHITE);
-						int title_width = 0;
-						TTF_SizeUTF8(font.small, ach->title, &title_width, NULL);
-						SDL_BlitSurface(mute_text, NULL, screen, &(SDL_Rect){ox + opt_pad + badge_display_size + SCALE1(6) + title_width + SCALE1(4), oy + SCALE1((row * BUTTON_SIZE) + 3)});
-						SDL_FreeSurface(mute_text);
+						if (mute_text) {
+							int title_width = 0;
+							TTF_SizeUTF8(font.small, ach->title, &title_width, NULL);
+							SDL_BlitSurface(mute_text, NULL, screen, &(SDL_Rect){ox + opt_pad + badge_display_size + SCALE1(6) + title_width + SCALE1(4), oy + SCALE1((row * BUTTON_SIZE) + 3)});
+							SDL_FreeSurface(mute_text);
+						}
 					}
 				}
 			}
@@ -1139,12 +1146,19 @@ typedef struct {
 	int h;
 } SaveImageArgs;
 
+// Wraps a raw GL-capture pixel buffer (ABGR8888, GFX_GL_screenCapture's format)
+// in an SDL_Surface converted to `format`. Frees the intermediate raw surface;
+// caller still owns (and must free) `pixels`.
+static SDL_Surface* rawCaptureToSurface(unsigned char* pixels, int w, int h, Uint32 format) {
+	SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
+		pixels, w, h, 32, w * 4, SDL_PIXELFORMAT_ABGR8888);
+	SDL_Surface* converted = rawSurface ? SDL_ConvertSurfaceFormat(rawSurface, format, 0) : NULL;
+	SDL_FreeSurface(rawSurface);
+	return converted;
+}
 int save_screenshot_thread(void* data) {
 	SaveImageArgs* args = (SaveImageArgs*)data;
-	SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
-		args->pixels, args->w, args->h, 32, args->w * 4, SDL_PIXELFORMAT_ABGR8888);
-	SDL_Surface* converted = rawSurface ? SDL_ConvertSurfaceFormat(rawSurface, SDL_PIXELFORMAT_ARGB8888, 0) : NULL;
-	SDL_FreeSurface(rawSurface);
+	SDL_Surface* converted = rawCaptureToSurface(args->pixels, args->w, args->h, SDL_PIXELFORMAT_ARGB8888);
 
 	if (!converted) {
 		SDL_Log("Failed to convert screenshot surface: %s", SDL_GetError());
@@ -1165,6 +1179,34 @@ int save_screenshot_thread(void* data) {
 	return 0;
 }
 SDL_Thread* screenshotsavethread;
+// GL-captures the current frame and returns it as a converted SDL_Surface
+// (caller owns and must SDL_FreeSurface it), or NULL on capture failure.
+SDL_Surface* Menu_captureScreenSurface(Uint32 pixel_format) {
+	int cw, ch;
+	unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
+	if (!pixels)
+		return NULL;
+	SDL_Surface* converted = rawCaptureToSurface(pixels, cw, ch, pixel_format);
+	free(pixels);
+	return converted;
+}
+// GL-captures the current frame and hands it to the background PNG-save
+// worker at `png_path`; waits for any previous save to finish first.
+void Menu_queueScreenshotSave(const char* png_path) {
+	int cw, ch;
+	unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
+	if (!pixels) {
+		SDL_Log("Failed to capture screenshot");
+		return;
+	}
+	SaveImageArgs* args = malloc(sizeof(SaveImageArgs));
+	args->pixels = pixels;
+	args->w = cw;
+	args->h = ch;
+	args->path = SDL_strdup(png_path);
+	SDL_WaitThread(screenshotsavethread, NULL);
+	screenshotsavethread = SDL_CreateThread(save_screenshot_thread, "SaveScreenshotThread", args);
+}
 void Menu_screenshot(void) {
 	char rom_name[MAX_PATH]; // getDisplayName/getAlias can write up to MAX_PATH
 	getDisplayName(game.alt_name, rom_name);
@@ -1180,15 +1222,7 @@ void Menu_screenshot(void) {
 
 	char png_path[MAX_PATH];
 	snprintf(png_path, sizeof(png_path), SDCARD_PATH "/Screenshots/%s.%s.png", rom_name, buffer);
-	int cw, ch;
-	unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
-	SaveImageArgs* args = malloc(sizeof(SaveImageArgs));
-	args->pixels = pixels;
-	args->w = cw;
-	args->h = ch;
-	args->path = SDL_strdup(png_path);
-	SDL_WaitThread(screenshotsavethread, NULL);
-	screenshotsavethread = SDL_CreateThread(save_screenshot_thread, "SaveScreenshotThread", args);
+	Menu_queueScreenshotSave(png_path);
 
 	// Show notification if enabled
 	if (CFG_getNotifyScreenshot()) {
@@ -1220,7 +1254,8 @@ static void Menu_autosaveQuit(void) {
 		char bmp_path[MAX_PATH];
 		snprintf(bmp_path, sizeof(bmp_path), "%s/%s.%d.bmp", menu.minui_dir, game.name, AUTO_RESUME_SLOT);
 		SDL_RWops* rw = SDL_RWFromFile(bmp_path, "wb");
-		IMG_SavePNG_RW(menu.bitmap, rw, 1);
+		if (rw)
+			IMG_SavePNG_RW(menu.bitmap, rw, 1);
 	}
 
 	// only repoint RESUME at the auto slot if the state actually wrote —
@@ -1244,19 +1279,12 @@ void Menu_saveState(void) {
 
 	// if already in menu use menu.bitmap instead for saving screenshots otherwise create new one on the fly
 	if (newScreenshot) {
-		int cw, ch;
-		unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
-		SaveImageArgs* args = malloc(sizeof(SaveImageArgs));
-		args->pixels = pixels;
-		args->w = cw;
-		args->h = ch;
-		args->path = SDL_strdup(menu.bmp_path);
-		SDL_WaitThread(screenshotsavethread, NULL);
-		screenshotsavethread = SDL_CreateThread(save_screenshot_thread, "SaveScreenshotThread", args);
+		Menu_queueScreenshotSave(menu.bmp_path);
 		newScreenshot = 0;
-	} else {
+	} else if (menu.bitmap) {
 		SDL_RWops* rw = SDL_RWFromFile(menu.bmp_path, "wb");
-		IMG_SavePNG_RW(menu.bitmap, rw, 1);
+		if (rw)
+			IMG_SavePNG_RW(menu.bitmap, rw, 1);
 	}
 
 	state_slot = menu.slot;
@@ -1340,16 +1368,7 @@ void Menu_undoLoadState(void) {
 }
 
 void Menu_loop(void) {
-	int cw, ch;
-	unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
-
-	SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
-		pixels, cw, ch, 32, cw * 4, SDL_PIXELFORMAT_ABGR8888);
-	SDL_Surface* converted = rawSurface ? SDL_ConvertSurfaceFormat(rawSurface, SDL_PIXELFORMAT_ARGB8888, 0) : NULL;
-	SDL_FreeSurface(rawSurface);
-	free(pixels);
-
-	menu.bitmap = converted;
+	menu.bitmap = Menu_captureScreenSurface(SDL_PIXELFORMAT_ARGB8888);
 	SDL_Surface* backing = SDL_CreateRGBSurfaceWithFormat(0, DEVICE_WIDTH, DEVICE_HEIGHT, 32, SDL_PIXELFORMAT_ARGB8888);
 
 
@@ -1551,8 +1570,10 @@ void Menu_loop(void) {
 					if (menu.total_discs > 1 && i == ITEM_CONT) {
 						GFX_blitPillDark(ASSET_WHITE_PILL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(oy + PADDING), screen->w - SCALE1(PADDING * 2), SCALE1(PILL_SIZE)});
 						SDL_Surface* disc_text = TTF_RenderUTF8_Blended(font.large, disc_name, text_color);
-						SDL_BlitSurface(disc_text, NULL, screen, &(SDL_Rect){screen->w - SCALE1(PADDING + BUTTON_PADDING) - disc_text->w, SCALE1(oy + PADDING + 4)});
-						SDL_FreeSurface(disc_text);
+						if (disc_text) {
+							SDL_BlitSurface(disc_text, NULL, screen, &(SDL_Rect){screen->w - SCALE1(PADDING + BUTTON_PADDING) - disc_text->w, SCALE1(oy + PADDING + 4)});
+							SDL_FreeSurface(disc_text);
+						}
 					}
 
 					int ow;
@@ -1565,8 +1586,10 @@ void Menu_loop(void) {
 
 				// text
 				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, item, text_color);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(PADDING + BUTTON_PADDING), SCALE1(oy + PADDING + (i * PILL_SIZE) + 4)});
-				SDL_FreeSurface(text);
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(PADDING + BUTTON_PADDING), SCALE1(oy + PADDING + (i * PILL_SIZE) + 4)});
+					SDL_FreeSurface(text);
+				}
 			}
 
 			// slot preview

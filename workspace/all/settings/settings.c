@@ -124,31 +124,6 @@ static int has_leds(const DeviceInfo* dev) {
 	return MAX_LIGHTS > 0;
 }
 
-// ============================================
-// Command execution helper
-// ============================================
-
-static int exec_command(const char* cmd, char* output, int max_len) {
-	char full_cmd[512];
-	snprintf(full_cmd, sizeof(full_cmd), "%s 2>&1", cmd);
-	FILE* fp = popen(full_cmd, "r");
-	if (!fp)
-		return -1;
-	output[0] = '\0';
-	char buf[128];
-	int pos = 0;
-	while (fgets(buf, sizeof(buf), fp) && pos < max_len - 1) {
-		int len = (int)strlen(buf);
-		if (pos + len >= max_len)
-			len = max_len - pos - 1;
-		memcpy(output + pos, buf, len);
-		pos += len;
-	}
-	output[pos] = '\0';
-	pclose(fp);
-	return 0;
-}
-
 static void extract_busybox_version(const char* output, char* version_out, int max_len) {
 	/* Search for "BusyBox vX.Y.Z" pattern */
 	const char* p = strstr(output, "BusyBox v");
@@ -1186,7 +1161,7 @@ static void init_about_info(void) {
 
 	/* BusyBox version */
 	char bb_output[512];
-	if (exec_command("cat --help", bb_output, sizeof(bb_output)) == 0) {
+	if (run_cmd_capture("cat --help 2>&1", bb_output, sizeof(bb_output)) >= 0) {
 		extract_busybox_version(bb_output, about_busybox_version, sizeof(about_busybox_version));
 	}
 	if (!about_busybox_version[0]) {
@@ -1240,52 +1215,14 @@ static SDL_Surface* g_screen = NULL;
 static bool run_pin_dialog(const char* title, const char* error, char* pin_out) {
 	if (!g_screen)
 		return false;
-
-	PinDialog_init(title);
-	PinDialog_setError(error);
-
-	bool confirmed = false;
-	while (!app_quit) {
-		GFX_startFrame();
-		PAD_poll();
-		PinDialogResult r = PinDialog_handleInput();
-		if (r.action == PINDIALOG_CONFIRMED) {
-			strcpy(pin_out, r.pin);
-			confirmed = true;
-			break;
-		}
-		if (r.action == PINDIALOG_CANCEL)
-			break;
-		PinDialog_render(g_screen);
-		GFX_flip(g_screen);
-	}
-	PinDialog_quit();
-	PAD_poll();
-	PAD_reset(); // don't leak the confirm/cancel press to the menu underneath
-	return confirmed;
+	return UI_pinModal(g_screen, title, error, pin_out, &app_quit, false, true);
 }
 
 // Blocking confirmation modal on g_screen. A confirms, B cancels.
 static bool run_confirm_dialog(const char* title, const char* subtitle) {
 	if (!g_screen)
 		return false;
-
-	bool confirmed = false;
-	while (!app_quit) {
-		GFX_startFrame();
-		PAD_poll();
-		if (PAD_justPressed(BTN_A)) {
-			confirmed = true;
-			break;
-		}
-		if (PAD_justPressed(BTN_B))
-			break;
-		UI_renderConfirmDialog(g_screen, title, subtitle);
-		GFX_flip(g_screen);
-	}
-	PAD_poll();
-	PAD_reset(); // don't leak the confirm/cancel press to the menu underneath
-	return confirmed;
+	return UI_confirmModal(g_screen, title, subtitle, &app_quit, false, true);
 }
 
 // Blocking full-screen help for Simple Mode. B closes.

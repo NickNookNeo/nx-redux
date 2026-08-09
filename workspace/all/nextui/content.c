@@ -242,27 +242,7 @@ int hasFolderM3u(char* dir_path, char* m3u_path) { // NOTE: dir_path not rom_pat
 }
 
 int hasM3u(char* rom_path, char* m3u_path) { // NOTE: rom_path not dir_path
-	char work[MAX_PATH];
-	strncpy(work, rom_path, MAX_PATH - 1);
-	work[MAX_PATH - 1] = '\0';
-
-	// strip filename to get parent dir (e.g. /Roms/PSX/Game/disc1.bin → /Roms/PSX/Game)
-	char* tmp = strrchr(work, '/');
-	if (!tmp)
-		return 0;
-	tmp[0] = '\0';
-
-	// get directory name (e.g. "Game" from /Roms/PSX/Game)
-	char* dir_name = strrchr(work, '/');
-	if (!dir_name)
-		return 0;
-	dir_name++; // skip the slash
-
-	// build m3u path: parent_dir + "/" + dir_name + ".m3u"
-	// e.g. /Roms/PSX/Game/Game.m3u
-	snprintf(m3u_path, MAX_PATH, "%s/%s.m3u", work, dir_name);
-
-	return exists(m3u_path);
+	return M3U_findForRom(rom_path, m3u_path, MAX_PATH);
 }
 
 int dirGameFile(const char* dir_path, char* out_path) {
@@ -778,75 +758,33 @@ static Array* getCollection(char* path) {
 	return entries;
 }
 
+static bool getDiscsCb(const char* disc_path, int index, void* ctx) {
+	Array* entries = (Array*)ctx;
+	Entry* entry = Entry_new(disc_path, ENTRY_ROM);
+	free(entry->name);
+	char name[16];
+	sprintf(name, "Disc %i", index + 1);
+	entry->name = strdup(name);
+	Array_push(entries, entry);
+	return true;
+}
 static Array* getDiscs(char* path) {
 	Array* entries = Array_new();
-
-	char base_path[MAX_PATH];
-	strncpy(base_path, path, MAX_PATH - 1);
-	base_path[MAX_PATH - 1] = '\0';
-	char* slash = strrchr(base_path, '/');
-	if (!slash)
-		return entries;
-	slash[1] = '\0';
-
-	FILE* file = fopen(path, "r");
-	if (file) {
-		char line[MAX_PATH];
-		int disc = 0;
-		while (fgets(line, sizeof(line), file) != NULL) {
-			normalizeNewline(line);
-			trimTrailingNewlines(line);
-			if (strlen(line) == 0)
-				continue;
-
-			char disc_path[MAX_PATH];
-			snprintf(disc_path, sizeof(disc_path), "%s%s", base_path, line);
-
-			if (exists(disc_path)) {
-				disc += 1;
-				Entry* entry = Entry_new(disc_path, ENTRY_ROM);
-				free(entry->name);
-				char name[16];
-				sprintf(name, "Disc %i", disc);
-				entry->name = strdup(name);
-				Array_push(entries, entry);
-			}
-		}
-		fclose(file);
-	}
+	M3U_forEachDisc(path, getDiscsCb, entries);
 	return entries;
 }
 
+static bool firstDiscCb(const char* disc_path, int index, void* ctx) {
+	(void)index;
+	char* out = (char*)ctx;
+	strncpy(out, disc_path, MAX_PATH - 1);
+	out[MAX_PATH - 1] = '\0';
+	return false; // first existing disc wins
+}
 int getFirstDisc(char* m3u_path, char* disc_path) {
-	int found = 0;
-
-	char base_path[MAX_PATH];
-	strncpy(base_path, m3u_path, MAX_PATH - 1);
-	base_path[MAX_PATH - 1] = '\0';
-	char* slash = strrchr(base_path, '/');
-	if (!slash)
-		return 0;
-	slash[1] = '\0';
-
-	FILE* file = fopen(m3u_path, "r");
-	if (file) {
-		char line[MAX_PATH];
-		while (fgets(line, sizeof(line), file) != NULL) {
-			normalizeNewline(line);
-			trimTrailingNewlines(line);
-			if (strlen(line) == 0)
-				continue;
-
-			snprintf(disc_path, MAX_PATH, "%s%s", base_path, line);
-
-			if (exists(disc_path)) {
-				found = 1;
-				break;
-			}
-		}
-		fclose(file);
-	}
-	return found;
+	disc_path[0] = '\0';
+	M3U_forEachDisc(m3u_path, firstDiscCb, disc_path);
+	return disc_path[0] != '\0';
 }
 
 static void addEntries(Array* entries, char* path) {

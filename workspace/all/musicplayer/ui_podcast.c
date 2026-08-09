@@ -7,6 +7,7 @@
 #include <SDL2/SDL_image.h>
 
 #include "defines.h"
+#include "utils.h"
 #include "api.h"
 #include "ui_buttonhintbar.h"
 #include "ui_emptystate.h"
@@ -18,6 +19,7 @@
 #include "ui_toast.h"
 #include "ui_icons.h"
 #include "ui_album_art.h"
+#include "ui_image.h"
 #include "wget_fetch.h"
 
 // Max artwork size (1MB to match radio album art buffer)
@@ -50,25 +52,6 @@ static SDL_Surface* convert_to_argb8888(SDL_Surface* src) {
 	SDL_Surface* converted = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0);
 	SDL_FreeSurface(src);
 	return converted;
-}
-
-// Check if downloaded image data is complete (not truncated)
-// JPEG: ends with FF D9, PNG: ends with IEND chunk
-static bool is_image_complete(const uint8_t* data, int size) {
-	if (size < 4)
-		return false;
-	// JPEG: starts with FF D8, ends with FF D9
-	if (data[0] == 0xFF && data[1] == 0xD8) {
-		return (data[size - 2] == 0xFF && data[size - 1] == 0xD9);
-	}
-	// PNG: starts with 89 50 4E 47, ends with IEND chunk (AE 42 60 82)
-	if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) {
-		return (size >= 8 &&
-				data[size - 4] == 0xAE && data[size - 3] == 0x42 &&
-				data[size - 2] == 0x60 && data[size - 1] == 0x82);
-	}
-	// Unknown format — assume complete
-	return true;
 }
 
 // Fetch podcast artwork from URL (cached in podcast folder)
@@ -106,7 +89,7 @@ static void podcast_fetch_artwork(const char* artwork_url, const char* feed_id) 
 		if (size > 0 && size < PODCAST_ARTWORK_MAX_SIZE) {
 			uint8_t* data = (uint8_t*)malloc(size);
 			if (data && fread(data, 1, size, f) == (size_t)size) {
-				if (is_image_complete(data, size)) {
+				if (UI_imageDataComplete(data, size)) {
 					SDL_RWops* rw = SDL_RWFromConstMem(data, size);
 					if (rw) {
 						SDL_Surface* loaded = IMG_Load_RW(rw, 1);
@@ -127,7 +110,7 @@ static void podcast_fetch_artwork(const char* artwork_url, const char* feed_id) 
 	static uint8_t artwork_buffer[PODCAST_ARTWORK_MAX_SIZE];
 	int size = wget_fetch(artwork_url, artwork_buffer, PODCAST_ARTWORK_MAX_SIZE);
 
-	if (size > 0 && is_image_complete(artwork_buffer, size)) {
+	if (size > 0 && UI_imageDataComplete(artwork_buffer, size)) {
 		// Save to podcast folder (directory should already exist from subscription)
 		f = fopen(cache_path, "wb");
 		if (f) {
@@ -164,89 +147,14 @@ typedef struct {
 static ThumbnailCacheEntry thumbnail_cache[THUMBNAIL_CACHE_SIZE];
 static int thumbnail_cache_count = 0;
 
-// Scale surface to size x size and apply circular mask
-static SDL_Surface* load_circular_thumbnail_from_surface(SDL_Surface* raw, int size) {
-	if (!raw)
-		return NULL;
-
-	// Convert to ARGB8888 for proper scaling
-	SDL_Surface* converted = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_ARGB8888, 0);
-	if (!converted)
-		return NULL;
-
-	// Scale to size x size
-	SDL_Surface* scaled = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32, SDL_PIXELFORMAT_ARGB8888);
-	if (!scaled) {
-		SDL_FreeSurface(converted);
-		return NULL;
-	}
-	SDL_Rect src = {0, 0, converted->w, converted->h};
-	SDL_Rect dst = {0, 0, size, size};
-	SDL_BlitScaled(converted, &src, scaled, &dst);
-	SDL_FreeSurface(converted);
-
-	// Apply circular mask
-	int radius = size / 2;
-	uint32_t* pixels = (uint32_t*)scaled->pixels;
-	int pitch = scaled->pitch / 4;
-	for (int y = 0; y < size; y++) {
-		for (int x = 0; x < size; x++) {
-			int dx = x - radius;
-			int dy = y - radius;
-			if (dx * dx + dy * dy > radius * radius) {
-				pixels[y * pitch + x] = 0; // Fully transparent
-			}
-		}
-	}
-
-	return scaled;
-}
-
 // Load image file from disk path, scale to size x size, apply circular mask
 // Deletes corrupt/incomplete files so they get re-fetched
 static SDL_Surface* load_circular_thumbnail(const char* path, int size) {
-	FILE* f = fopen(path, "rb");
-	if (!f)
+	SDL_Surface* raw = UI_loadValidatedImage(path, PODCAST_ARTWORK_MAX_SIZE);
+	if (!raw)
 		return NULL;
 
-	fseek(f, 0, SEEK_END);
-	long fsize = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	if (fsize <= 0 || fsize > 1024 * 1024) {
-		fclose(f);
-		return NULL;
-	}
-
-	uint8_t* data = (uint8_t*)malloc(fsize);
-	if (!data) {
-		fclose(f);
-		return NULL;
-	}
-	if ((long)fread(data, 1, fsize, f) != fsize) {
-		free(data);
-		fclose(f);
-		return NULL;
-	}
-	fclose(f);
-
-	// Validate image completeness
-	if (!is_image_complete(data, fsize)) {
-		free(data);
-		remove(path); // Delete corrupt file so it gets re-fetched
-		return NULL;
-	}
-
-	SDL_RWops* rw = SDL_RWFromConstMem(data, fsize);
-	SDL_Surface* raw = NULL;
-	if (rw)
-		raw = IMG_Load_RW(rw, 1);
-	free(data);
-	if (!raw) {
-		remove(path);
-		return NULL;
-	}
-
-	SDL_Surface* result = load_circular_thumbnail_from_surface(raw, size);
+	SDL_Surface* result = UI_circleFromSurface(raw, size);
 	SDL_FreeSurface(raw);
 	return result;
 }
@@ -331,7 +239,7 @@ static bool artwork_fetch_one(const char* itunes_id, const char* artwork_url, in
 	// Fetch from network
 	static uint8_t art_buf[PODCAST_ARTWORK_MAX_SIZE];
 	int dl_size = wget_fetch(artwork_url, art_buf, PODCAST_ARTWORK_MAX_SIZE);
-	if (dl_size <= 0 || !is_image_complete(art_buf, dl_size))
+	if (dl_size <= 0 || !UI_imageDataComplete(art_buf, dl_size))
 		return false;
 
 	// Save to disk cache
@@ -351,7 +259,7 @@ static bool artwork_fetch_one(const char* itunes_id, const char* artwork_url, in
 	if (!raw)
 		return false;
 
-	thumb = load_circular_thumbnail_from_surface(raw, size);
+	thumb = UI_circleFromSurface(raw, size);
 	SDL_FreeSurface(raw);
 	if (!thumb)
 		return false;
@@ -391,94 +299,6 @@ static SDL_Surface* episode_header_art = NULL;
 static char episode_header_feed_id[17] = {0};
 static int episode_header_art_size = 0;
 
-// Load image file, scale to size x size, apply rounded corner mask
-// Deletes corrupt/incomplete files so they get re-fetched
-static SDL_Surface* load_rounded_thumbnail(const char* path, int size, int radius) {
-	FILE* f = fopen(path, "rb");
-	if (!f)
-		return NULL;
-
-	fseek(f, 0, SEEK_END);
-	long fsize = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	if (fsize <= 0 || fsize > 1024 * 1024) {
-		fclose(f);
-		return NULL;
-	}
-
-	uint8_t* data = (uint8_t*)malloc(fsize);
-	if (!data) {
-		fclose(f);
-		return NULL;
-	}
-	if ((long)fread(data, 1, fsize, f) != fsize) {
-		free(data);
-		fclose(f);
-		return NULL;
-	}
-	fclose(f);
-
-	// Validate image completeness
-	if (!is_image_complete(data, fsize)) {
-		free(data);
-		remove(path);
-		return NULL;
-	}
-
-	SDL_RWops* rw = SDL_RWFromConstMem(data, fsize);
-	SDL_Surface* raw = NULL;
-	if (rw)
-		raw = IMG_Load_RW(rw, 1);
-	free(data);
-	if (!raw) {
-		remove(path);
-		return NULL;
-	}
-
-	SDL_Surface* converted = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_ARGB8888, 0);
-	SDL_FreeSurface(raw);
-	if (!converted)
-		return NULL;
-
-	SDL_Surface* scaled = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32, SDL_PIXELFORMAT_ARGB8888);
-	if (!scaled) {
-		SDL_FreeSurface(converted);
-		return NULL;
-	}
-	SDL_Rect src_r = {0, 0, converted->w, converted->h};
-	SDL_Rect dst_r = {0, 0, size, size};
-	SDL_BlitScaled(converted, &src_r, scaled, &dst_r);
-	SDL_FreeSurface(converted);
-
-	if (radius > 0) {
-		uint32_t* pixels = (uint32_t*)scaled->pixels;
-		int pitch_px = scaled->pitch / 4;
-		for (int py = 0; py < size; py++) {
-			for (int px = 0; px < size; px++) {
-				int cx = -1, cy = -1;
-				if (px < radius && py < radius) {
-					cx = radius;
-					cy = radius;
-				} else if (px >= size - radius && py < radius) {
-					cx = size - 1 - radius;
-					cy = radius;
-				} else if (px < radius && py >= size - radius) {
-					cx = radius;
-					cy = size - 1 - radius;
-				} else if (px >= size - radius && py >= size - radius) {
-					cx = size - 1 - radius;
-					cy = size - 1 - radius;
-				}
-				if (cx >= 0 && (px - cx) * (px - cx) + (py - cy) * (py - cy) > radius * radius) {
-					pixels[py * pitch_px + px] = 0;
-				}
-			}
-		}
-	}
-
-	return scaled;
-}
-
 // Get or load episode header artwork (cached by feed_id and size)
 static SDL_Surface* get_episode_header_art(const char* feed_id, int size) {
 	if (episode_header_art && strcmp(episode_header_feed_id, feed_id) == 0 && episode_header_art_size == size)
@@ -496,7 +316,11 @@ static SDL_Surface* get_episode_header_art(const char* feed_id, int size) {
 	char art_path[768];
 	snprintf(art_path, sizeof(art_path), "%s/artwork.jpg", feed_dir);
 
-	episode_header_art = load_rounded_thumbnail(art_path, size, SCALE1(8));
+	SDL_Surface* raw = UI_loadValidatedImage(art_path, PODCAST_ARTWORK_MAX_SIZE);
+	if (raw) {
+		episode_header_art = UI_roundedFromSurface(raw, size, SCALE1(8));
+		SDL_FreeSurface(raw);
+	}
 	if (episode_header_art) {
 		strncpy(episode_header_feed_id, feed_id, sizeof(episode_header_feed_id) - 1);
 		episode_header_feed_id[sizeof(episode_header_feed_id) - 1] = '\0';
@@ -510,20 +334,13 @@ static const char* podcast_manage_items[] = {
 	"Search",
 	"Top Shows"};
 
-// Format duration as HH:MM:SS or MM:SS
+// Format duration as HH:MM:SS or MM:SS; "--:--" for unknown
 static void format_duration(char* buf, int seconds) {
 	if (seconds <= 0) {
 		strcpy(buf, "--:--");
 		return;
 	}
-	int h = seconds / 3600;
-	int m = (seconds % 3600) / 60;
-	int s = seconds % 60;
-	if (h > 0) {
-		sprintf(buf, "%d:%02d:%02d", h, m, s);
-	} else {
-		sprintf(buf, "%02d:%02d", m, s);
-	}
+	format_time(buf, seconds);
 }
 
 // Format progress/duration pair as "MM:SS/MM:SS" or "H:MM:SS/H:MM:SS"

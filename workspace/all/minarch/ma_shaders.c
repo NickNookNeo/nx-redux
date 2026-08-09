@@ -109,78 +109,41 @@ void Config_syncShaders(char* key, int value) {
 	} else if (exactMatch(key, config.shaders.options[SH_NROFSHADERS].key)) {
 		GFX_setShaders(value);
 		i = SH_NROFSHADERS;
-	} else if (exactMatch(key, config.shaders.options[SH_SHADER1].key)) {
-		char** shaderList = config.shaders.options[SH_SHADER1].values;
-		if (shaderList) {
-			int count = 0;
-			while (shaderList && shaderList[count])
-				count++;
-			if (value >= 0 && value < count) {
-				GFX_updateShader(0, shaderList[value], NULL, NULL, NULL, NULL);
-				i = SH_SHADER1;
+	}
+
+	static const struct {
+		int shader, filter, srctype, scaletype, upscale;
+	} SH_PASS[3] = {
+		{SH_SHADER1, SH_SHADER1_FILTER, SH_SRCTYPE1, SH_SCALETYPE1, SH_UPSCALE1},
+		{SH_SHADER2, SH_SHADER2_FILTER, SH_SRCTYPE2, SH_SCALETYPE2, SH_UPSCALE2},
+		{SH_SHADER3, SH_SHADER3_FILTER, SH_SRCTYPE3, SH_SCALETYPE3, SH_UPSCALE3},
+	};
+	for (int p = 0; i == -1 && p < 3; p++) {
+		if (exactMatch(key, config.shaders.options[SH_PASS[p].shader].key)) {
+			char** shaderList = config.shaders.options[SH_PASS[p].shader].values;
+			if (shaderList) {
+				int count = 0;
+				while (shaderList[count])
+					count++;
+				if (value >= 0 && value < count) {
+					GFX_updateShader(p, shaderList[value], NULL, NULL, NULL, NULL);
+					i = SH_PASS[p].shader;
+				}
 			}
+			loadShaderSettings(p);
+		} else if (exactMatch(key, config.shaders.options[SH_PASS[p].filter].key)) {
+			GFX_updateShader(p, NULL, NULL, &value, NULL, NULL);
+			i = SH_PASS[p].filter;
+		} else if (exactMatch(key, config.shaders.options[SH_PASS[p].srctype].key)) {
+			GFX_updateShader(p, NULL, NULL, NULL, NULL, &value);
+			i = SH_PASS[p].srctype;
+		} else if (exactMatch(key, config.shaders.options[SH_PASS[p].scaletype].key)) {
+			GFX_updateShader(p, NULL, NULL, NULL, &value, NULL);
+			i = SH_PASS[p].scaletype;
+		} else if (exactMatch(key, config.shaders.options[SH_PASS[p].upscale].key)) {
+			GFX_updateShader(p, NULL, &value, NULL, NULL, NULL);
+			i = SH_PASS[p].upscale;
 		}
-		loadShaderSettings(0);
-	} else if (exactMatch(key, config.shaders.options[SH_SHADER1_FILTER].key)) {
-		GFX_updateShader(0, NULL, NULL, &value, NULL, NULL);
-		i = SH_SHADER1_FILTER;
-	} else if (exactMatch(key, config.shaders.options[SH_SRCTYPE1].key)) {
-		GFX_updateShader(0, NULL, NULL, NULL, NULL, &value);
-		i = SH_SRCTYPE1;
-	} else if (exactMatch(key, config.shaders.options[SH_SCALETYPE1].key)) {
-		GFX_updateShader(0, NULL, NULL, NULL, &value, NULL);
-		i = SH_SCALETYPE1;
-	} else if (exactMatch(key, config.shaders.options[SH_UPSCALE1].key)) {
-		GFX_updateShader(0, NULL, &value, NULL, NULL, NULL);
-		i = SH_UPSCALE1;
-	} else if (exactMatch(key, config.shaders.options[SH_SHADER2].key)) {
-		char** shaderList = config.shaders.options[SH_SHADER2].values;
-		if (shaderList) {
-			int count = 0;
-			while (shaderList && shaderList[count])
-				count++;
-			if (value >= 0 && value < count) {
-				GFX_updateShader(1, shaderList[value], NULL, NULL, NULL, NULL);
-				i = SH_SHADER2;
-			}
-		}
-		loadShaderSettings(1);
-	} else if (exactMatch(key, config.shaders.options[SH_SHADER2_FILTER].key)) {
-		GFX_updateShader(1, NULL, NULL, &value, NULL, NULL);
-		i = SH_SHADER2_FILTER;
-	} else if (exactMatch(key, config.shaders.options[SH_SRCTYPE2].key)) {
-		GFX_updateShader(1, NULL, NULL, NULL, NULL, &value);
-		i = SH_SRCTYPE2;
-	} else if (exactMatch(key, config.shaders.options[SH_SCALETYPE2].key)) {
-		GFX_updateShader(1, NULL, NULL, NULL, &value, NULL);
-		i = SH_SCALETYPE2;
-	} else if (exactMatch(key, config.shaders.options[SH_UPSCALE2].key)) {
-		GFX_updateShader(1, NULL, &value, NULL, NULL, NULL);
-		i = SH_UPSCALE2;
-	} else if (exactMatch(key, config.shaders.options[SH_SHADER3].key)) {
-		char** shaderList = config.shaders.options[SH_SHADER3].values;
-		if (shaderList) {
-			int count = 0;
-			while (shaderList && shaderList[count])
-				count++;
-			if (value >= 0 && value < count) {
-				GFX_updateShader(2, shaderList[value], NULL, NULL, NULL, NULL);
-				i = SH_SHADER3;
-			}
-		}
-		loadShaderSettings(2);
-	} else if (exactMatch(key, config.shaders.options[SH_SHADER3_FILTER].key)) {
-		GFX_updateShader(2, NULL, NULL, &value, NULL, NULL);
-		i = SH_SHADER3_FILTER;
-	} else if (exactMatch(key, config.shaders.options[SH_SRCTYPE3].key)) {
-		GFX_updateShader(2, NULL, NULL, NULL, NULL, &value);
-		i = SH_SRCTYPE3;
-	} else if (exactMatch(key, config.shaders.options[SH_SCALETYPE3].key)) {
-		GFX_updateShader(2, NULL, NULL, NULL, &value, NULL);
-		i = SH_SCALETYPE3;
-	} else if (exactMatch(key, config.shaders.options[SH_UPSCALE3].key)) {
-		GFX_updateShader(2, NULL, &value, NULL, NULL, NULL);
-		i = SH_UPSCALE3;
 	}
 
 	if (i == -1)

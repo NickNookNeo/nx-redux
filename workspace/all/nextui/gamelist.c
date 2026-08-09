@@ -216,27 +216,6 @@ static bool artFetchTagExcluded(const char* tag) {
 	return false;
 }
 
-// Derive the .media thumbnail / box-art PNG path for a rom path:
-//   <dirname(path)>/.media/<basename-with-final-extension-stripped>.png
-// This is the path GameList_render displays and entryArtInfo / art-fetch target,
-// for BOTH flat roms and folder games (a dotted folder name gets its extension
-// stripped just like a flat rom, so folder art lands where the list looks).
-static void mediaThumbPath(const char* path, char* out, size_t out_size) {
-	char dir_buf[MAX_PATH];
-	snprintf(dir_buf, sizeof(dir_buf), "%s", path);
-	char* dir = dirname(dir_buf);
-
-	char base_name[MAX_PATH];
-	const char* bn = strrchr(path, '/');
-	bn = bn ? bn + 1 : path;
-	snprintf(base_name, sizeof(base_name), "%s", bn);
-	char* dot = strrchr(base_name, '.');
-	if (dot)
-		*dot = '\0';
-
-	snprintf(out, out_size, "%s/.media/%s.png", dir, base_name);
-}
-
 // Resolve art-fetch details for `entry`. rom_to_hash/out_png/tag are MAX_PATH
 // buffers. Returns true iff eligible: a ROM or folder-game whose console tag is
 // not excluded. out_png follows nxredux art conventions:
@@ -262,9 +241,9 @@ static bool entryArtInfo(Entry* entry, char* rom_to_hash, char* out_png, char* t
 		return false;
 
 	// out_png follows GameList_render's thumbnail-path derivation exactly (see
-	// mediaThumbPath) for BOTH flat and folder entries, so the fetched art lands
+	// ROM_mediaArtPath) for BOTH flat and folder entries, so the fetched art lands
 	// where the list looks for it.
-	mediaThumbPath(entry->path, out_png, MAX_PATH);
+	ROM_mediaArtPath(entry->path, out_png, MAX_PATH);
 	return true;
 }
 
@@ -705,32 +684,7 @@ static bool renameRomFiles(Entry* entry, const char* newbase, char* new_path) {
 
 // Full-screen blocking confirm dialog. Returns true on A, false on B.
 static bool confirmModal(const char* title, const char* subtitle) {
-	bool result = false;
-	bool dirty = true;
-	GFX_clearLayers(LAYER_ALL);
-	while (1) {
-		GFX_startFrame();
-		PAD_poll();
-		if (PAD_justPressed(BTN_A)) {
-			result = true;
-			break;
-		}
-		if (PAD_justPressed(BTN_B)) {
-			result = false;
-			break;
-		}
-		// keep auto-sleep and the power button alive while the modal blocks
-		PWR_update(&dirty, NULL, NULL, NULL);
-		if (dirty) {
-			UI_renderConfirmDialog(screen, title, subtitle);
-			GFX_flip(screen);
-			dirty = false;
-		} else {
-			GFX_delay();
-		}
-	}
-	GFX_clearLayers(LAYER_ALL);
-	return result;
+	return UI_confirmModal(screen, title, subtitle, NULL, true, false);
 }
 
 // Simple mode: launching Settings requires the parent PIN (when one is set).
@@ -754,43 +708,39 @@ static bool settingsPinAllows(Entry* entry) {
 	const char* error = NULL;
 	GFX_clearLayers(LAYER_ALL);
 	while (!allowed) {
-		PinDialog_init("Enter Settings PIN");
-		PinDialog_setError(error);
-		bool cancelled = false;
-		bool dirty = true;
-		PinDialogResult r = {PINDIALOG_NONE, ""};
-		while (1) {
-			GFX_startFrame();
-			PAD_poll();
-			r = PinDialog_handleInput();
-			if (r.action == PINDIALOG_CONFIRMED)
-				break;
-			if (r.action == PINDIALOG_CANCEL) {
-				cancelled = true;
-				break;
-			}
-			// any held/pressed button may have changed a digit
-			if (PAD_anyPressed())
-				dirty = true;
-			PWR_update(&dirty, NULL, NULL, NULL);
-			if (dirty) {
-				PinDialog_render(screen);
-				GFX_flip(screen);
-				dirty = false;
-			} else {
-				GFX_delay();
-			}
-		}
-		PinDialog_quit();
-		if (cancelled)
+		char entered[PINDIALOG_PIN_LEN + 1];
+		bool confirmed = UI_pinModal(screen, "Enter Settings PIN", error, entered, NULL, false, false);
+		if (!confirmed)
 			break;
-		if (strcmp(r.pin, pin) == 0)
+		if (strcmp(entered, pin) == 0)
 			allowed = true;
 		else
 			error = "Wrong PIN. Try again."; // re-init also resets digits to 0
 	}
 	GFX_clearLayers(LAYER_ALL);
 	return allowed;
+}
+
+typedef struct {
+	int chosen;
+} PickCollectionCtx;
+
+static void pickCollectionModal_render(SDL_Surface* screen, void* vctx) {
+	(void)vctx;
+	ListDialog_render(screen);
+}
+
+static int pickCollectionModal_handle(void* vctx) {
+	PickCollectionCtx* ctx = vctx;
+	ListDialogResult r = ListDialog_handleInput();
+	if (r.action == LISTDIALOG_SELECTED) {
+		ctx->chosen = r.index;
+		return 1;
+	}
+	if (r.action == LISTDIALOG_CANCEL)
+		return 0;
+	// any held/pressed button may have moved the selection
+	return PAD_anyPressed() ? UI_MODAL_DIRTY : UI_MODAL_CONTINUE;
 }
 
 // Full-screen blocking collection picker. Returns the chosen collection index
@@ -817,41 +767,25 @@ static int pickCollectionModal(Array* collections) {
 	ListDialog_init("Add to Collection");
 	ListDialog_setItems(items, count);
 
-	int chosen = -1;
-	bool dirty = true;
-	GFX_clearLayers(LAYER_ALL);
-	while (1) {
-		GFX_startFrame();
-		PAD_poll();
-		ListDialogResult r = ListDialog_handleInput();
-		if (r.action == LISTDIALOG_SELECTED) {
-			chosen = r.index;
-			break;
-		}
-		if (r.action == LISTDIALOG_CANCEL) {
-			chosen = -1;
-			break;
-		}
-		// any held/pressed button may have moved the selection
-		if (PAD_anyPressed())
-			dirty = true;
-		PWR_update(&dirty, NULL, NULL, NULL);
-		if (dirty) {
-			ListDialog_render(screen);
-			GFX_flip(screen);
-			dirty = false;
-		} else {
-			GFX_delay();
-		}
-	}
+	PickCollectionCtx ctx = {.chosen = -1};
+	UI_ModalOpts opts = {
+		.screen = screen,
+		.render = pickCollectionModal_render,
+		.handle = pickCollectionModal_handle,
+		.ctx = &ctx,
+		.quit_flag = NULL,
+		.timeout_ms = 0,
+		.clear_layers = true,
+		.reset_pad = false,
+	};
+	UI_modalLoop(&opts);
 	ListDialog_quit();
-	GFX_clearLayers(LAYER_ALL);
 
-	if (chosen < 0)
+	if (ctx.chosen < 0)
 		return -1;
-	if (chosen == n)
+	if (ctx.chosen == n)
 		return COLLECTION_PICK_NEW;
-	return chosen;
+	return ctx.chosen;
 }
 
 // Append the ROM's SD-relative path to a collection .txt (deduped).
@@ -1056,12 +990,20 @@ static void artFetchTitle(const char* name, char* out, size_t out_size) {
 	}
 }
 
-// Draw one frame of the box-art fetch modal: the game name as a centered dimmed
-// title with the stage/result as subtitle (reuses the loading-overlay component).
-static void artFetchDraw(const char* title, const char* subtitle) {
+typedef struct {
+	const char* title;
+	const char* subtitle;
+} ArtFetchNoticeCtx;
+
+static void artFetchNotice_render(SDL_Surface* screen, void* vctx) {
+	ArtFetchNoticeCtx* ctx = vctx;
 	GFX_clear(screen);
-	UI_renderLoadingOverlay(screen, title, subtitle);
-	GFX_flip(screen);
+	UI_renderLoadingOverlay(screen, ctx->title, ctx->subtitle);
+}
+
+static int artFetchNotice_handle(void* vctx) {
+	(void)vctx;
+	return PAD_justPressed(BTN_B) ? 0 : UI_MODAL_CONTINUE;
 }
 
 // Blocking notice shown on the same modal for up to ARTFETCH_RESULT_MS (B
@@ -1069,23 +1011,83 @@ static void artFetchDraw(const char* title, const char* subtitle) {
 static void artFetchNotice(const char* game_name, const char* subtitle) {
 	char title[256];
 	artFetchTitle(game_name, title, sizeof(title));
-	unsigned long start = SDL_GetTicks();
-	bool dirty = true;
-	while (SDL_GetTicks() - start < ARTFETCH_RESULT_MS) {
-		GFX_startFrame();
-		PAD_poll();
-		if (PAD_justPressed(BTN_B))
-			break;
-		PWR_update(&dirty, NULL, NULL, NULL);
-		if (dirty) {
-			artFetchDraw(title, subtitle);
-			dirty = false;
-		} else {
-			GFX_delay();
-		}
-	}
+	ArtFetchNoticeCtx ctx = {title, subtitle};
+	UI_ModalOpts opts = {
+		.screen = screen,
+		.render = artFetchNotice_render,
+		.handle = artFetchNotice_handle,
+		.ctx = &ctx,
+		.quit_flag = NULL,
+		.timeout_ms = ARTFETCH_RESULT_MS,
+		.clear_layers = false,
+		.reset_pad = true,
+	};
+	UI_modalLoop(&opts);
 	GFX_clearLayers(LAYER_ALL);
-	PAD_reset();
+}
+
+typedef struct {
+	unsigned long start;
+	char stage[16];
+	const char* result; // terminal/cancel message once set
+	unsigned long result_until;
+	const char* title;
+	const char* out_png;
+} ArtFetchModalCtx;
+
+static void artFetchModal_render(SDL_Surface* screen, void* vctx) {
+	ArtFetchModalCtx* ctx = vctx;
+	const char* sub = ctx->result;
+	if (!sub) {
+		if (strcmp(ctx->stage, "searching") == 0)
+			sub = "Searching...";
+		else if (strcmp(ctx->stage, "downloading") == 0)
+			sub = "Downloading...";
+		else if (strcmp(ctx->stage, "compositing") == 0)
+			sub = "Adding art...";
+		else
+			sub = "Starting...";
+	}
+	GFX_clear(screen);
+	UI_renderLoadingOverlay(screen, ctx->title, sub);
+}
+
+static int artFetchModal_handle(void* vctx) {
+	ArtFetchModalCtx* ctx = vctx;
+	unsigned long now = SDL_GetTicks();
+
+	if (!ctx->result) {
+		if (PAD_justPressed(BTN_B)) {
+			ctx->result = "Cancelled";
+		} else {
+			char status[32] = "";
+			getFile(ARTFETCH_STATUS_PATH, status, sizeof(status));
+			char* nl = strchr(status, '\n');
+			if (nl)
+				*nl = '\0';
+
+			if (strcmp(status, "done") == 0) {
+				thumbCacheInvalidate(ctx->out_png);
+				ctx->result = "Box art added";
+			} else if (strcmp(status, "notfound") == 0) {
+				ctx->result = "No art found";
+			} else if (strcmp(status, "error") == 0) {
+				ctx->result = "Art fetch failed";
+			} else if (now - ctx->start > ARTFETCH_TIMEOUT_MS) {
+				ctx->result = "Art fetch timed out";
+			} else if (status[0] && strcmp(status, ctx->stage) != 0) {
+				snprintf(ctx->stage, sizeof(ctx->stage), "%s", status);
+				return UI_MODAL_DIRTY;
+			}
+		}
+		if (ctx->result) {
+			ctx->result_until = now + ARTFETCH_RESULT_MS;
+			return UI_MODAL_DIRTY;
+		}
+	} else if (now >= ctx->result_until) {
+		return 0;
+	}
+	return UI_MODAL_CONTINUE;
 }
 
 // Blocking box-art fetch modal. Shows staged progress while the spawned scraper
@@ -1097,74 +1099,26 @@ static void artFetchNotice(const char* game_name, const char* subtitle) {
 static void artFetchModal(const char* game_name, const char* out_png) {
 	char title[256];
 	artFetchTitle(game_name, title, sizeof(title));
-	unsigned long start = SDL_GetTicks();
-	char stage[16] = "starting";
-	const char* result = NULL; // terminal/cancel message once set
-	unsigned long result_until = 0;
-	bool dirty = true;
-
-	while (1) {
-		GFX_startFrame();
-		PAD_poll();
-		unsigned long now = SDL_GetTicks();
-
-		if (!result) {
-			if (PAD_justPressed(BTN_B)) {
-				result = "Cancelled";
-			} else {
-				char status[32] = "";
-				getFile(ARTFETCH_STATUS_PATH, status, sizeof(status));
-				char* nl = strchr(status, '\n');
-				if (nl)
-					*nl = '\0';
-
-				if (strcmp(status, "done") == 0) {
-					thumbCacheInvalidate(out_png);
-					result = "Box art added";
-				} else if (strcmp(status, "notfound") == 0) {
-					result = "No art found";
-				} else if (strcmp(status, "error") == 0) {
-					result = "Art fetch failed";
-				} else if (now - start > ARTFETCH_TIMEOUT_MS) {
-					result = "Art fetch timed out";
-				} else if (status[0] && strcmp(status, stage) != 0) {
-					snprintf(stage, sizeof(stage), "%s", status);
-					dirty = true;
-				}
-			}
-			if (result) {
-				result_until = now + ARTFETCH_RESULT_MS;
-				dirty = true;
-			}
-		} else if (now >= result_until) {
-			break;
-		}
-
-		// keep auto-sleep and the power button alive while the modal blocks
-		PWR_update(&dirty, NULL, NULL, NULL);
-
-		if (dirty) {
-			const char* sub = result;
-			if (!sub) {
-				if (strcmp(stage, "searching") == 0)
-					sub = "Searching...";
-				else if (strcmp(stage, "downloading") == 0)
-					sub = "Downloading...";
-				else if (strcmp(stage, "compositing") == 0)
-					sub = "Adding art...";
-				else
-					sub = "Starting...";
-			}
-			artFetchDraw(title, sub);
-			dirty = false;
-		} else {
-			GFX_delay();
-		}
-	}
+	ArtFetchModalCtx ctx = {
+		.start = SDL_GetTicks(),
+		.stage = "starting",
+		.title = title,
+		.out_png = out_png,
+	};
+	UI_ModalOpts opts = {
+		.screen = screen,
+		.render = artFetchModal_render,
+		.handle = artFetchModal_handle,
+		.ctx = &ctx,
+		.quit_flag = NULL,
+		.timeout_ms = 0,
+		.clear_layers = false,
+		.reset_pad = true,
+	};
+	UI_modalLoop(&opts);
 
 	unlink(ARTFETCH_STATUS_PATH);
 	GFX_clearLayers(LAYER_ALL);
-	PAD_reset();
 }
 
 // Dispatch a selected context-menu item (ids assigned in GameList_handleInput).
@@ -1606,7 +1560,7 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 	if (total > 0) {
 		if (CFG_getShowGameArt()) {
 			char thumbpath[1024];
-			mediaThumbPath(entry->path, thumbpath, sizeof(thumbpath));
+			ROM_mediaArtPath(entry->path, thumbpath, sizeof(thumbpath));
 			had_thumb = startLoadThumb(thumbpath);
 			int max_w = (int)(screen->w - (screen->w * CFG_getGameArtWidth()));
 			if (had_thumb)

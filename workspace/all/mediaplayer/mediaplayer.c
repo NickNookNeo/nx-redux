@@ -11,17 +11,17 @@
 
 #include "ui_icons.h"
 
+#include "ffplay_engine.h"
 #include "module_common.h"
 #include "module_menu.h"
 #include "module_player.h"
 #include "module_iptv.h"
 #include "display_helper.h"
-#include "settings.h"
 #include "iptv.h"
 #include "iptv_curated.h"
 
-// Global quit flag
-static bool quit = false;
+// Global quit flag (volatile sig_atomic_t: written from the signal handler)
+static volatile sig_atomic_t quit = false;
 static SDL_Surface* screen;
 
 static void sigHandler(int sig) {
@@ -29,6 +29,9 @@ static void sigHandler(int sig) {
 	case SIGINT:
 	case SIGTERM:
 		quit = true;
+		// Terminate a running ffplay child too — the main loop is blocked
+		// waiting on it and it would otherwise be orphaned. Async-signal-safe.
+		FfplayEngine_signalStop();
 		break;
 	default:
 		break;
@@ -91,9 +94,6 @@ int main(int argc, char* argv[]) {
 	// Initialize common module (global input handling)
 	ModuleCommon_init();
 
-	// Initialize app-specific settings
-	Settings_init();
-
 	// Initialize IPTV (loads playlists + cached channels)
 	IPTV_init();
 	IPTV_curated_init();
@@ -137,7 +137,6 @@ int main(int argc, char* argv[]) {
 
 	IPTV_curated_cleanup();
 	IPTV_cleanup();
-	Settings_quit();
 	ModuleCommon_quit();
 	Icons_quit();
 

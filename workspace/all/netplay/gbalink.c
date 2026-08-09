@@ -151,6 +151,7 @@ static struct {
 	uint8_t stream_buf[RECV_BUFFER_SIZE + sizeof(PacketHeader)];
 	size_t stream_buf_read_idx;	 // Where to read next packet from
 	size_t stream_buf_write_idx; // Where to write incoming data
+	size_t stream_buf_skip;		 // Remaining bytes of an oversized packet to discard
 
 	// Heartbeat/keepalive tracking - critical for RFU protocol
 	// The host must send data (even dummy) so clients can respond
@@ -480,9 +481,50 @@ static void GBALink_restartBroadcast(void) {
 	if (gl.mode != GBALINK_HOST)
 		return; // Only for host
 
-	gl.udp_fd = NET_createBroadcastSocket();
-	if (gl.udp_fd < 0) {
-		snprintf(gl.status_msg, sizeof(gl.status_msg), "Failed to restart broadcast");
+	NET_ensureBroadcastSocket(&gl.udp_fd, gl.status_msg, sizeof(gl.status_msg));
+}
+
+// Called with gl.mutex held when the remote side is gone (explicit CMD_DISCONNECT,
+// orderly close, or fatal socket error). client_msg = status shown when we are the
+// client. sync_notify: pollReceive can drop the mutex and notify inline; recv_packet
+// must defer via pending_disconnect_notify.
+static void gbalink_handle_remote_gone(const char* client_msg, bool sync_notify) {
+	GBALinkMode prev_mode = gl.mode;
+	close(gl.tcp_fd);
+	gl.tcp_fd = -1;
+	gl.core_registered = false;
+
+	if (prev_mode == GBALINK_CLIENT) {
+		gl.mode = GBALINK_OFF;
+		gl.state = GBALINK_STATE_DISCONNECTED;
+		strncpy(gl.local_ip, "0.0.0.0", sizeof(gl.local_ip) - 1);
+		gl.connected_to_hotspot = false;
+		snprintf(gl.status_msg, sizeof(gl.status_msg), "%s", client_msg);
+		if (sync_notify) {
+			pthread_mutex_unlock(&gl.mutex);
+			GBALink_notifyDisconnected();
+			pthread_mutex_lock(&gl.mutex);
+			// Verify state wasn't corrupted during callback
+			if (gl.mode != GBALINK_OFF || gl.state != GBALINK_STATE_DISCONNECTED) {
+				gl.mode = GBALINK_OFF;
+				gl.state = GBALINK_STATE_DISCONNECTED;
+			}
+		} else {
+			gl.pending_disconnect_notify = true; // Defer until mutex released
+		}
+	} else if (prev_mode == GBALINK_HOST) {
+		gl.state = GBALINK_STATE_WAITING;
+		if (sync_notify) {
+			pthread_mutex_unlock(&gl.mutex);
+			GBALink_notifyDisconnected();
+			pthread_mutex_lock(&gl.mutex);
+			GBALink_restartBroadcast();
+			snprintf(gl.status_msg, sizeof(gl.status_msg), "Client left, waiting on %s:%d", gl.local_ip, gl.port);
+		} else {
+			snprintf(gl.status_msg, sizeof(gl.status_msg), "Client left, waiting on %s:%d", gl.local_ip, gl.port);
+			gl.pending_disconnect_notify = true;
+			GBALink_restartBroadcast();
+		}
 	}
 }
 
@@ -576,6 +618,7 @@ static void* listen_thread_func(void* arg) {
 					gl.pending_write_idx = 0;
 					gl.stream_buf_read_idx = 0;
 					gl.stream_buf_write_idx = 0;
+					gl.stream_buf_skip = 0;
 					struct timeval now;
 					gettimeofday(&now, NULL);
 					gl.last_packet_sent = now;
@@ -715,6 +758,7 @@ int GBALink_connectToHost(const char* ip, uint16_t port) {
 	gl.pending_write_idx = 0;
 	gl.stream_buf_read_idx = 0;
 	gl.stream_buf_write_idx = 0;
+	gl.stream_buf_skip = 0;
 	struct timeval now;
 	gettimeofday(&now, NULL);
 	gl.last_packet_sent = now;
@@ -844,6 +888,7 @@ void GBALink_disconnect(void) {
 	gl.pending_count = 0;
 	gl.stream_buf_read_idx = 0;
 	gl.stream_buf_write_idx = 0;
+	gl.stream_buf_skip = 0;
 	pthread_mutex_unlock(&gl.mutex);
 }
 
@@ -1000,39 +1045,7 @@ void GBALink_pollReceive(void) {
 				send_packet(CMD_HEARTBEAT, NULL, 0, 0);
 		} else if (hdr.cmd == CMD_DISCONNECT) {
 			// Remote sent explicit disconnect command
-			GBALinkMode prev_mode = gl.mode;
-			close(gl.tcp_fd);
-			gl.tcp_fd = -1;
-
-			if (prev_mode == GBALINK_CLIENT) {
-				// Client fully disconnects
-				gl.mode = GBALINK_OFF;
-				gl.state = GBALINK_STATE_DISCONNECTED;
-				gl.core_registered = false; // Ensure this is cleared
-				strncpy(gl.local_ip, "0.0.0.0", sizeof(gl.local_ip) - 1);
-				gl.connected_to_hotspot = false;
-				snprintf(gl.status_msg, sizeof(gl.status_msg), "Host disconnected");
-				// Notify minarch that connection is lost
-				pthread_mutex_unlock(&gl.mutex);
-				GBALink_notifyDisconnected();
-				pthread_mutex_lock(&gl.mutex);
-				// Verify state wasn't corrupted during callback
-				if (gl.mode != GBALINK_OFF || gl.state != GBALINK_STATE_DISCONNECTED) {
-					// Force correct state
-					gl.mode = GBALINK_OFF;
-					gl.state = GBALINK_STATE_DISCONNECTED;
-				}
-			} else if (prev_mode == GBALINK_HOST) {
-				// Host goes back to waiting and restarts broadcast
-				gl.state = GBALINK_STATE_WAITING;
-				gl.core_registered = false; // Core session is over
-				// Notify minarch before restarting broadcast
-				pthread_mutex_unlock(&gl.mutex);
-				GBALink_notifyDisconnected();
-				pthread_mutex_lock(&gl.mutex);
-				GBALink_restartBroadcast();
-				snprintf(gl.status_msg, sizeof(gl.status_msg), "Client left, waiting on %s:%d", gl.local_ip, gl.port);
-			}
+			gbalink_handle_remote_gone("Host disconnected", true);
 			break;
 		}
 	}
@@ -1287,50 +1300,12 @@ static bool recv_packet(PacketHeader* hdr, void* data, uint16_t max_size, int ti
 			ssize_t ret = recv(gl.tcp_fd, gl.stream_buf + gl.stream_buf_write_idx, space_at_end, MSG_DONTWAIT);
 			if (ret == 0) {
 				// Connection closed by remote
-				GBALinkMode prev_mode = gl.mode;
-				close(gl.tcp_fd);
-				gl.tcp_fd = -1;
-				gl.core_registered = false; // Prevent timeout check from firing
-
-				if (prev_mode == GBALINK_CLIENT) {
-					// Client fully disconnects
-					gl.mode = GBALINK_OFF;
-					gl.state = GBALINK_STATE_DISCONNECTED;
-					strncpy(gl.local_ip, "0.0.0.0", sizeof(gl.local_ip) - 1);
-					gl.connected_to_hotspot = false;
-					snprintf(gl.status_msg, sizeof(gl.status_msg), "Host disconnected");
-					gl.pending_disconnect_notify = true; // Defer notification until mutex released
-				} else if (prev_mode == GBALINK_HOST) {
-					// Host goes back to waiting and restarts broadcast
-					gl.state = GBALINK_STATE_WAITING;
-					snprintf(gl.status_msg, sizeof(gl.status_msg), "Client left, waiting on %s:%d", gl.local_ip, gl.port);
-					gl.pending_disconnect_notify = true; // Defer notification until mutex released
-					GBALink_restartBroadcast();
-				}
+				gbalink_handle_remote_gone("Host disconnected", false);
 				return false;
 			}
 			if (ret < 0) {
 				if (errno == ECONNRESET || errno == EPIPE || errno == ENOTCONN) {
-					GBALinkMode prev_mode = gl.mode;
-					close(gl.tcp_fd);
-					gl.tcp_fd = -1;
-					gl.core_registered = false; // Prevent timeout check from firing
-
-					if (prev_mode == GBALINK_CLIENT) {
-						// Client fully disconnects
-						gl.mode = GBALINK_OFF;
-						gl.state = GBALINK_STATE_DISCONNECTED;
-						strncpy(gl.local_ip, "0.0.0.0", sizeof(gl.local_ip) - 1);
-						gl.connected_to_hotspot = false;
-						snprintf(gl.status_msg, sizeof(gl.status_msg), "Connection lost");
-						gl.pending_disconnect_notify = true; // Defer notification until mutex released
-					} else if (prev_mode == GBALINK_HOST) {
-						// Host goes back to waiting and restarts broadcast
-						gl.state = GBALINK_STATE_WAITING;
-						snprintf(gl.status_msg, sizeof(gl.status_msg), "Client left, waiting on %s:%d", gl.local_ip, gl.port);
-						gl.pending_disconnect_notify = true; // Defer notification until mutex released
-						GBALink_restartBroadcast();
-					}
+					gbalink_handle_remote_gone("Connection lost", false);
 					return false;
 				}
 				// EAGAIN/EWOULDBLOCK is ok, just no data right now
@@ -1338,6 +1313,23 @@ static bool recv_packet(PacketHeader* hdr, void* data, uint16_t max_size, int ti
 				gl.stream_buf_write_idx += ret;
 				available += ret;
 			}
+		}
+	}
+
+	// Finish discarding an oversized packet flagged on a previous call,
+	// consuming its remaining bytes as they arrive so the stream stays
+	// aligned on the next packet header
+	if (gl.stream_buf_skip > 0) {
+		size_t n = (available < gl.stream_buf_skip) ? available : gl.stream_buf_skip;
+		gl.stream_buf_read_idx += n;
+		gl.stream_buf_skip -= n;
+		available -= n;
+		if (gl.stream_buf_read_idx == gl.stream_buf_write_idx) {
+			gl.stream_buf_read_idx = 0;
+			gl.stream_buf_write_idx = 0;
+		}
+		if (gl.stream_buf_skip > 0) {
+			return false; // Still discarding
 		}
 	}
 
@@ -1355,9 +1347,19 @@ static bool recv_packet(PacketHeader* hdr, void* data, uint16_t max_size, int ti
 	// Validate size - explicit bounds check for safety
 	// Check both against max_size (caller's buffer) and RECV_BUFFER_SIZE (our buffer)
 	if (hdr->size > max_size || hdr->size > RECV_BUFFER_SIZE) {
-		// Invalid packet size - protocol error, reset buffer
-		gl.stream_buf_read_idx = 0;
-		gl.stream_buf_write_idx = 0;
+		// Oversized packet - discard just this packet (header + payload) and
+		// resync on the next header. The size field is the only framing info
+		// on the wire, so trust it to locate the next packet boundary;
+		// resetting the whole buffer would throw away already-buffered valid
+		// packets and desync the stream mid-packet.
+		size_t total_skip = sizeof(PacketHeader) + (size_t)hdr->size;
+		size_t n = (available < total_skip) ? available : total_skip;
+		gl.stream_buf_read_idx += n;
+		gl.stream_buf_skip = total_skip - n; // Remainder drained on later calls
+		if (gl.stream_buf_read_idx == gl.stream_buf_write_idx) {
+			gl.stream_buf_read_idx = 0;
+			gl.stream_buf_write_idx = 0;
+		}
 		return false;
 	}
 

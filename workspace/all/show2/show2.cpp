@@ -22,6 +22,9 @@
 #include <string>
 #include <map>
 #include <cstring>
+#include <cstdlib>
+#include <cerrno>
+#include <climits>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -203,10 +206,31 @@ public:
         std::string hex = color_str;
         if (hex.find("0x") == 0 || hex.find("0X") == 0) {
             hex = hex.substr(2);
-        } else if (hex[0] == '#') {
+        } else if (!hex.empty() && hex[0] == '#') {
             hex = hex.substr(1);
         }
-        return static_cast<uint32_t>(std::stoul(hex, nullptr, 16));
+        if (hex.empty()) {
+            return 0;
+        }
+        char* end = nullptr;
+        errno = 0;
+        unsigned long val = std::strtoul(hex.c_str(), &end, 16);
+        if (end == hex.c_str() || *end != '\0' || errno == ERANGE) {
+            return 0;
+        }
+        return static_cast<uint32_t>(val);
+    }
+
+    // Non-throwing base-10 integer parse; returns fallback on empty/invalid input.
+    static int parseInt(const std::string& s, int fallback) {
+        char* end = nullptr;
+        errno = 0;
+        long val = std::strtol(s.c_str(), &end, 10);
+        if (end == s.c_str() || *end != '\0' || errno == ERANGE ||
+            val < INT_MIN || val > INT_MAX) {
+            return fallback;
+        }
+        return static_cast<int>(val);
     }
 
 private:
@@ -280,7 +304,7 @@ private:
                         pthread_mutex_unlock(&mutex);
                     } else if (cmd.find("PROGRESS:") == 0) {
                         pthread_mutex_lock(&mutex);
-                        current_progress = std::stoi(cmd.substr(9));
+                        current_progress = parseInt(cmd.substr(9), current_progress);
                         pthread_mutex_unlock(&mutex);
                     } else if (cmd == "QUIT") {
                         running = false;
@@ -302,11 +326,11 @@ private:
                         pthread_mutex_unlock(&mutex);
                     } else if (cmd.find("TEXTY:") == 0) {
                         pthread_mutex_lock(&mutex);
-                        current_text_y_pct = std::stoi(cmd.substr(6));
+                        current_text_y_pct = parseInt(cmd.substr(6), current_text_y_pct);
                         pthread_mutex_unlock(&mutex);
                     } else if (cmd.find("PROGRESSY:") == 0) {
                         pthread_mutex_lock(&mutex);
-                        current_progress_y_pct = std::stoi(cmd.substr(10));
+                        current_progress_y_pct = parseInt(cmd.substr(10), current_progress_y_pct);
                         pthread_mutex_unlock(&mutex);
                     }
                     
@@ -609,27 +633,27 @@ int main(int argc, char* argv[]) {
     }
 
     if (args.find("progress") != args.end()) {
-        config.progress = std::stoi(args["progress"]);
+        config.progress = ShowApp::parseInt(args["progress"], config.progress);
     }
 
     if (args.find("texty") != args.end()) {
-        config.text_y_pct = std::stoi(args["texty"]);
+        config.text_y_pct = ShowApp::parseInt(args["texty"], config.text_y_pct);
     }
 
     if (args.find("progressy") != args.end()) {
-        config.progress_y_pct = std::stoi(args["progressy"]);
+        config.progress_y_pct = ShowApp::parseInt(args["progressy"], config.progress_y_pct);
     }
 
     if (args.find("timeout") != args.end()) {
-        config.timeout_seconds = std::stoi(args["timeout"]);
+        config.timeout_seconds = ShowApp::parseInt(args["timeout"], config.timeout_seconds);
     }
 
     if (args.find("logoheight") != args.end()) {
-        config.logo_height = std::stoi(args["logoheight"]);
+        config.logo_height = ShowApp::parseInt(args["logoheight"], config.logo_height);
     }
 
     if (args.find("fontsize") != args.end()) {
-        config.font_size = std::stoi(args["fontsize"]);
+        config.font_size = ShowApp::parseInt(args["fontsize"], config.font_size);
     }
 
     if (args.find("hint") != args.end()) {

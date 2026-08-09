@@ -110,8 +110,12 @@ void bootlogo_run(SDL_Surface* screen) {
 			dirty = true;
 		} else if (PAD_justPressed(BTN_A) && count > 0) {
 			char* boot_path = "/mnt/boot/";
-			char* logo_path = image_paths[selected];
-			char cmd[512];
+			// Escape the image path before it goes into the single-quoted
+			// cp argument below (worst case each quote expands to 4 chars).
+			char logo_path[MAX_PATH * 4];
+			snprintf(logo_path, sizeof(logo_path), "%s", image_paths[selected]);
+			escapeSingleQuotes(logo_path, sizeof(logo_path));
+			char cmd[MAX_PATH * 4 + 128];
 			snprintf(cmd, sizeof(cmd), "mkdir -p %s && mount -t vfat /dev/mmcblk0p1 %s && cp '%s' %s/bootlogo.bmp && sync && umount %s && reboot", boot_path, boot_path, logo_path, boot_path, boot_path);
 			system(cmd);
 		} else if (PAD_justPressed(BTN_B)) {

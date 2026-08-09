@@ -14,8 +14,15 @@
 #include "display_helper.h"
 #include "ffplay_engine.h"
 
-// PID of the currently running ffplay child process (0 = none)
-static pid_t ffplay_pid = 0;
+// PID of the currently running ffplay child process (0 = none).
+// volatile sig_atomic_t: read by FfplayEngine_signalStop() from the app's
+// SIGINT/SIGTERM handler, so it must be async-signal-safe to access.
+static volatile sig_atomic_t ffplay_pid = 0;
+
+// Set from the signal handler when the app is quitting: prevents audio-change
+// restarts and lets the wait loop kill a child forked in the window before
+// ffplay_pid was published.
+static volatile sig_atomic_t ffplay_stop = 0;
 
 // Handoff file where the patched ffplay reports playback position (tmpfs)
 #define FFPLAY_POS_FILE "/tmp/ffplay.pos"
@@ -211,14 +218,14 @@ static int ffplay_exec(FfplayConfig* config, int use_subs) {
 	PLAT_overrideMute(1);
 
 	// Fork and exec ffplay
-	ffplay_pid = fork();
-	if (ffplay_pid < 0) {
+	pid_t child = fork();
+	if (child < 0) {
 		LOG_error("fork() failed: %s\n", strerror(errno));
 		SetVolume(GetVolume());
 		return -1;
 	}
 
-	if (ffplay_pid == 0) {
+	if (child == 0) {
 		// Child process: ensure ALSA finds .asoundrc managed by audiomon
 		setenv("HOME", USERDATA_PATH, 1);
 		// Generate a minimal fontconfig pointing to system fonts directory
@@ -246,6 +253,11 @@ static int ffplay_exec(FfplayConfig* config, int use_subs) {
 		_exit(127);
 	}
 
+	// Publish the child pid for the quit-signal handler. A signal arriving
+	// between fork() and this store is covered by the ffplay_stop check in
+	// the wait loop below.
+	ffplay_pid = child;
+
 	// Parent process: restore volume after ffplay opens audio device
 	// ffplay needs time to probe media, open codecs, and open ALSA device
 	usleep(2000000); // 2s for ffplay to fully initialize audio
@@ -259,22 +271,32 @@ static int ffplay_exec(FfplayConfig* config, int use_subs) {
 	int status = 0;
 	int result;
 	while (1) {
-		result = waitpid(ffplay_pid, &status, WNOHANG);
-		if (result > 0)
-			break; // ffplay exited
-		if (result == -1 && errno != EINTR)
+		result = waitpid(child, &status, WNOHANG);
+		if (result > 0) {
+			ffplay_pid = 0; // reaped — the quit handler must not signal it anymore
+			break;			// ffplay exited
+		}
+		if (result == -1 && errno != EINTR) {
+			ffplay_pid = 0;
 			break; // error
+		}
 
 		AudioMgr_pollEvents();
+
+		if (ffplay_stop) {
+			// Quitting (SIGINT/SIGTERM) — make sure the child dies even if the
+			// handler ran before ffplay_pid was published (fork race)
+			kill(child, SIGTERM);
+		}
 
 		if (audio_device_changed) {
 			// Audio output changed — kill ffplay so it can be restarted
 			// with the new ALSA device (audiomon has updated .asoundrc)
-			kill(ffplay_pid, SIGTERM);
+			kill(child, SIGTERM);
 			usleep(100000);
-			kill(ffplay_pid, SIGKILL);
-			waitpid(ffplay_pid, NULL, 0);
-			ffplay_pid = 0;
+			kill(child, SIGKILL);
+			ffplay_pid = 0; // clear before reaping so the handler never signals a reaped pid
+			waitpid(child, NULL, 0);
 			AudioMgr_setCallback(NULL);
 			return FFPLAY_EXIT_AUDIO_CHANGED;
 		}
@@ -283,7 +305,6 @@ static int ffplay_exec(FfplayConfig* config, int use_subs) {
 	}
 
 	AudioMgr_setCallback(NULL);
-	ffplay_pid = 0;
 
 	if (WIFEXITED(status)) {
 		int code = WEXITSTATUS(status);
@@ -293,6 +314,18 @@ static int ffplay_exec(FfplayConfig* config, int use_subs) {
 		return code;
 	}
 	return -1;
+}
+
+void FfplayEngine_signalStop(void) {
+	// Async-signal-safe: only touches sig_atomic_t values and calls kill(2);
+	// errno is preserved so an interrupted syscall's error check isn't clobbered
+	ffplay_stop = 1;
+	pid_t pid = (pid_t)ffplay_pid;
+	if (pid > 0) {
+		int saved_errno = errno;
+		kill(pid, SIGTERM);
+		errno = saved_errno;
+	}
 }
 
 int FfplayEngine_play(FfplayConfig* config) {
@@ -348,7 +381,7 @@ int FfplayEngine_play(FfplayConfig* config) {
 			usleep(500000);
 			LOG_info("ffplay: restarting for audio device change\n");
 		}
-	} while (exit_code == FFPLAY_EXIT_AUDIO_CHANGED);
+	} while (exit_code == FFPLAY_EXIT_AUDIO_CHANGED && !ffplay_stop);
 
 	// Restore original start position
 	config->start_position_sec = original_start;

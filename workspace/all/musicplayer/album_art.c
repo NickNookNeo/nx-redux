@@ -48,16 +48,6 @@ static AlbumArtContext art_ctx = {0};
 // pthread_join() cannot deadlock — the worker finishes on its own.
 static pthread_mutex_t art_lock = PTHREAD_MUTEX_INITIALIZER;
 
-// Simple hash function for cache filename
-static unsigned int simple_hash(const char* str) {
-	unsigned int hash = 5381;
-	int c;
-	while ((c = *str++)) {
-		hash = ((hash << 5) + hash) + c;
-	}
-	return hash;
-}
-
 // Get album art cache directory path (on SD card)
 static void get_cache_dir(char* path, int path_size) {
 	snprintf(path, path_size, "%s", ALBUMART_CACHE_DIR);
@@ -79,7 +69,7 @@ static void get_cache_filepath(const char* artist, const char* title, char* path
 	// Create hash from artist+title
 	char combined[512];
 	snprintf(combined, sizeof(combined), "%s_%s", artist ? artist : "", title ? title : "");
-	unsigned int hash = simple_hash(combined);
+	unsigned int hash = hashString(combined);
 
 	snprintf(path, path_size, "%s/%08x.jpg", cache_dir, hash);
 }

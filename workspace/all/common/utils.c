@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include "defines.h"
 #include "utils.h"
 
@@ -61,9 +62,18 @@ char* splitString(char* str, const char* delim) {
 	return p + strlen(delim); // return tail substring
 }
 void truncateString(char* string, size_t max_len) {
+	if (max_len == 0)
+		return; // no room even for a terminator
+
 	size_t len = strlen(string) + 1;
 	if (len <= max_len)
 		return;
+
+	if (max_len < 4) {
+		// too small for an ellipsis — plain NUL truncation
+		string[max_len - 1] = '\0';
+		return;
+	}
 
 	strncpy(&string[max_len - 4], "...\0", 4);
 }
@@ -329,6 +339,13 @@ void urlEncode(const char* src, char* dst, size_t dst_size) {
 	}
 	dst[j] = '\0';
 }
+// DJB2 over the string's bytes (unsigned); used for cache filenames and hash buckets
+unsigned int hashString(const char* str) {
+	unsigned int h = 5381;
+	for (const unsigned char* p = (const unsigned char*)str; *p; p++)
+		h = h * 33 + *p;
+	return h;
+}
 void cleanName(char* name_out, const char* file_name) {
 	char* name_without_ext = removeExtension(file_name);
 	char* no_underscores = replaceString2(name_without_ext, "_", " ");
@@ -552,10 +569,14 @@ int writeFileAtomic(const char* path, const char* data, size_t len) {
 	return 1;
 }
 void getFile(char* path, char* buffer, size_t buffer_size) {
+	if (buffer_size == 0)
+		return; // no room even for a terminator
 	FILE* file = fopen(path, "r");
 	if (file) {
 		fseek(file, 0L, SEEK_END);
-		size_t size = ftell(file);
+		long ftell_size = ftell(file);
+		// ftell can fail (unseekable file / error) — treat as empty
+		size_t size = ftell_size < 0 ? 0 : (size_t)ftell_size;
 		if (size > buffer_size - 1)
 			size = buffer_size - 1;
 		rewind(file);
@@ -569,12 +590,18 @@ char* allocFile(char* path) { // caller must free!
 	FILE* file = fopen(path, "r");
 	if (file) {
 		fseek(file, 0L, SEEK_END);
-		size_t size = ftell(file);
+		long size = ftell(file);
+		if (size < 0) { // unseekable file / ftell error — fail cleanly
+			fclose(file);
+			return NULL;
+		}
 		contents = calloc(size + 1, sizeof(char));
-		fseek(file, 0L, SEEK_SET);
-		fread(contents, sizeof(char), size, file);
+		if (contents) {
+			fseek(file, 0L, SEEK_SET);
+			fread(contents, sizeof(char), size, file);
+			contents[size] = '\0';
+		}
 		fclose(file);
-		contents[size] = '\0';
 	}
 	return contents;
 }
@@ -614,6 +641,31 @@ void putInt(char* path, int value) {
 	char buffer[8];
 	sprintf(buffer, "%d", value);
 	putFile(path, buffer);
+}
+
+int run_cmd_capture(const char* cmd, char* output, size_t output_len) {
+	FILE* fp = popen(cmd, "r");
+	if (!fp) {
+		return -1;
+	}
+
+	if (output && output_len > 0) {
+		output[0] = '\0';
+		size_t total = 0;
+		char buf[256];
+		while (fgets(buf, sizeof(buf), fp) && total < output_len - 1) {
+			size_t len = strlen(buf);
+			if (total + len >= output_len) {
+				len = output_len - total - 1;
+			}
+			memcpy(output + total, buf, len);
+			total += len;
+		}
+		output[total] = '\0';
+	}
+
+	int status = pclose(fp);
+	return WEXITSTATUS(status);
 }
 
 uint64_t getMicroseconds(void) {
@@ -745,4 +797,92 @@ const char* json_extract_string(const char* json, const char* key, char* out, si
 	out[len] = '\0';
 
 	return out;
+}
+
+void ROM_mediaArtPath(const char* rom_path, char* out, size_t out_size) {
+	char dir[MAX_PATH];
+	char base[MAX_PATH];
+	strncpy(dir, rom_path, sizeof(dir) - 1);
+	dir[sizeof(dir) - 1] = '\0';
+	char* slash = strrchr(dir, '/');
+	if (slash)
+		*slash = '\0';
+	else
+		strcpy(dir, ".");
+	const char* bn = strrchr(rom_path, '/');
+	bn = bn ? bn + 1 : rom_path;
+	strncpy(base, bn, sizeof(base) - 1);
+	base[sizeof(base) - 1] = '\0';
+	char* dot = strrchr(base, '.');
+	if (dot)
+		*dot = '\0';
+	snprintf(out, out_size, "%s/.media/%s.png", dir, base);
+}
+
+bool ROM_findArt(const char* rom_path, char* out, size_t out_size) {
+	ROM_mediaArtPath(rom_path, out, out_size);
+	if (exists(out))
+		return true;
+	// multi-disc folder games: art named after the containing folder, one level up
+	char dir[MAX_PATH];
+	strncpy(dir, rom_path, sizeof(dir) - 1);
+	dir[sizeof(dir) - 1] = '\0';
+	char* slash = strrchr(dir, '/');
+	if (!slash)
+		return false;
+	*slash = '\0';
+	char* parent_slash = strrchr(dir, '/');
+	if (!parent_slash || parent_slash == dir)
+		return false;
+	*parent_slash = '\0';
+	snprintf(out, out_size, "%s/.media/%s.png", dir, parent_slash + 1);
+	return exists(out);
+}
+
+bool M3U_findForRom(const char* rom_path, char* m3u_path, size_t m3u_size) {
+	char work[MAX_PATH];
+	strncpy(work, rom_path, sizeof(work) - 1);
+	work[sizeof(work) - 1] = '\0';
+	char* tmp = strrchr(work, '/');
+	if (!tmp)
+		return false;
+	tmp[0] = '\0';
+	char* dir_name = strrchr(work, '/');
+	if (!dir_name)
+		return false;
+	dir_name++;
+	snprintf(m3u_path, m3u_size, "%s/%s.m3u", work, dir_name);
+	return exists(m3u_path);
+}
+
+int M3U_forEachDisc(const char* m3u_path, M3U_DiscFn fn, void* ctx) {
+	char base_path[MAX_PATH];
+	strncpy(base_path, m3u_path, sizeof(base_path) - 1);
+	base_path[sizeof(base_path) - 1] = '\0';
+	char* slash = strrchr(base_path, '/');
+	if (!slash)
+		return 0;
+	slash[1] = '\0';
+
+	FILE* file = fopen(m3u_path, "r");
+	if (!file)
+		return 0;
+	int count = 0;
+	char line[MAX_PATH];
+	while (fgets(line, sizeof(line), file) != NULL) {
+		normalizeNewline(line);
+		trimTrailingNewlines(line);
+		if (strlen(line) == 0)
+			continue;
+		char disc_path[MAX_PATH];
+		snprintf(disc_path, sizeof(disc_path), "%s%s", base_path, line);
+		if (!exists(disc_path))
+			continue;
+		bool keep = fn(disc_path, count, ctx);
+		count++;
+		if (!keep)
+			break;
+	}
+	fclose(file);
+	return count;
 }

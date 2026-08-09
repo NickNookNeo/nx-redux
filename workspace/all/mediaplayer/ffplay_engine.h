@@ -39,6 +39,11 @@ typedef struct {
 // Returns the ffplay exit code (0 = normal exit, non-zero = error)
 int FfplayEngine_play(FfplayConfig* config);
 
+// Request that any running ffplay child be terminated (SIGTERM) and prevent
+// audio-change restarts. Async-signal-safe — intended to be called from the
+// app's SIGINT/SIGTERM handler so quitting doesn't orphan ffplay.
+void FfplayEngine_signalStop(void);
+
 // Read the position ffplay last reported for a local video (written to
 // /tmp/ffplay.pos every ~5s and on exit). Returns false if unavailable.
 // dur_sec is 0 when the container reported no duration.

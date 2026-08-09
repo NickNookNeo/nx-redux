@@ -449,6 +449,14 @@ size_t chd_read_sector(void* track_handle, uint32_t sector, void* buffer, size_t
 		}
 	}
 
+	// Clamp to the physical frame: a hostile CHD can declare a unitbytes
+	// smaller than the track type's nominal data size (e.g. an audio track
+	// with frame_size < 2352), which would over-read the hunk buffer.
+	if (header_skip >= handle->frame_size)
+		return 0;
+	if (data_size > handle->frame_size - header_skip)
+		data_size = handle->frame_size - header_skip;
+
 	// Copy the data
 	size_t to_copy = requested_bytes;
 	if (to_copy > data_size)

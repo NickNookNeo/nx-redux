@@ -517,12 +517,10 @@ static void scrape_status_cb(const char* stage, void* userdata) {
 }
 
 static void scrapeOneQueueItem(ScrapeQueueItem* item) {
-	char* base = removeExtension(item->filename);
+	char rom_abs[MAX_PATH];
+	snprintf(rom_abs, sizeof(rom_abs), "%s/%s", item->system_path, item->filename);
 	char out_path[512];
-	snprintf(out_path, sizeof(out_path), "%s/.media/%s.png",
-			 item->system_path, base ? base : item->filename);
-	if (base)
-		free(base);
+	ROM_mediaArtPath(rom_abs, out_path, sizeof(out_path));
 
 	ScrapeResult r = scrapeOne(item->filename, item->rom_path, item->system_id,
 							   out_path, scrape_status_cb, item);

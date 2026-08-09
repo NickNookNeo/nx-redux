@@ -264,15 +264,10 @@ static int thumbLoadWorker(void* arg) {
 			// Downscale to display dimensions before processing
 			int img_w = result->w;
 			int img_h = result->h;
-			double aspect_ratio = (double)img_h / img_w;
 			int max_w = (int)(cachedScreenW * CFG_getGameArtWidth());
 			int max_h = (int)(cachedScreenH * 0.6);
-			int new_w = max_w;
-			int new_h = (int)(new_w * aspect_ratio);
-			if (new_h > max_h) {
-				new_h = max_h;
-				new_w = (int)(new_h / aspect_ratio);
-			}
+			int new_w, new_h;
+			UI_calcImageFit(img_w, img_h, max_w, max_h, &new_w, &new_h);
 
 			if (new_w > 0 && new_h > 0 &&
 				(new_w < img_w || new_h < img_h)) {

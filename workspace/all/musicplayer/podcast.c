@@ -17,7 +17,9 @@
 #include "api.h"
 #include "wifi.h"
 #include "ui_podcast.h"
+#include "ui_image.h"
 #include "module_common.h"
+#include "utils.h"
 #include <sys/statvfs.h>
 
 // SDCARD_PATH is defined in platform.h via api.h
@@ -304,27 +306,6 @@ static void get_episodes_file_path(const char* feed_id, char* path, int path_siz
 	snprintf(path, path_size, "%s/%s/episodes.json", podcast_data_dir, feed_id);
 }
 
-// Create directory recursively
-static void mkdir_recursive(const char* path) {
-	char tmp[512];
-	char* p = NULL;
-	size_t len;
-
-	snprintf(tmp, sizeof(tmp), "%s", path);
-	len = strlen(tmp);
-	if (tmp[len - 1] == '/')
-		tmp[len - 1] = '\0';
-
-	for (p = tmp + 1; *p; p++) {
-		if (*p == '/') {
-			*p = '\0';
-			mkdir(tmp, 0755);
-			*p = '/';
-		}
-	}
-	mkdir(tmp, 0755);
-}
-
 // ============================================================================
 // Episode Storage (JSON on disk)
 // ============================================================================
@@ -342,7 +323,7 @@ int Podcast_saveEpisodes(int feed_index, PodcastEpisode* episodes, int count) {
 	// Create feed directory
 	char feed_dir[512];
 	Podcast_getFeedDataPath(feed->feed_id, feed_dir, sizeof(feed_dir));
-	mkdir_recursive(feed_dir);
+	mkdir_p(feed_dir);
 
 	// Build episodes JSON
 	JSON_Value* root = json_value_init_array();
@@ -537,23 +518,6 @@ extern int podcast_charts_fetch(const char* country_code, PodcastChartItem* top,
 								PodcastChartItem* new_items, int* new_count, int max_items);
 extern int podcast_charts_filter_premium(PodcastChartItem* items, int count, int max_items);
 
-// Check if image data is complete (JPEG ends with FF D9, PNG ends with IEND)
-static bool is_image_data_complete(const uint8_t* data, int size) {
-	if (size < 4)
-		return false;
-	// JPEG: starts with FF D8, ends with FF D9
-	if (data[0] == 0xFF && data[1] == 0xD8) {
-		return (data[size - 2] == 0xFF && data[size - 1] == 0xD9);
-	}
-	// PNG: starts with 89 50 4E 47, ends with IEND chunk (AE 42 60 82)
-	if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) {
-		return (size >= 8 &&
-				data[size - 4] == 0xAE && data[size - 3] == 0x42 &&
-				data[size - 2] == 0x60 && data[size - 1] == 0x82);
-	}
-	return true; // Unknown format — assume complete
-}
-
 // Validate a cached image file on disk. Returns true if valid, false if corrupt (and deletes it).
 static bool validate_cached_image(const char* path) {
 	FILE* f = fopen(path, "rb");
@@ -614,7 +578,7 @@ static void download_feed_artwork(PodcastFeed* feed) {
 		return;
 
 	int size = wget_fetch(feed->artwork_url, buf, 1024 * 1024);
-	if (size > 0 && is_image_data_complete(buf, size)) {
+	if (size > 0 && UI_imageDataComplete(buf, size)) {
 		FILE* f = fopen(art_path, "wb");
 		if (f) {
 			fwrite(buf, 1, size, f);
@@ -641,7 +605,7 @@ int Podcast_init(void) {
 	snprintf(download_dir, sizeof(download_dir), "%s/Podcasts", SDCARD_PATH);
 
 	// Create podcast data directory
-	mkdir_recursive(podcast_data_dir);
+	mkdir_p(podcast_data_dir);
 
 	// Create download directory
 	mkdir(download_dir, 0755);

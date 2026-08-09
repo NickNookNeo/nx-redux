@@ -2,14 +2,12 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <unistd.h>
 #include <pthread.h>
 
 #include "settings_bt.h"
 #include "defines.h"
 #include "api.h"
 #include "ui_list.h"
-#include "ui_loadingoverlay.h"
 
 // ============================================
 // BT Device Info (attached to user_data)
@@ -94,30 +92,11 @@ static void bt_set_toggle(int val) {
 	if (bt_toggle_ctx.busy) // a toggle is still running in the background
 		return;
 
-	bt_toggle_ctx.busy = 1;
 	bt_toggle_ctx.val = val;
-	bt_toggle_ctx.done = 0;
-
-	pthread_t t;
-	if (pthread_create(&t, NULL, bt_toggle_thread, NULL) != 0) {
-		bt_toggle_ctx.busy = 0;
-		return;
-	}
-	pthread_detach(t);
 
 	const char* title = val ? "Enabling Bluetooth..." : "Disabling Bluetooth...";
-
-	while (!bt_toggle_ctx.done) {
-		GFX_startFrame();
-		PAD_poll();
-		if (PAD_justPressed(BTN_B))
-			break;
-
-		GFX_clear(page->screen);
-		settings_menu_render(page->screen, 0);
-		UI_renderLoadingOverlay(page->screen, title, "Press B to cancel");
-		GFX_flip(page->screen);
-	}
+	settings_run_async(page->screen, title, bt_toggle_thread, NULL,
+					   &bt_toggle_ctx.done, &bt_toggle_ctx.busy);
 
 	// Re-sync with actual hardware state
 	settings_item_sync(&page->items[BT_IDX_TOGGLE]);
@@ -161,36 +140,19 @@ static void* bt_action_thread(void* arg) {
 static void bt_run_action(void (*action)(char*), const char* addr, const char* msg) {
 	if (!bt_page_ref || !bt_page_ref->screen)
 		return;
-	SDL_Surface* screen = bt_page_ref->screen;
 
 	if (bt_action_ctx.busy) // a previous action is still running in the background
 		return;
 
-	bt_action_ctx.busy = 1;
-	bt_action_ctx.done = 0;
 	bt_action_ctx.action = action;
 	bt_action_ctx.addr[0] = '\0';
 	strncpy(bt_action_ctx.addr, addr, sizeof(bt_action_ctx.addr) - 1);
 	bt_action_ctx.addr[sizeof(bt_action_ctx.addr) - 1] = '\0';
 
-	pthread_t t;
-	if (pthread_create(&t, NULL, bt_action_thread, NULL) != 0) {
-		bt_action_ctx.busy = 0;
-		return;
-	}
-	pthread_detach(t);
-
-	while (!bt_action_ctx.done) {
-		GFX_startFrame();
-		PAD_poll();
-		if (PAD_justPressed(BTN_B))
-			break;
-
-		GFX_clear(screen);
-		settings_menu_render(screen, 0);
-		UI_renderLoadingOverlay(screen, msg, "Press B to cancel");
-		GFX_flip(screen);
-	}
+	// Use the owning bt page's screen, not settings_menu_current(): this runs
+	// from the pushed device-options submenu, whose own screen is unset.
+	settings_run_async(bt_page_ref->screen, msg, bt_action_thread, NULL,
+					   &bt_action_ctx.done, &bt_action_ctx.busy);
 
 	bt_needs_refresh = 1;
 	settings_menu_pop();
@@ -401,10 +363,9 @@ static void bt_device_draw(SDL_Surface* screen, SettingItem* item,
 // Scanner Thread
 // ============================================
 
-// Interruptible sleep: returns early if bt_scanner_running becomes 0
+// Interruptible sleep: returns early if bt_scanner_running becomes 0 or bt_needs_refresh is set
 static void bt_sleep(int seconds) {
-	for (int i = 0; i < seconds * 10 && bt_scanner_running && !bt_needs_refresh; i++)
-		usleep(100000); // 100ms intervals
+	settings_scanner_sleep(seconds, &bt_scanner_running, &bt_needs_refresh);
 }
 
 static BtDeviceInfo device_info_pool[BT_MAX_ITEMS];

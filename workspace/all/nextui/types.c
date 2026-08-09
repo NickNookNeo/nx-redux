@@ -32,7 +32,10 @@ void Array_push(Array* self, void* item) {
 void Array_unshift(Array* self, void* item) {
 	if (self->count == 0)
 		return Array_push(self, item);
+	int prev_count = self->count;
 	Array_push(self, NULL); // ensures we have enough capacity
+	if (self->count == prev_count)
+		return; // push failed (realloc OOM); don't shift out of bounds
 	for (int i = self->count - 2; i >= 0; i--) {
 		self->items[i + 1] = self->items[i];
 	}
@@ -79,10 +82,7 @@ void StringArray_free(Array* self) {
 // djb2 over the key bytes; lookups are exact-match (case-sensitive), same as
 // the old linear implementation
 static unsigned int Hash_bucket(const char* key) {
-	unsigned int h = 5381;
-	for (const unsigned char* p = (const unsigned char*)key; *p; p++)
-		h = h * 33 + *p;
-	return h % HASH_BUCKETS;
+	return hashString(key) % HASH_BUCKETS;
 }
 Hash* Hash_new(void) {
 	Hash* self = calloc(1, sizeof(Hash));

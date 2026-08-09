@@ -108,30 +108,11 @@ void Game_open(char* path) {
 		fclose(file);
 	}
 
-	// m3u-based? needs at least "/<folder>/<file>" to have a containing folder
-	char* tmp;
 	char m3u_path[MAX_PATH];
-	char dir_name[MAX_PATH];
-
-	strcpy(m3u_path, game.path);
-	tmp = strrchr(m3u_path, '/');
-	if (tmp) {
-		tmp[0] = '\0'; // strip the filename
-
-		tmp = strrchr(m3u_path, '/');
-		if (tmp) {
-			strcpy(dir_name, tmp);
-
-			// m3u named after the containing folder, inside it
-			size_t used = strlen(m3u_path);
-			snprintf(m3u_path + used, sizeof(m3u_path) - used, "%s.m3u", dir_name);
-
-			if (exists(m3u_path)) {
-				strcpy(game.m3u_path, m3u_path);
-				strcpy((char*)game.name, strrchr(m3u_path, '/') + 1);
-				strcpy((char*)game.alt_name, game.name); // default it
-			}
-		}
+	if (M3U_findForRom(game.path, m3u_path, sizeof(m3u_path))) {
+		strcpy(game.m3u_path, m3u_path);
+		strcpy((char*)game.name, strrchr(m3u_path, '/') + 1);
+		strcpy((char*)game.alt_name, game.name); // default it
 	}
 
 	game.is_open = 1;
