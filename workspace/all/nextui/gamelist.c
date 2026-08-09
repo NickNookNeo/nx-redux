@@ -49,6 +49,9 @@ static int list_pill_target = -1;
 // Previous selected index, to detect a wrap (last<->first) so the pill enters
 // from the near edge in the travel direction instead of sliding the whole list.
 static int list_pill_prev_sel = -1;
+// Previous directory, to detect a page/list change (folder enter/exit) so the
+// pill snaps to the new list's selection instead of gliding from the stale row.
+static const void* list_pill_prev_top = NULL;
 
 static bool had_thumb = false;
 static int ox;
@@ -1711,22 +1714,27 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 			char sel_trunc[256];
 			int sel_pill_w = UI_calcListPillWidth(font.large, sel_text, sel_trunc, sel_avail, 0);
 			int target_y = SCALE1(PADDING + PILL_SIZE + selected_row * PILL_SIZE);
+			// A page/list change (folder enter/exit — the `top` directory pointer
+			// changes) snaps the pill to the new selection instead of gliding in
+			// from the previous list's row, which briefly flashed the old position.
+			bool list_changed = (const void*)top != list_pill_prev_top;
+			list_pill_prev_top = (const void*)top;
 			// On a wrap (last<->first), enter from the near edge in the direction of
 			// travel instead of sliding the whole list: forward wrap (last->first)
 			// drops in from just above the first row; backward wrap (first->last)
 			// rises up from just below the last row. Done by seeding the glide's
 			// start position (current_y) one row off the target edge.
 			int cur_sel = top->selected;
-			bool wrap_fwd = (list_pill_prev_sel == total - 1 && cur_sel == 0 && total > 1);
-			bool wrap_bwd = (list_pill_prev_sel == 0 && cur_sel == total - 1 && total > 1);
+			bool wrap_fwd = !list_changed && list_pill_prev_sel == total - 1 && cur_sel == 0 && total > 1;
+			bool wrap_bwd = !list_changed && list_pill_prev_sel == 0 && cur_sel == total - 1 && total > 1;
 			list_pill_prev_sel = cur_sel;
-			if (target_y != list_pill_target) {
+			if (target_y != list_pill_target || list_changed) {
+				bool animate = list_pill_target >= 0 && !ContextMenu_isOpen() && !list_changed;
 				if (wrap_fwd)
 					list_pill_anim.current_y = target_y - SCALE1(PILL_SIZE);
 				else if (wrap_bwd)
 					list_pill_anim.current_y = target_y + SCALE1(PILL_SIZE);
-				UI_pillAnimSetTarget(&list_pill_anim, target_y,
-									 list_pill_target >= 0 && !ContextMenu_isOpen());
+				UI_pillAnimSetTarget(&list_pill_anim, target_y, animate);
 				list_pill_target = target_y;
 			}
 			int pill_y = UI_pillAnimTick(&list_pill_anim);

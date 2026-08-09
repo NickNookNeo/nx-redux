@@ -1633,22 +1633,82 @@ int GFX_getButtonWidth(char* hint, char* button) {
 	button_width += width;
 	return button_width;
 }
-static void GFX_drawFilledCircle(SDL_Surface* sur, int cx, int cy, int radius, Uint32 color) {
-	for (int dy = -radius; dy <= radius; dy++) {
-		int dx = (int)SDL_sqrt(radius * radius - dy * dy);
-		SDL_FillRect(sur, &(SDL_Rect){cx - dx, cy + dy, dx * 2 + 1, 1}, color);
+static uint32_t gfx_px_get(SDL_Surface* s, int x, int y) {
+	uint8_t* p = (uint8_t*)s->pixels + y * s->pitch + x * s->format->BytesPerPixel;
+	switch (s->format->BytesPerPixel) {
+	case 2:
+		return *(uint16_t*)p;
+	case 4:
+		return *(uint32_t*)p;
+	default:
+		return *p;
 	}
 }
+static void gfx_px_put(SDL_Surface* s, int x, int y, uint32_t pixel) {
+	uint8_t* p = (uint8_t*)s->pixels + y * s->pitch + x * s->format->BytesPerPixel;
+	switch (s->format->BytesPerPixel) {
+	case 2:
+		*(uint16_t*)p = (uint16_t)pixel;
+		break;
+	case 4:
+		*(uint32_t*)p = pixel;
+		break;
+	default:
+		*p = (uint8_t)pixel;
+		break;
+	}
+}
+// Blend colour (cr,cg,cb) into pixel (x,y) by coverage cov in [0,1] — the shared
+// per-pixel step behind the anti-aliased circle/capsule below.
+static void gfx_px_blend(SDL_Surface* s, int x, int y, uint8_t cr, uint8_t cg, uint8_t cb, float cov) {
+	if (x < 0 || y < 0 || x >= s->w || y >= s->h || cov <= 0.0f)
+		return;
+	if (cov >= 1.0f) {
+		gfx_px_put(s, x, y, SDL_MapRGB(s->format, cr, cg, cb));
+		return;
+	}
+	uint8_t dr, dg, db;
+	SDL_GetRGB(gfx_px_get(s, x, y), s->format, &dr, &dg, &db);
+	gfx_px_put(s, x, y, SDL_MapRGB(s->format, (uint8_t)(cr * cov + dr * (1.0f - cov) + 0.5f), (uint8_t)(cg * cov + dg * (1.0f - cov) + 0.5f), (uint8_t)(cb * cov + db * (1.0f - cov) + 0.5f)));
+}
+// Anti-aliased filled circle: per-pixel coverage from distance to the centre.
+static void GFX_drawFilledCircle(SDL_Surface* sur, int cx, int cy, int radius, Uint32 color) {
+	uint8_t cr, cg, cb;
+	SDL_GetRGB(color, sur->format, &cr, &cg, &cb);
+	if (SDL_MUSTLOCK(sur))
+		SDL_LockSurface(sur);
+	for (int y = cy - radius; y <= cy + radius; y++) {
+		for (int x = cx - radius; x <= cx + radius; x++) {
+			float dx = (float)(x - cx), dy = (float)(y - cy);
+			float cov = (float)radius - (float)SDL_sqrt((double)(dx * dx + dy * dy)) + 0.5f;
+			gfx_px_blend(sur, x, y, cr, cg, cb, cov);
+		}
+	}
+	if (SDL_MUSTLOCK(sur))
+		SDL_UnlockSurface(sur);
+}
+// Anti-aliased horizontal capsule (radius = h/2): solid centre + AA'd end caps.
 static void GFX_drawFilledRoundedRect(SDL_Surface* sur, int x, int y, int w, int h, Uint32 color) {
 	int r = h / 2;
-	// Center fill
-	SDL_FillRect(sur, &(SDL_Rect){x + r, y, w - h, h}, color);
-	// Left and right caps
-	for (int dy = -r; dy <= r; dy++) {
-		int dx = (int)SDL_sqrt(r * r - dy * dy);
-		SDL_FillRect(sur, &(SDL_Rect){x + r - dx, y + r + dy, dx, 1}, color);
-		SDL_FillRect(sur, &(SDL_Rect){x + w - r, y + r + dy, dx + 1, 1}, color);
+	if (w - h > 0)
+		SDL_FillRect(sur, &(SDL_Rect){x + r, y, w - h, h}, color);
+
+	uint8_t cr, cg, cb;
+	SDL_GetRGB(color, sur->format, &cr, &cg, &cb);
+	if (SDL_MUSTLOCK(sur))
+		SDL_LockSurface(sur);
+	for (int py = y; py < y + h; py++) {
+		for (int i = 0; i < r; i++) {
+			int lx = x + i; // left cap, centred on (x+r, y+r)
+			float ldx = (lx + 0.5f) - (x + r), ldy = (py + 0.5f) - (y + r);
+			gfx_px_blend(sur, lx, py, cr, cg, cb, (float)r - (float)SDL_sqrt((double)(ldx * ldx + ldy * ldy)) + 0.5f);
+			int rx = x + w - r + i; // right cap, centred on (x+w-r, y+r)
+			float rdx = (rx + 0.5f) - (x + w - r), rdy = (py + 0.5f) - (y + r);
+			gfx_px_blend(sur, rx, py, cr, cg, cb, (float)r - (float)SDL_sqrt((double)(rdx * rdx + rdy * rdy)) + 0.5f);
+		}
 	}
+	if (SDL_MUSTLOCK(sur))
+		SDL_UnlockSurface(sur);
 }
 void GFX_blitButton(char* hint, char* button, SDL_Surface* dst, SDL_Rect* dst_rect) {
 	SDL_Surface* text;
