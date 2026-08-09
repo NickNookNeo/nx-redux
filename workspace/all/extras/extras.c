@@ -50,7 +50,7 @@
 #define DESC_MAX_LINES 16
 
 // Display name of the Roms subfolder installed GAME entries land in - the
-// single source of truth for EXTRAS_ROMS_DIR/EXTRAS_PORTS_DIR (env passed to
+// single source of truth for EXTRAS_ROMS_DIR/EXTRAS_DATA_DIR (env passed to
 // install.sh/uninstall.sh below) and for locating each entry's version
 // marker/launcher directly. Adjacent-string-literal use (e.g. "%s/Roms/"
 // EXTRAS_ROMS_DIRNAME "/...") relies on this expanding to a bare string
@@ -156,7 +156,7 @@ static bool read_line_file(const char* path, char* out, int out_size) {
 
 // Installed-version record, written by install.sh to XTRAS_STATE_DIR. Falls
 // back to the legacy pre-update-tracking marker (.nx_addon_version inside
-// the entry's ports dir) and migrates the value forward so cards installed
+// the entry's data dir) and migrates the value forward so cards installed
 // before the switch keep reading as installed; the legacy file itself is
 // left for uninstall.sh to clear (and for an older Xtras.pak to read, if
 // the system is ever downgraded).
@@ -168,7 +168,7 @@ static void read_installed(AddonEntry* e) {
 
 	char legacy[MAX_PATH];
 	snprintf(legacy, sizeof(legacy),
-			 "%s/Roms/" EXTRAS_ROMS_DIRNAME "/.ports/%s/.nx_addon_version",
+			 "%s/Roms/" EXTRAS_ROMS_DIRNAME "/.data/%s/.nx_addon_version",
 			 SDCARD_PATH, e->id);
 	if (!read_line_file(legacy, e->installed, sizeof(e->installed)))
 		return;
@@ -864,11 +864,17 @@ static int run_entry_script(AddonEntry* e, const char* script_name, const char* 
 	snprintf(id_esc, sizeof(id_esc), "%s", e->id);
 	escapeSingleQuotes(id_esc, sizeof(id_esc));
 
+	// EXTRAS_DATA_DIR is the per-entry payload root for native standalone games
+	// (e.g. gen1recomp's LOVE engine + saves live in .data/<id>/). Named .data,
+	// not .ports: native entries own their whole runtime and don't touch
+	// PortMaster. A PortMaster-dependent extra is expected to install into the
+	// normal Roms/Ports (PORTS) tree from its own install.sh (as the psp TOOL
+	// installs to Emus/), so "Xtra Games (EXTRAS)" stays native-only.
 	char cmd[MAX_PATH * 4];
 	snprintf(cmd, sizeof(cmd),
 			 "PLATFORM='%s' SDCARD_PATH='%s' LOGS_PATH='%s' "
 			 "EXTRAS_ROMS_DIR='%s/Roms/" EXTRAS_ROMS_DIRNAME "' "
-			 "EXTRAS_PORTS_DIR='%s/Roms/" EXTRAS_ROMS_DIRNAME "/.ports' "
+			 "EXTRAS_DATA_DIR='%s/Roms/" EXTRAS_ROMS_DIRNAME "/.data' "
 			 "XTRAS_STATE_DIR='" XTRAS_STATE_DIR "' "
 			 "CATALOG_DIR='%s/catalog/%s' "
 			 "sh '%s/catalog/%s/%s' 2>&1",
@@ -1011,7 +1017,7 @@ static int run_install(AddonEntry* e) {
 
 // Uninstall fallback for an entry that ships no uninstall.sh (catalog
 // contract: "removes only the launcher + marker (safest possible)").
-// Never touches anything under EXTRAS_PORTS_DIR/<id>/ beyond the marker
+// Never touches anything under EXTRAS_DATA_DIR/<id>/ beyond the marker
 // itself, so any user data such an entry might have written there is left
 // completely alone. The installed launcher name(s) are derived from
 // install.sh's own convention rather than hardcoded here: install.sh cp's
@@ -1041,7 +1047,7 @@ static int uninstall_generic(AddonEntry* e) {
 
 	char marker[MAX_PATH];
 	snprintf(marker, sizeof(marker),
-			 "%s/Roms/" EXTRAS_ROMS_DIRNAME "/.ports/%s/.nx_addon_version",
+			 "%s/Roms/" EXTRAS_ROMS_DIRNAME "/.data/%s/.nx_addon_version",
 			 SDCARD_PATH, e->id);
 	remove(marker);
 

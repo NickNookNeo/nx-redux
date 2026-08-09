@@ -14,7 +14,7 @@
 # see its header for the full contract text.
 set -u
 
-TARGET="$EXTRAS_PORTS_DIR/gen1recomp"
+TARGET="$EXTRAS_DATA_DIR/gen1recomp"
 LOVE="$TARGET/lovegame"
 : "${XTRAS_STATE_DIR:=$SDCARD_PATH/.userdata/shared/xtras}"
 

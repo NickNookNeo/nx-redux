@@ -24,7 +24,6 @@ rm -f "$TARGET/launch.sh" "$TARGET/pak.json" "$TARGET/LICENSE"
 echo "@30 Removing version marker..."
 echo "Removing version marker..."
 rm -f "$XTRAS_STATE_DIR/psp.version"
-rm -rf "$EXTRAS_PORTS_DIR/psp" # legacy pre-update-tracking marker location
 
 echo "@60 Removing emulator..."
 echo "Removing emulator..."

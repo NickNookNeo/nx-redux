@@ -21,13 +21,15 @@
 #   - /tmp/stay_awake + sleepmon.elf (power-button sleep, system binary on
 #     the launch-chain PATH), mirroring ports_launch.sh - which also never
 #     clears stay_awake; the MinUI launch loop handles post-exit state
-#   - CPU: performance governor; tg5050 additionally gets the eMMC swapfile
-#     (OOM guard, verified 2026-08-06: game + voxel mod peak ~750MB on a
-#     1GB device; exFAT SD can't host swap) and big-core pinning. The MinUI
-#     launch loop restores CPU state after the game exits.
+#   - CPU: all cores online + frequency ceiling raised to the hardware max
+#     under schedutil (load-scaling, not a hard pin). Both 1GB devices get the
+#     eMMC swapfile (OOM guard, verified 2026-08-06: game + voxel mod peak
+#     ~750MB on a 1GB device; exFAT SD can't host swap); tg5050 additionally
+#     gets big-core pinning. The MinUI launch loop restores CPU state after the
+#     game exits.
 
 SHDIR="$(cd "$(dirname "$0")" && pwd)"
-GAMEDIR="$SHDIR/.ports/gen1recomp"
+GAMEDIR="$SHDIR/.data/gen1recomp"
 CONFDIR="$GAMEDIR/conf"
 mkdir -p "$CONFDIR"
 
@@ -38,6 +40,10 @@ exec > "$GAMEDIR/log.txt" 2>&1
 export HOME="$CONFDIR"
 export XDG_DATA_HOME="$CONFDIR"
 export XDG_CONFIG_HOME="$CONFDIR"
+# Original path kept for the system helpers spawned below (sleepmon.elf
+# needs libmsettings.so from .system/lib; the game-first override must not
+# shadow or hide that for them).
+NX_ORIG_LDLP="${LD_LIBRARY_PATH:-}"
 export LD_LIBRARY_PATH="$GAMEDIR/libs.aarch64:/usr/trimui/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # Audio-output routing: audiomon maintains the ALSA config for the active
@@ -78,31 +84,64 @@ trap cleanup EXIT INT TERM HUP QUIT
 echo 1 > /sys/class/speaker/mute 2>/dev/null
 ( sleep 5; echo 0 > /sys/class/speaker/mute 2>/dev/null; syncsettings.elf 2>/dev/null ) &
 
-# Power-button sleep/poweroff handler for the duration of the game.
+# Power-button sleep/poweroff handler for the duration of the game - run
+# with the ORIGINAL library path (it links libmsettings.so from
+# .system/lib, which the game-first override above doesn't carry).
 if command -v sleepmon.elf >/dev/null 2>&1; then
-    sleepmon.elf &
+    LD_LIBRARY_PATH="$NX_ORIG_LDLP" sleepmon.elf &
     NX_SLEEPMON_PID=$!
 fi
 
 # Per-platform tuning; MinUI's launch loop restores CPU state afterwards.
+# The frontend caps the CPU low at idle (e.g. 600MHz on brick vs a 2GHz
+# hardware max) and hotplugs cores out. At that clock LOVE launches slowly and
+# starves its 48kHz OpenAL mixer thread into XRUN underruns -> audio
+# distortion. Two things fix it: bring every core back online, and raise each
+# cluster's frequency CEILING to the hardware max. We leave the governor on
+# schedutil (not a hard 'performance' pin) so the clock still scales with load
+# - cooler and easier on the battery - while still reaching full speed under
+# the game's sustained load. This mirrors PortMaster's ports_launch.sh on tg5050.
 NX_TASKSET=""
-echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null
-case "${PLATFORM:-}" in
-  tg5050)
-    if [ ! -f /swapfile ]; then
-      # If dd or mkswap fails partway (e.g. full rootfs leaves a truncated
-      # /swapfile), remove it so `[ ! -f /swapfile ]` doesn't pass forever -
-      # without this, every later launch skips creation, swapon silently
-      # fails, and voxel-mod sessions OOM-kill with no swap ever retried.
-      # shellcheck disable=SC2015
-      # (deliberate, not an if/then/else stand-in: `|| rm -f` here means
-      # "clean up on ANY failure in the chain", not just when dd fails.)
-      dd if=/dev/zero of=/swapfile bs=1M count=512 2>/dev/null \
+# Bring every core online: the frontend hotplugs cores out at idle (on tg5050
+# it leaves all but one big core offline), which would otherwise trap the
+# big-core taskset below - and LOVE's audio thread - on a single core.
+for oc in /sys/devices/system/cpu/cpu[0-9]*/online; do
+    echo 1 > "$oc" 2>/dev/null
+done
+# Raise each cluster to its full frequency range under schedutil. Write the max
+# ceiling before the min floor so a min value can't momentarily exceed the old
+# (frontend-lowered) max and get rejected by the driver.
+for pol in /sys/devices/system/cpu/cpufreq/policy*; do
+    [ -d "$pol" ] || continue
+    hwmax="$(cat "$pol/cpuinfo_max_freq" 2>/dev/null)"
+    hwmin="$(cat "$pol/cpuinfo_min_freq" 2>/dev/null)"
+    echo schedutil > "$pol/scaling_governor" 2>/dev/null
+    [ -n "$hwmax" ] && echo "$hwmax" > "$pol/scaling_max_freq" 2>/dev/null
+    [ -n "$hwmin" ] && echo "$hwmin" > "$pol/scaling_min_freq" 2>/dev/null
+done
+# eMMC swapfile OOM guard for BOTH 1GB devices (brick and tg5050). Either peaks
+# ~750MB with the Dramatic Shape voxel mod enabled; exFAT SD can't host swap, so
+# the file lives on the internal rootfs. Confirmed swap-able on both layouts:
+# tg5050's plain ext4 '/' and the brick's overlayfs '/' (upperdir is ext4).
+# Created once and reused each launch; swapon failure is always non-fatal.
+if [ ! -f /swapfile ]; then
+    # If dd or mkswap fails partway (e.g. a full rootfs leaves a truncated
+    # /swapfile), remove it so `[ ! -f /swapfile ]` doesn't pass forever -
+    # without this, every later launch skips creation, swapon silently fails,
+    # and voxel-mod sessions OOM-kill with no swap ever retried.
+    # shellcheck disable=SC2015
+    # (deliberate, not an if/then/else stand-in: `|| rm -f` here means "clean
+    # up on ANY failure in the chain", not just when dd fails.)
+    dd if=/dev/zero of=/swapfile bs=1M count=512 2>/dev/null \
         && chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 \
         || rm -f /swapfile
-    fi
-    swapon /swapfile 2>/dev/null
-    echo performance > /sys/devices/system/cpu/cpu4/cpufreq/scaling_governor 2>/dev/null
+fi
+swapon /swapfile 2>/dev/null
+
+# Big-core affinity is tg5050-only: the brick has a single CPU cluster, so
+# there are no performance cores to pin LOVE onto.
+case "${PLATFORM:-}" in
+  tg5050)
     command -v taskset >/dev/null 2>&1 && NX_TASKSET="taskset -c 4-7"
     ;;
 esac

@@ -15,8 +15,10 @@
 # PORTS_PAK_DIR in portmaster.c (SDCARD_PATH "/Emus/PORTS.pak", no
 # platform subdir) and the release packaging, which flattens the SYSTEM
 # tree - there is no supported platform-subdir card layout to fall back
-# to. ports_launch.sh resolves the .ports data dir from the rom's own
-# directory, so it works for "Xtra Games (EXTRAS)" unchanged.
+# to. The ports branch is a defensive fallback only: native standalone games
+# (payload in .data/<id>/) are the sole expected runtime under "Xtra Games
+# (EXTRAS)", and PortMaster-dependent extras install into the normal
+# Roms/Ports (PORTS) tree from their own install.sh instead of here.
 
 if head -20 "$1" 2>/dev/null | grep -q "^# NX_RUNTIME: native"; then
     exec "$1"

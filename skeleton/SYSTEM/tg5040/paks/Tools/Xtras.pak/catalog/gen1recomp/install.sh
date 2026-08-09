@@ -95,7 +95,7 @@ if [ -z "$NX_SHA1" ] && [ -x "$SDCARD_PATH/Emus/shared/PortMaster/bin/sha1sum" ]
 fi
 
 TMPDIR_NX="$SDCARD_PATH/.extras_tmp"
-TARGET="$EXTRAS_PORTS_DIR/gen1recomp"
+TARGET="$EXTRAS_DATA_DIR/gen1recomp"
 LOVE="$TARGET/lovegame"
 # Installed-version record (read by extras.elf's update check). The caller
 # passes XTRAS_STATE_DIR; the fallback mirrors its device value for a bare
@@ -200,7 +200,7 @@ if ! command -v "$NX_EXTRAS_UNZIP" >/dev/null 2>&1; then
 fi
 
 rm -rf "$TMPDIR_NX"
-mkdir -p "$TMPDIR_NX" "$EXTRAS_PORTS_DIR" || fail "cannot create install dirs"
+mkdir -p "$TMPDIR_NX" "$EXTRAS_DATA_DIR" || fail "cannot create install dirs"
 echo "@5 Checking latest versions..."
 echo "Checking latest versions..."
 
@@ -301,7 +301,7 @@ echo "@90 Scanning for ROMs..."
 echo "Looking for your Pokemon ROMs..."
 found=0
 if [ -z "$NX_SHA1" ]; then
-    echo "  ROM auto-scan skipped (no sha1 tool) - copy ROMs manually into Roms/Xtra Games (EXTRAS)/.ports/gen1recomp/lovegame/"
+    echo "  ROM auto-scan skipped (no sha1 tool) - copy ROMs manually into Roms/Xtra Games (EXTRAS)/.data/gen1recomp/lovegame/"
 else
     for dir in "$SDCARD_PATH/Roms/Game Boy (GB)" "$SDCARD_PATH/Roms/Game Boy Color (GBC)"; do
         [ -d "$dir" ] || continue
@@ -318,7 +318,7 @@ else
             esac
         done
     done
-    [ "$found" -eq 0 ] && echo "  none found - copy a US Red/Blue/Yellow ROM into Roms/Xtra Games (EXTRAS)/.ports/gen1recomp/lovegame/ later"
+    [ "$found" -eq 0 ] && echo "  none found - copy a US Red/Blue/Yellow ROM into Roms/Xtra Games (EXTRAS)/.data/gen1recomp/lovegame/ later"
 fi
 
 # Self-install the EXTRAS platform runtime. The skeleton SYSTEM tree
