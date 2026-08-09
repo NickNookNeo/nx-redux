@@ -19,7 +19,6 @@
 
 typedef struct {
 	char ssid[SSID_MAX];
-	char bssid[128];
 	int rssi;
 	WifiSecurityType security;
 	int connected;
@@ -34,8 +33,7 @@ typedef struct {
 #define WIFI_IDX_TOGGLE 0
 #define WIFI_IDX_DIAG 1
 
-static const char* wifi_toggle_labels[] = {"Off", "On"};
-static const char* wifi_diag_labels[] = {"Off", "On"};
+static const char* on_off_labels[] = {"Off", "On"};
 
 // ============================================
 // Scanner thread state
@@ -44,7 +42,6 @@ static const char* wifi_diag_labels[] = {"Off", "On"};
 static pthread_t wifi_scanner_thread;
 static volatile int wifi_scanner_running = 0;
 static int wifi_scanner_started = 0;
-static SettingsPage* wifi_page_ref = NULL;
 
 // ============================================
 // Network options submenu (allocated per-network)
@@ -53,7 +50,6 @@ static SettingsPage* wifi_page_ref = NULL;
 typedef struct {
 	SettingsPage page;
 	SettingItem items[4]; // max: Connect, Disconnect, Forget, + safety margin
-	int item_count;
 	WifiNetworkInfo net_info;
 } WifiNetworkOptions;
 
@@ -68,13 +64,21 @@ static void wifi_network_draw(SDL_Surface* screen, SettingItem* item,
 // WiFi toggle (blocking with overlay)
 // ============================================
 
+// File-scope context: the worker is detached and can outlive wifi_set_toggle()
+// (the user may press B to stop waiting before WIFI_enable returns), so its
+// completion writes must not target a freed stack frame. The busy flag rejects
+// a second toggle until the running worker releases the shared context.
+static struct {
+	int val;
+	volatile int done;
+	volatile int busy;
+} wifi_toggle_ctx;
+
 static void* wifi_toggle_thread(void* arg) {
-	struct {
-		int val;
-		volatile int* done;
-	}* ctx = arg;
-	WIFI_enable(ctx->val ? true : false);
-	*ctx->done = 1;
+	(void)arg;
+	WIFI_enable(wifi_toggle_ctx.val ? true : false);
+	wifi_toggle_ctx.done = 1;
+	wifi_toggle_ctx.busy = 0;
 	return NULL;
 }
 
@@ -86,20 +90,23 @@ static void wifi_set_toggle(int val) {
 	SettingsPage* page = settings_menu_current();
 	if (!page || !page->screen)
 		return;
+	if (wifi_toggle_ctx.busy) // a toggle is still running in the background
+		return;
 
-	volatile int done = 0;
-	struct {
-		int val;
-		volatile int* done;
-	} ctx = {val, &done};
+	wifi_toggle_ctx.busy = 1;
+	wifi_toggle_ctx.val = val;
+	wifi_toggle_ctx.done = 0;
 
 	pthread_t t;
-	pthread_create(&t, NULL, wifi_toggle_thread, &ctx);
+	if (pthread_create(&t, NULL, wifi_toggle_thread, NULL) != 0) {
+		wifi_toggle_ctx.busy = 0;
+		return;
+	}
 	pthread_detach(t);
 
 	const char* title = val ? "Enabling WiFi..." : "Disabling WiFi...";
 
-	while (!done) {
+	while (!wifi_toggle_ctx.done) {
 		GFX_startFrame();
 		PAD_poll();
 		if (PAD_justPressed(BTN_B))
@@ -229,7 +236,6 @@ static void build_network_options(WifiNetworkOptions* opts, WifiNetworkInfo* inf
 		idx++;
 	}
 
-	opts->item_count = idx;
 	opts->page.item_count = idx;
 }
 
@@ -249,11 +255,20 @@ static void wifi_network_press(void) {
 	if (!page)
 		return;
 
+	// Copy the network info out under the page lock: the scanner thread
+	// rebuilds page->items[] and network_info_pool under the wrlock, and
+	// this handler runs after the menu loop released its read lock.
+	WifiNetworkInfo info;
+	int have_info = 0;
+	pthread_rwlock_rdlock(&page->lock);
 	SettingItem* sel = settings_page_visible_item(page, page->selected);
-	if (!sel || !sel->user_data)
+	if (sel && sel->user_data) {
+		info = *(WifiNetworkInfo*)sel->user_data;
+		have_info = 1;
+	}
+	pthread_rwlock_unlock(&page->lock);
+	if (!have_info)
 		return;
-
-	WifiNetworkInfo* info = (WifiNetworkInfo*)sel->user_data;
 
 	// Reuse options pool
 	if (net_options_used >= MAX_NET_OPTIONS)
@@ -261,7 +276,7 @@ static void wifi_network_press(void) {
 	WifiNetworkOptions* opts = &net_options_pool[net_options_used++];
 	active_net_options = opts;
 
-	build_network_options(opts, info);
+	build_network_options(opts, &info);
 	settings_menu_push(&opts->page);
 }
 
@@ -428,7 +443,6 @@ static void* wifi_scanner(void* arg) {
 			for (int i = 0; i < dedup_count && item_idx < page->max_items; i++) {
 				WifiNetworkInfo* ninfo = &network_info_pool[network_info_count++];
 				strncpy(ninfo->ssid, deduped[i].ssid, sizeof(ninfo->ssid) - 1);
-				strncpy(ninfo->bssid, deduped[i].bssid, sizeof(ninfo->bssid) - 1);
 				ninfo->rssi = deduped[i].rssi;
 				ninfo->security = deduped[i].security;
 				ninfo->connected = (has_conn && strcmp(conn.ssid, deduped[i].ssid) == 0);
@@ -495,7 +509,6 @@ static void wifi_on_show(SettingsPage* page) {
 	settings_item_sync(&page->items[WIFI_IDX_DIAG]);
 
 	// Start scanner thread
-	wifi_page_ref = page;
 	wifi_scanner_running = 1;
 	wifi_scanner_started = 1;
 	pthread_create(&wifi_scanner_thread, NULL, wifi_scanner, page);
@@ -504,7 +517,6 @@ static void wifi_on_show(SettingsPage* page) {
 static void wifi_on_hide(SettingsPage* page) {
 	(void)page;
 	wifi_scanner_running = 0;
-	wifi_page_ref = NULL;
 }
 
 static void wifi_on_tick(SettingsPage* page) {
@@ -550,7 +562,7 @@ SettingsPage* wifi_page_create(void) {
 		.desc = "Enable or disable WiFi",
 		.type = ITEM_CYCLE,
 		.visible = 1,
-		.labels = wifi_toggle_labels,
+		.labels = on_off_labels,
 		.label_count = 2,
 		.get_value = wifi_get_toggle,
 		.set_value = wifi_set_toggle,
@@ -562,7 +574,7 @@ SettingsPage* wifi_page_create(void) {
 		.desc = "Enable WiFi diagnostic logging",
 		.type = ITEM_CYCLE,
 		.visible = 1,
-		.labels = wifi_diag_labels,
+		.labels = on_off_labels,
 		.label_count = 2,
 		.get_value = wifi_get_diag,
 		.set_value = wifi_set_diag,

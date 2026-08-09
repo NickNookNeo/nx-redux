@@ -8,7 +8,6 @@
 #include "settings_bt.h"
 #include "defines.h"
 #include "api.h"
-#include "config.h"
 #include "ui_list.h"
 #include "ui_loadingoverlay.h"
 
@@ -22,7 +21,6 @@ typedef struct {
 	BluetoothDeviceType device_type;
 	int paired;
 	int connected;
-	int16_t rssi;
 } BtDeviceInfo;
 
 // ============================================
@@ -33,8 +31,7 @@ typedef struct {
 #define BT_IDX_TOGGLE 0
 #define BT_IDX_DIAG 1
 
-static const char* bt_toggle_labels[] = {"Off", "On"};
-static const char* bt_diag_labels[] = {"Off", "On"};
+static const char* on_off_labels[] = {"Off", "On"};
 
 // ============================================
 // Scanner thread state
@@ -53,7 +50,6 @@ static SettingsPage* bt_page_ref = NULL;
 typedef struct {
 	SettingsPage page;
 	SettingItem items[4];
-	int item_count;
 	BtDeviceInfo dev_info;
 } BtDeviceOptions;
 
@@ -68,13 +64,22 @@ static void bt_device_draw(SDL_Surface* screen, SettingItem* item,
 // BT toggle (blocking with overlay)
 // ============================================
 
+// File-scope context: the worker is detached and can outlive bt_set_toggle()
+// (the user may press B to stop waiting before BT_enable returns). Keeping the
+// context in static storage — never on the caller's stack — means the thread's
+// final writes land in valid memory, and the busy flag stops a second toggle
+// from racing the first over the same context.
+static struct {
+	int val;
+	volatile int done;
+	volatile int busy;
+} bt_toggle_ctx;
+
 static void* bt_toggle_thread(void* arg) {
-	struct {
-		int val;
-		volatile int* done;
-	}* ctx = arg;
-	BT_enable(ctx->val ? true : false);
-	*ctx->done = 1;
+	(void)arg;
+	BT_enable(bt_toggle_ctx.val ? true : false);
+	bt_toggle_ctx.done = 1;
+	bt_toggle_ctx.busy = 0;
 	return NULL;
 }
 
@@ -86,20 +91,23 @@ static void bt_set_toggle(int val) {
 	SettingsPage* page = settings_menu_current();
 	if (!page || !page->screen)
 		return;
+	if (bt_toggle_ctx.busy) // a toggle is still running in the background
+		return;
 
-	volatile int done = 0;
-	struct {
-		int val;
-		volatile int* done;
-	} ctx = {val, &done};
+	bt_toggle_ctx.busy = 1;
+	bt_toggle_ctx.val = val;
+	bt_toggle_ctx.done = 0;
 
 	pthread_t t;
-	pthread_create(&t, NULL, bt_toggle_thread, &ctx);
+	if (pthread_create(&t, NULL, bt_toggle_thread, NULL) != 0) {
+		bt_toggle_ctx.busy = 0;
+		return;
+	}
 	pthread_detach(t);
 
 	const char* title = val ? "Enabling Bluetooth..." : "Disabling Bluetooth...";
 
-	while (!done) {
+	while (!bt_toggle_ctx.done) {
 		GFX_startFrame();
 		PAD_poll();
 		if (PAD_justPressed(BTN_B))
@@ -132,14 +140,21 @@ static BtDeviceOptions* active_bt_options = NULL;
 typedef struct {
 	void (*action)(char* addr);
 	char addr[18];
-	const char* overlay_msg;
 	volatile int done;
+	volatile int busy;
 } BtActionCtx;
 
+// Static, not stack-allocated: bt_run_action may return (user presses B) while
+// the blocking BT op is still running in the detached worker, so the context it
+// writes on completion must remain valid. The busy flag rejects a second action
+// until the first worker has finished with the shared context.
+static BtActionCtx bt_action_ctx;
+
 static void* bt_action_thread(void* arg) {
-	BtActionCtx* ctx = (BtActionCtx*)arg;
-	ctx->action(ctx->addr);
-	ctx->done = 1;
+	(void)arg;
+	bt_action_ctx.action(bt_action_ctx.addr);
+	bt_action_ctx.done = 1;
+	bt_action_ctx.busy = 0;
 	return NULL;
 }
 
@@ -148,17 +163,24 @@ static void bt_run_action(void (*action)(char*), const char* addr, const char* m
 		return;
 	SDL_Surface* screen = bt_page_ref->screen;
 
-	BtActionCtx ctx = {0};
-	ctx.action = action;
-	strncpy(ctx.addr, addr, sizeof(ctx.addr) - 1);
-	ctx.overlay_msg = msg;
-	ctx.done = 0;
+	if (bt_action_ctx.busy) // a previous action is still running in the background
+		return;
+
+	bt_action_ctx.busy = 1;
+	bt_action_ctx.done = 0;
+	bt_action_ctx.action = action;
+	bt_action_ctx.addr[0] = '\0';
+	strncpy(bt_action_ctx.addr, addr, sizeof(bt_action_ctx.addr) - 1);
+	bt_action_ctx.addr[sizeof(bt_action_ctx.addr) - 1] = '\0';
 
 	pthread_t t;
-	pthread_create(&t, NULL, bt_action_thread, &ctx);
+	if (pthread_create(&t, NULL, bt_action_thread, NULL) != 0) {
+		bt_action_ctx.busy = 0;
+		return;
+	}
 	pthread_detach(t);
 
-	while (!ctx.done) {
+	while (!bt_action_ctx.done) {
 		GFX_startFrame();
 		PAD_poll();
 		if (PAD_justPressed(BTN_B))
@@ -252,7 +274,6 @@ static void build_bt_device_options(BtDeviceOptions* opts, BtDeviceInfo* info) {
 		idx++;
 	}
 
-	opts->item_count = idx;
 	opts->page.item_count = idx;
 }
 
@@ -269,18 +290,27 @@ static void bt_device_press(void) {
 	if (!page)
 		return;
 
+	// Copy the device info out under the page lock: the scanner thread
+	// rebuilds page->items[] and device_info_pool under the wrlock, and
+	// this handler runs after the menu loop released its read lock.
+	BtDeviceInfo info;
+	int have_info = 0;
+	pthread_rwlock_rdlock(&page->lock);
 	SettingItem* sel = settings_page_visible_item(page, page->selected);
-	if (!sel || !sel->user_data)
+	if (sel && sel->user_data) {
+		info = *(BtDeviceInfo*)sel->user_data;
+		have_info = 1;
+	}
+	pthread_rwlock_unlock(&page->lock);
+	if (!have_info)
 		return;
-
-	BtDeviceInfo* info = (BtDeviceInfo*)sel->user_data;
 
 	if (bt_options_used >= MAX_BT_OPTIONS)
 		bt_options_used = 0;
 	BtDeviceOptions* opts = &bt_options_pool[bt_options_used++];
 	active_bt_options = opts;
 
-	build_bt_device_options(opts, info);
+	build_bt_device_options(opts, &info);
 	settings_menu_push(&opts->page);
 }
 
@@ -442,7 +472,6 @@ static void* bt_scanner(void* arg) {
 			strncpy(dinfo->addr, paired[i].remote_addr, sizeof(dinfo->addr) - 1);
 			dinfo->paired = 1;
 			dinfo->connected = paired[i].is_connected;
-			dinfo->rssi = paired[i].rssi;
 
 			dinfo->device_type = BLUETOOTH_NONE;
 
@@ -475,7 +504,6 @@ static void* bt_scanner(void* arg) {
 			strncpy(dinfo->addr, available[i].addr, sizeof(dinfo->addr) - 1);
 			dinfo->paired = 0;
 			dinfo->connected = 0;
-			dinfo->rssi = 0;
 			dinfo->device_type = available[i].kind;
 
 			page->items[item_idx] = (SettingItem){
@@ -584,7 +612,7 @@ SettingsPage* bt_page_create(void) {
 		.desc = "Enable or disable Bluetooth",
 		.type = ITEM_CYCLE,
 		.visible = 1,
-		.labels = bt_toggle_labels,
+		.labels = on_off_labels,
 		.label_count = 2,
 		.get_value = bt_get_toggle,
 		.set_value = bt_set_toggle,
@@ -596,7 +624,7 @@ SettingsPage* bt_page_create(void) {
 		.desc = "Enable Bluetooth diagnostic logging",
 		.type = ITEM_CYCLE,
 		.visible = 1,
-		.labels = bt_diag_labels,
+		.labels = on_off_labels,
 		.label_count = 2,
 		.get_value = bt_get_diag,
 		.set_value = bt_set_diag,

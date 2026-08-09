@@ -47,7 +47,9 @@ void touch(char* path);
 int toggle(char* path); // creates or removes file
 void putFile(char* path, char* contents);
 int writeFileAtomic(const char* path, const char* data, size_t len); // tmp+fsync+rename; returns 1 on success
-char* allocFile(char* path);										 // caller must free
+// Extract a JSON string value for `key` ("key":"value" or "key": "value") into out; returns out or NULL.
+const char* json_extract_string(const char* json, const char* key, char* out, size_t out_size);
+char* allocFile(char* path); // caller must free
 void getFile(char* path, char* buffer, size_t buffer_size);
 // Simple Mode PIN: reads SIMPLE_MODE_PATH's content. Returns true when the
 // file holds exactly 4 ASCII digits (trailing whitespace ignored) and copies
@@ -64,5 +66,10 @@ int clamp(int x, int lower, int upper);
 double clampd(double x, double lower, double upper);
 
 char* findFileInDir(const char* directory, const char* filename);
+
+// Percent-encode src into dst (form style: space -> '+', unreserved kept, rest
+// %XX). dst must hold up to 3x src plus a NUL; encoding stops early if it would
+// overflow dst_size.
+void urlEncode(const char* src, char* dst, size_t dst_size);
 
 #endif

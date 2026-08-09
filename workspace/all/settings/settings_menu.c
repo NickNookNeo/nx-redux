@@ -46,10 +46,6 @@ SettingsPage* settings_menu_current(void) {
 	return page_stack[stack_depth - 1];
 }
 
-int settings_menu_depth(void) {
-	return stack_depth;
-}
-
 // ============================================
 // Visible Item Helpers
 // ============================================
@@ -73,18 +69,6 @@ SettingItem* settings_page_visible_item(SettingsPage* page, int visible_idx) {
 		count++;
 	}
 	return NULL;
-}
-
-int settings_page_visible_to_actual(SettingsPage* page, int visible_idx) {
-	int count = 0;
-	for (int i = 0; i < page->item_count; i++) {
-		if (!page->items[i].visible)
-			continue;
-		if (count == visible_idx)
-			return i;
-		count++;
-	}
-	return -1;
 }
 
 int settings_page_actual_to_visible(SettingsPage* page, int actual_idx) {
@@ -138,10 +122,12 @@ void settings_page_init_lock(SettingsPage* page) {
 	pthread_rwlock_init(&page->lock, NULL);
 }
 
-void settings_page_destroy(SettingsPage* page) {
-	if (page->dynamic_start >= 0)
-		pthread_rwlock_destroy(&page->lock);
-}
+// NOTE: no settings_page_destroy — the wifi/bt pages that init this rwlock live
+// for the whole (short-lived) settings process; teardown (wifi_page_destroy /
+// bt_page_destroy) only signals the scanner threads to stop and deliberately
+// lets process exit reclaim the page, its items, and this lock. Destroying the
+// rwlock here would also be unsafe: those scanner threads are not joined, so one
+// could still rdlock it after destruction.
 
 // ============================================
 // Cycle item value change
@@ -249,43 +235,54 @@ void settings_menu_handle_input(bool* quit, bool* dirty) {
 		}
 	}
 
+	// Snapshot the selected item before releasing the lock: on scanner
+	// pages the scanner thread may rewrite page->items[] the moment the
+	// wrlock becomes available, and the A-press below runs unlocked.
+	SettingItem sel_snap = {0};
+	if (sel)
+		sel_snap = *sel;
+
 	if (has_lock)
 		pthread_rwlock_unlock(&page->lock);
 
 	// Confirm (A button)
 	if (sel && PAD_justPressed(BTN_A)) {
-		switch (sel->type) {
+		switch (sel_snap.type) {
 		case ITEM_BUTTON:
-			if (sel->on_press)
-				sel->on_press();
+			if (sel_snap.on_press)
+				sel_snap.on_press();
 			changed = 1;
 			break;
-		case ITEM_SUBMENU:
+		case ITEM_SUBMENU: {
 			// Support lazy page creation: if submenu is NULL but on_press
 			// and user_data are set, call on_press to create the page,
 			// then read the result from user_data (a SettingsPage** pointer)
-			if (!sel->submenu && sel->on_press && sel->user_data) {
-				sel->on_press();
-				sel->submenu = *(SettingsPage**)sel->user_data;
+			SettingsPage* submenu = sel_snap.submenu;
+			if (!submenu && sel_snap.on_press && sel_snap.user_data) {
+				sel_snap.on_press();
+				submenu = *(SettingsPage**)sel_snap.user_data;
+				sel->submenu = submenu; // static item; scanners never build submenus
 			}
-			if (sel->submenu) {
-				settings_menu_push(sel->submenu);
+			if (submenu) {
+				settings_menu_push(submenu);
 				changed = 1;
 			}
 			break;
+		}
 		case ITEM_TEXT_INPUT: {
 			// Use external keyboard binary
 			extern char* UIKeyboard_open(const char* prompt);
 			DisplayHelper_prepareForExternal();
-			char* result = UIKeyboard_open(sel->name);
+			char* result = UIKeyboard_open(sel_snap.name);
 			PAD_poll();
 			PAD_reset();
 			DisplayHelper_recoverDisplay();
 			if (result) {
+				// text-input items are static; sel stays valid for the write-back
 				strncpy(sel->text_value, result, sizeof(sel->text_value) - 1);
 				sel->text_value[sizeof(sel->text_value) - 1] = '\0';
-				if (sel->on_text_set)
-					sel->on_text_set(result);
+				if (sel_snap.on_text_set)
+					sel_snap.on_text_set(result);
 				free(result);
 			}
 			changed = 1;

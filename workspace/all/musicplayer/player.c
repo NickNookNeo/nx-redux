@@ -8,8 +8,6 @@
 #include <strings.h>
 #include <unistd.h>
 #include <math.h>
-#include <fcntl.h>
-#include <dirent.h>
 #include <samplerate.h>
 #include <SDL2/SDL_image.h>
 #include "api.h"
@@ -1763,7 +1761,11 @@ static void parse_id3v2(const char* filepath) {
 		// Skip flags
 		pos += 10;
 
-		if (frame_size == 0 || pos + frame_size > tag_size)
+		// Bounds check without adding: pos + frame_size can wrap in uint32_t
+		// (frame_size is an untrusted 32-bit big-endian value in v2.2/v2.3),
+		// so compute the remaining space instead. pos <= tag_size here because
+		// the loop guard was `pos + 10 < tag_size` before the += 10.
+		if (frame_size == 0 || frame_size > tag_size - pos)
 			break;
 
 		// Process text frames (TIT2, TPE1, TALB, etc.)
@@ -2278,10 +2280,6 @@ void Player_setVolume(float volume) {
 	pthread_mutex_unlock(&player.mutex);
 }
 
-float Player_getVolume(void) {
-	return player.volume;
-}
-
 void Player_setPlaybackSpeed(float speed) {
 	if (speed < 0.5f)
 		speed = 0.5f;
@@ -2341,10 +2339,6 @@ int Player_getVisBuffer(int16_t* buffer, int max_samples) {
 	return samples_to_copy;
 }
 
-const WaveformData* Player_getWaveform(void) {
-	return &waveform;
-}
-
 SDL_Surface* Player_getAlbumArt(void) {
 	// Return embedded album art if available
 	if (player.album_art) {
@@ -2370,25 +2364,9 @@ void Player_pauseAudio(void) {
 	}
 }
 
-bool Player_isBluetoothActive(void) {
-	return AudioMgr_isBluetoothActive();
-}
-
-bool Player_isUSBDACActive(void) {
-	return AudioMgr_isUSBDACActive();
-}
-
 // USB HID wrappers — AudioMgr now owns the HID fd
-void Player_initUSBHID(void) {
-	// No-op: AudioMgr manages HID lifecycle
-}
-
 USBHIDEvent Player_pollUSBHID(void) {
 	AudioMgrHIDEvent e = AudioMgr_pollHID();
 	// Enum values are identical by design, just different type names
 	return (USBHIDEvent)e;
-}
-
-void Player_quitUSBHID(void) {
-	// No-op: AudioMgr manages HID lifecycle
 }

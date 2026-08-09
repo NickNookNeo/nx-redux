@@ -21,6 +21,33 @@
 #include "utils.h"
 #include "wget_fetch.h"
 
+// Copy a file without invoking a shell. Used for paths derived from port
+// metadata / directory names, where a `cp '%s'` command would let a crafted
+// name (containing a single quote) break out of the quoting.
+static int copy_file(const char* src, const char* dst) {
+	FILE* in = fopen(src, "rb");
+	if (!in)
+		return -1;
+	FILE* out = fopen(dst, "wb");
+	if (!out) {
+		fclose(in);
+		return -1;
+	}
+	char buf[8192];
+	size_t n;
+	int rc = 0;
+	while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+		if (fwrite(buf, 1, n, out) != n) {
+			rc = -1;
+			break;
+		}
+	}
+	fclose(in);
+	if (fclose(out) != 0)
+		rc = -1;
+	return rc;
+}
+
 // PortMaster paths
 #define PORTS_PAK_DIR SDCARD_PATH "/Emus/PORTS.pak"
 #define LEGACY_PORTS_PAK_DIR SDCARD_PATH "/Emus/" PLATFORM "/PORTS.pak" // pre-flattening installs (platform-subdir layout)
@@ -40,13 +67,11 @@
 #define PM_BUNDLED_LIBS PM_FILES_DIR "/libs.zip"
 #define PM_BUNDLED_PYLIBS PM_FILES_DIR "/pylibs.zip"
 #define PM_BUNDLED_CERT PM_FILES_DIR "/ca-certificates.crt"
-#define PM_BUNDLED_PROGRESSOR PM_FILES_DIR "/progressor"
 #define PM_BUNDLED_DISABLE_PY PM_FILES_DIR "/disable_python_function.py"
 
 enum PMState {
 	PM_STATE_CHECK,
 	PM_STATE_NOT_INSTALLED,
-	PM_STATE_INSTALLED,
 	PM_STATE_DOWNLOADING,
 	PM_STATE_EXTRACTING,
 	PM_STATE_PATCHING,
@@ -189,9 +214,7 @@ static void sync_port_artwork(void) {
 		if (!src_path[0])
 			continue;
 
-		char cmd[1024];
-		snprintf(cmd, sizeof(cmd), "cp -f '%s' '%s'", src_path, media_path);
-		system(cmd);
+		copy_file(src_path, media_path);
 	}
 
 	closedir(dir);
@@ -604,18 +627,6 @@ static void ensure_bash_symlink(void) {
 	}
 }
 
-static void replace_progressor_binaries(void) {
-	// Port-bundled progressor binaries are SDL2/OpenGL GUI apps that fail on our display.
-	// Replace them with our show2.elf-based shell script that shows a loading screen.
-	char cmd[1024];
-	snprintf(cmd, sizeof(cmd),
-			 "for f in '%s/.ports'/*/progressor; do "
-			 "[ -f \"$f\" ] && cp -f '%s' \"$f\" && chmod +x \"$f\"; "
-			 "done",
-			 PORTS_ROM_DIR, PM_BUNDLED_PROGRESSOR);
-	system(cmd);
-}
-
 static void set_controller_layout(const char* layout) {
 	char cmd[512];
 	snprintf(cmd, sizeof(cmd), "cp -f '%s/gamecontrollerdb_%s.txt' '%s/gamecontrollerdb.txt'",
@@ -711,9 +722,6 @@ static void launch_pugwash(void) {
 
 	// Replace port scripts with patched versions (fixes exFAT symlink issues, mount paths, etc.)
 	apply_patched_scripts();
-
-	// Replace port-bundled progressor binaries with our show2.elf-based script
-	//replace_progressor_binaries();
 }
 
 static void format_speed(int bps, char* buf, int buf_size) {
@@ -805,7 +813,6 @@ static void render_screen(void) {
 		UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "RETRY", NULL});
 		break;
 
-	case PM_STATE_INSTALLED:
 	case PM_STATE_LAUNCHING:
 		UI_renderMenuBar(screen, "PortMaster");
 		UI_renderCenteredMessage(screen, "Launching PortMaster...");

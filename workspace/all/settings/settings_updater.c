@@ -15,6 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include "utils.h"
 #include <sys/wait.h>
 
 #include "settings_updater.h"
@@ -25,6 +26,8 @@
 #include "ui_downloadprogress.h"
 #include "ui_menubar.h"
 #include "wget_fetch.h"
+#include <ctype.h>
+#include <strings.h>
 
 // ============================================
 // Configuration
@@ -57,9 +60,9 @@ static const char* get_device_name(void) {
 
 typedef struct {
 	char tag_name[128];
-	char commit_sha[64];
 	char download_url[512];
 	char release_notes[2048];
+	char expected_sha256[80]; // hex SHA-256 from the asset "digest" ("" if none)
 } ReleaseInfo;
 
 // ============================================
@@ -78,7 +81,6 @@ static UpdateCheckState auto_state = UPDATE_IDLE;
 static ReleaseInfo cached_release = {0};
 static char item_label[160] = "Updater";
 static char item_desc[256] = "";
-static char current_sha_cache[64] = "";
 static char current_tag_cache[128] = "";
 
 // Background check thread
@@ -92,37 +94,11 @@ static char auto_error[256] = "";
 // JSON helpers
 // ============================================
 
-static const char* find_json_string(const char* json, const char* key, char* out, size_t out_size) {
-	if (!json || !key || !out || out_size == 0)
-		return NULL;
 
-	char search[128];
-	snprintf(search, sizeof(search), "\"%s\":\"", key);
-
-	const char* start = strstr(json, search);
-	if (!start) {
-		snprintf(search, sizeof(search), "\"%s\": \"", key);
-		start = strstr(json, search);
-		if (!start)
-			return NULL;
-	}
-
-	start += strlen(search);
-	const char* end = strchr(start, '"');
-	if (!end)
-		return NULL;
-
-	size_t len = end - start;
-	if (len >= out_size)
-		len = out_size - 1;
-
-	strncpy(out, start, len);
-	out[len] = '\0';
-
-	return out;
-}
-
-static const char* find_zip_asset_url(const char* json, const char* platform, char* out, size_t out_size) {
+static const char* find_zip_asset_url(const char* json, const char* platform, char* out, size_t out_size,
+									  char* digest_out, size_t digest_size) {
+	if (digest_out && digest_size > 0)
+		digest_out[0] = '\0';
 	if (!json || !platform || !out || out_size == 0)
 		return NULL;
 
@@ -161,6 +137,28 @@ static const char* find_zip_asset_url(const char* json, const char* platform, ch
 				len = out_size - 1;
 			strncpy(out, pos, len);
 			out[len] = '\0';
+
+			// Extract this asset's SHA-256 digest if present. GitHub emits
+			// "digest": "sha256:<hex>" earlier in the same asset object, so
+			// scan backward from the matched URL. Stop at the first '}' so we
+			// never pick up a different asset's digest.
+			if (digest_out && digest_size > 0) {
+				for (const char* q = pos; q > assets; q--) {
+					if (*q == '}')
+						break;
+					if (strncmp(q, "\"digest\"", 8) == 0) {
+						const char* s = strstr(q, "sha256:");
+						if (s && s < pos) {
+							s += 7;
+							size_t k = 0;
+							while (k < digest_size - 1 && isxdigit((unsigned char)*s))
+								digest_out[k++] = (char)tolower((unsigned char)*s++);
+							digest_out[k] = '\0';
+						}
+						break;
+					}
+				}
+			}
 			return out;
 		}
 
@@ -325,12 +323,11 @@ static void process_auto_check_result(void) {
 	auto_response_data = NULL;
 	ReleaseInfo release = {0};
 
-	if (!find_json_string(data, "tag_name", release.tag_name,
-						  sizeof(release.tag_name)) ||
-		!find_json_string(data, "target_commitish", release.commit_sha,
-						  sizeof(release.commit_sha)) ||
+	if (!json_extract_string(data, "tag_name", release.tag_name,
+							 sizeof(release.tag_name)) ||
 		!find_zip_asset_url(data, get_device_name(), release.download_url,
-							sizeof(release.download_url))) {
+							sizeof(release.download_url),
+							release.expected_sha256, sizeof(release.expected_sha256))) {
 		free(data);
 		auto_state = UPDATE_ERROR;
 		snprintf(item_label, sizeof(item_label), "Updater");
@@ -339,7 +336,7 @@ static void process_auto_check_result(void) {
 	}
 
 	char body[4096] = "";
-	find_json_string(data, "body", body, sizeof(body));
+	json_extract_string(data, "body", body, sizeof(body));
 	extract_first_paragraph(body, release.release_notes, sizeof(release.release_notes));
 	free(data);
 
@@ -536,6 +533,55 @@ static int show_update_info(SDL_Surface* screen, ReleaseInfo* release) {
 	}
 }
 
+// Compute the SHA-256 of a file as a lowercase hex string, using the device's
+// sha256sum (busybox). `path` is a compile-time constant (DOWNLOAD_PATH), so
+// there is no shell-injection surface. Returns 0 on success, -1 otherwise.
+static int sha256_file_hex(const char* path, char out_hex[65]) {
+	char cmd[300];
+	snprintf(cmd, sizeof(cmd), "sha256sum '%s' 2>/dev/null", path);
+	FILE* p = popen(cmd, "r");
+	if (!p)
+		return -1;
+	char line[160] = {0};
+	char* got = fgets(line, sizeof(line), p);
+	pclose(p);
+	if (!got)
+		return -1;
+	// Output is "<64 hex chars>  <path>"; take and lowercase the first 64.
+	for (int i = 0; i < 64; i++) {
+		char c = line[i];
+		if (!isxdigit((unsigned char)c))
+			return -1;
+		out_hex[i] = (char)tolower((unsigned char)c);
+	}
+	out_hex[64] = '\0';
+	return 0;
+}
+
+// Confirm the downloaded package matches the SHA-256 advertised in the release
+// JSON (GitHub's asset "digest"). This guards against a corrupted/truncated
+// download being extracted over the system partition. It is an integrity check,
+// not authentication — a network attacker who can rewrite the download can also
+// rewrite the digest (see the audit notes for why signing would be needed for
+// that). Returns 1 = matched, 0 = no digest advertised (skip), -1 = MISMATCH.
+static int verify_update_hash(const char* zip_path, const char* expected_sha256) {
+	if (!expected_sha256 || expected_sha256[0] == '\0') {
+		LOG_warn("[Updater] release has no sha256 digest; skipping hash check\n");
+		return 0;
+	}
+	char actual[65];
+	if (sha256_file_hex(zip_path, actual) != 0) {
+		LOG_warn("[Updater] could not compute sha256 (sha256sum missing?); skipping\n");
+		return 0; // don't block updates if the tool is unavailable
+	}
+	if (strcasecmp(actual, expected_sha256) != 0) {
+		LOG_error("[Updater] sha256 mismatch: expected %s got %s\n", expected_sha256, actual);
+		return -1;
+	}
+	LOG_info("[Updater] update sha256 verified\n");
+	return 1;
+}
+
 // Run download + extract + reboot with full-screen progress pages.
 static void do_install(SDL_Surface* screen, ReleaseInfo* release) {
 	pthread_t tid;
@@ -618,6 +664,19 @@ static void do_install(SDL_Surface* screen, ReleaseInfo* release) {
 		return;
 	}
 
+	// --- Verify integrity before extracting over the system partition ---
+	{
+		render_update_page(screen, "Verifying Update", "Checking download...", -1, NULL, NULL, 0);
+		int vr = verify_update_hash(DOWNLOAD_PATH, release->expected_sha256);
+		if (vr < 0) { // -1 = mismatch (corrupted download); 0 = nothing to check
+			unlink(DOWNLOAD_PATH);
+			PWR_enableSleep();
+			PWR_enableAutosleep();
+			show_message_page(screen, "Update Error", "Download corrupted");
+			return;
+		}
+	}
+
 	// --- Extract phase ---
 	ExtractContext ex = {0};
 
@@ -674,8 +733,9 @@ void updater_about_on_show(SettingsPage* page) {
 	(void)page;
 
 	char version[128];
+	char sha[64];
 	read_current_version(version, sizeof(version),
-						 current_sha_cache, sizeof(current_sha_cache),
+						 sha, sizeof(sha),
 						 current_tag_cache, sizeof(current_tag_cache));
 
 	// Only auto-check once per session (retry allowed on error)
@@ -740,10 +800,6 @@ void updater_about_on_tick(SettingsPage* page) {
 						 : ITEM_STATIC;
 		page->needs_layout = 1;
 	}
-}
-
-const char* updater_get_status(void) {
-	return item_label;
 }
 
 void updater_check_for_updates(void) {
