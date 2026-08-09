@@ -1,7 +1,9 @@
 #!/bin/sh
-# Xtras catalog: gen1recomp + Dramatic Shape Voxel Mod.
-# Contract: idempotent; sha256-pinned downloads (fail closed); visible
-# launcher registered LAST; progress on stdout; exit code is the verdict;
+# Xtras catalog: gen1recomp + bundled mods (Dramatic Shape Voxel, Running
+# Shoes, Wilds of Kanto).
+# Contract: idempotent; installs the LATEST upstream releases (resolved from
+# the GitHub API at install time, sha256-digest-verified - fail closed);
+# visible launcher registered LAST; progress on stdout; exit code is the verdict;
 # every network command must carry a timeout (the caller streams our stdout
 # via a blocking popen()/fgets() read loop with no watchdog of its own - an
 # untimed command here stalls the whole UI, not just this script).
@@ -18,26 +20,75 @@
 # nothing here reduces what's recorded on disk vs. what's shown on screen.
 set -u
 
-GEN1_TAG="v0.1.75"
-GEN1_ZIP_URL="https://github.com/bryanthaboi/gen1recomp/releases/download/${GEN1_TAG}/gen1recomp-0.1.75-rg34xxsp-stockos64-mod.zip"
-GEN1_YELLOW_URL="https://raw.githubusercontent.com/bryanthaboi/gen1recomp/${GEN1_TAG}/tools/rom_manifest_yellow.json"
-GEN1_MOD_URL="https://github.com/DramaticShape/DramaticShapeVoxelMod/releases/download/v1.6.2/DRAMATIC_SHAPE-1.6.2.zip"
-# Env-overridable so the host test can substitute fixtures; on a device an
-# attacker who controls the environment already owns the SD card.
-: "${GEN1_ZIP_SHA256:=eb3a101c3184551407c6a221fe035a2486383941c36661bf9a38596ae086f525}"
-: "${GEN1_YELLOW_SHA256:=ff1c83919442013c92f6f9df0b1359a1415a59870640046d83dfa0582978a29c}"
-: "${GEN1_MOD_SHA256:=92c99d40a4b8d79b8cd950cc8dce8f7be34624b26e0434a85b95ec0aab76e572}"
-VERSION="0.1.75+mod1.6.2"
+# Latest-install model (2026-08-10 spec): the game and the shoes/wilds
+# mods resolve to their repos' latest GitHub release at install time -
+# no pinned tags/URLs/shas. Integrity comes from the per-asset sha256 digest
+# the same API responses carry (settings_updater.c's posture: an integrity
+# check, not authentication). The yellow ROM manifest is fetched at the
+# resolved game tag (raw.githubusercontent, no digest available - TLS-only).
+# The Voxel Mod is the one exception - pinned, see below.
+GEN1_REPO="bryanthaboi/gen1recomp"
+GEN1_ASSET="*rg34xxsp-stockos64-mod.zip"
+# Voxel Mod: upstream DramaticShape/DramaticShapeVoxelMod - and the whole
+# DramaticShape account - vanished from GitHub ~2026-08 (API 404s; install
+# failure device-reproduced 2026-08-10). The live repo is still TRIED FIRST,
+# so if the author ever restores it, latest-release installs resume on their
+# own - but a resolve failure there falls back to the newest zip (1.7.2)
+# preserved in the community backup repo linkfy/DramaticShapeVoxelModBackup
+# (a plain repo file, fetched raw), verified against a sha256 computed from
+# that exact file on 2026-08-10 - fails closed if the backup file is ever
+# replaced. The fallback cannot mask a dead network: the game repo resolve
+# runs before it and fails the whole install first, so reaching the fallback
+# means the network works and the repo itself is gone. Overridable ONLY so
+# the host test can serve its fixtures.
+MOD_REPO="DramaticShape/DramaticShapeVoxelMod"
+MOD_ASSET="DRAMATIC_SHAPE*.zip"
+: "${NX_VOXEL_URL:=https://raw.githubusercontent.com/linkfy/DramaticShapeVoxelModBackup/main/DRAMATIC_SHAPE-1.7.2.zip}"
+: "${NX_VOXEL_SHA256:=fe8af5180e7f430dd9d9667f7370db4d886d25714209dc949413972d3bf82307}"
+# Running Shoes: hold-B run speed (extras all off by default; manifest id
+# "running_shoes", no deps/conflicts). Contents at the zip root, ~28 KB.
+SHOES_REPO="MadeinTaly/gen1recomp-running-shoes"
+SHOES_ASSET="running_shoes-*.zip"
+# Wilds of Kanto: visible/reactive overworld wild Pokemon (manifest id
+# "overworld_wild_spawns"). Its release asset is a source archive - contents
+# sit under a "<repo>-<branch>/" wrapper dir, not at the zip root - so the
+# install step below finds the manifest.json-bearing dir instead of assuming
+# either layout. ~18 MB download, the largest of the mods.
+WILDS_REPO="YoDrehDenSwagAuf/overworld-spawn-mod"
+WILDS_ASSET="Wilds.of.Kanto*.zip"
 
-: "${NX_EXTRAS_UNZIP:=$SDCARD_PATH/Emus/shared/PortMaster/bin/7zzs.aarch64}"
-export SSL_CERT_FILE="${SSL_CERT_FILE:-$SDCARD_PATH/Emus/shared/PortMaster/ssl/certs/ca-certificates.crt}"
+# The SYSTEM-shipped 7zzs (same binary settings_updater.c extracts system
+# updates with), NOT PortMaster's vendored copy: since the runtime=native
+# conversion (2026-08-10) this entry has no PortMaster dependency at launch,
+# so the install must not depend on it either (psp/install.sh's posture).
+: "${NX_EXTRAS_UNZIP:=$SDCARD_PATH/.system/shared/bin/7zzs.aarch64}"
+
+# TLS: verify whenever a CA bundle exists on the card; only fall back to the
+# system updater's --no-check-certificate convention (common/wget_fetch.c;
+# the firmware itself ships no CA bundle) when none is found. PortMaster's
+# vendored bundle is used opportunistically - the runtime=native conversion
+# removed the REQUIREMENT on PortMaster, not the willingness to use its
+# certs when present. The .system/shared/ssl path is a seam for a future
+# system-shipped bundle and wins when both exist. Verified TLS also protects
+# the release-API JSON (which carries the asset digests), closing the
+# digest-over-unverified-channel loop the sha256 check alone can't.
+NX_WGET_TLS="--no-check-certificate"
+for _ca in "$SDCARD_PATH/.system/shared/ssl/ca-certificates.crt" \
+           "$SDCARD_PATH/Emus/shared/PortMaster/ssl/certs/ca-certificates.crt"; do
+    if [ -f "$_ca" ]; then
+        export SSL_CERT_FILE="$_ca"
+        NX_WGET_TLS=""
+        break
+    fi
+done
 
 # sha1sum is NOT on the device PATH in the Xtras launch chain (device-
 # verified: /mnt/SDCARD/.system/bin:/mnt/SDCARD/.system/shared/bin:/usr/
 # trimui/bin:/usr/sbin:/usr/bin:/sbin:/bin - busybox on the card has no
 # sha1sum applet). The only copy on the card lives under PortMaster's vendored
-# bin/. Resolved once here; the ROM auto-scan below skips gracefully (not a
-# fatal error) if neither resolves.
+# bin/ - used opportunistically WHEN PortMaster happens to be installed; the
+# ROM auto-scan below skips gracefully (not a fatal error) if neither
+# resolves, so this is not a PortMaster dependency.
 NX_SHA1="$(command -v sha1sum || true)"
 if [ -z "$NX_SHA1" ] && [ -x "$SDCARD_PATH/Emus/shared/PortMaster/bin/sha1sum" ]; then
     NX_SHA1="$SDCARD_PATH/Emus/shared/PortMaster/bin/sha1sum"
@@ -46,6 +97,10 @@ fi
 TMPDIR_NX="$SDCARD_PATH/.extras_tmp"
 TARGET="$EXTRAS_PORTS_DIR/gen1recomp"
 LOVE="$TARGET/lovegame"
+# Installed-version record (read by extras.elf's update check). The caller
+# passes XTRAS_STATE_DIR; the fallback mirrors its device value for a bare
+# environment.
+: "${XTRAS_STATE_DIR:=$SDCARD_PATH/.userdata/shared/xtras}"
 
 # Set true once we start writing into $TARGET (the overlay-copy below).
 # Before that point a failure leaves any prior successful install (and its
@@ -73,44 +128,127 @@ extract() { # zip dest
     esac
 }
 
-fetch() { # url dest sha256 label
+fetch() { # url dest sha256(""=skip) label
     echo "Downloading $4..."
     # --timeout=30 bounds dns/connect/read all at once (GNU wget); --tries=2
     # caps retries, so a stalled/half-open connection gives up in ~60s
     # instead of hanging the popen'd read loop that streams this script's
     # stdout indefinitely. Single-token --flag=value form so a naive "skip
     # any -* token" arg shim (see the host test) can't mis-eat a detached
-    # value as the next positional arg.
-    wget -q --timeout=30 --tries=2 -O "$2" "$1" || fail "download failed: $4 (check WiFi)"
-    got="$(sha256sum "$2" | cut -d' ' -f1)"
-    [ "$got" = "$3" ] || fail "checksum mismatch on $4 - aborting"
+    # value as the next positional arg. $NX_WGET_TLS (see its definition):
+    # empty when a CA bundle was found (full TLS verification), otherwise
+    # --no-check-certificate with the sha256 check below failing closed on a
+    # corrupted download. Deliberately unquoted - "" must expand to no
+    # argument. An empty sha (an asset the API ships no digest for, e.g. the
+    # raw-hosted yellow manifest) skips the check.
+    # shellcheck disable=SC2086
+    wget $NX_WGET_TLS -q --timeout=30 --tries=2 -O "$2" "$1" || fail "download failed: $4 (check WiFi)"
+    if [ -n "$3" ]; then
+        got="$(sha256sum "$2" | cut -d' ' -f1)"
+        [ "$got" = "$3" ] || fail "checksum mismatch on $4 - aborting"
+    fi
 }
 
-# Preflight (Task 15, fix round 1): fail closed, before touching the
-# network at all, if the PortMaster runtime this entry depends on wasn't
-# actually unpacked. A bare `[ -d Emus/shared/PortMaster ]` is NOT enough -
-# the nx-redux skeleton itself ships patchedScripts/ and files/ under that
-# same directory, so the dir exists even when PortMaster was removed or
-# never installed (device-reproduced: preflight passed, downloads
-# succeeded, then died unactionably at extract - missing 7zzs). Probe the
-# actual runtime files instead: the unzip binary (extraction dependency,
-# also this script's own $NX_EXTRAS_UNZIP default) and control.txt
-# (PortMaster's own installed-runtime marker - needed by the launch chain
-# even if install itself somehow succeeded without it).
-if [ ! -x "$SDCARD_PATH/Emus/shared/PortMaster/bin/7zzs.aarch64" ] || [ ! -f "$SDCARD_PATH/Emus/shared/PortMaster/control.txt" ]; then
-    fail "PortMaster runtime not set up - open Tools > PortMaster first, then retry"
+# resolve_latest <owner/repo> <asset-glob>: queries the GitHub latest-release
+# API and sets RL_TAG, RL_URL (the asset matching the glob) and RL_SHA (that
+# asset's sha256 digest, "" when the API ships none). The JSON is scanned as
+# a token stream - within each asset object the API emits "name" before
+# "digest" before "browser_download_url", so tracking the last-seen name/
+# digest pairs each URL with its own asset (same scraping approach
+# settings_updater.c uses). Returns non-zero with RL_ERR set when
+# unreachable or unparseable - each caller decides whether that is fatal
+# (`|| fail "$RL_ERR"`) or a fallback (the Voxel mod).
+# Same helper as psp/install.sh's - catalog entries are self-contained by
+# contract, so it is duplicated rather than shared.
+resolve_latest() {
+    _rl_json="$TMPDIR_NX/release.json"
+    # shellcheck disable=SC2086  # $NX_WGET_TLS: "" must expand to no argument
+    wget $NX_WGET_TLS -q --timeout=30 --tries=2 -O "$_rl_json" \
+        "https://api.github.com/repos/$1/releases/latest" \
+        || { RL_ERR="could not check the latest version (check WiFi)"; return 1; }
+    RL_TAG="$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$_rl_json" | head -1)"
+    [ -n "$RL_TAG" ] || { RL_ERR="could not read the latest version info"; return 1; }
+    RL_URL=""
+    RL_SHA=""
+    _rl_name=""
+    _rl_digest=""
+    while IFS= read -r _rl_tok; do
+        case "$_rl_tok" in
+            '"name":'*)   _rl_name="$(printf '%s' "$_rl_tok" | cut -d'"' -f4)"; _rl_digest="" ;;
+            '"digest":'*) _rl_digest="$(printf '%s' "$_rl_tok" | cut -d'"' -f4 | sed 's/^sha256://')" ;;
+            '"browser_download_url":'*)
+                # shellcheck disable=SC2254  # $2 is deliberately an unquoted glob
+                case "$_rl_name" in
+                    $2) RL_URL="$(printf '%s' "$_rl_tok" | cut -d'"' -f4)"; RL_SHA="$_rl_digest"; break ;;
+                esac ;;
+        esac
+    done <<EOF
+$(grep -o '"name": *"[^"]*"\|"digest": *"[^"]*"\|"browser_download_url": *"[^"]*"' "$_rl_json")
+EOF
+    [ -n "$RL_URL" ] || { RL_ERR="latest release has no matching download"; return 1; }
+    return 0
+}
+
+# Preflight: probe the unzip binary before touching the network. It ships
+# with the system itself, so absence means damaged/stale system files, not
+# a missing optional add-on. command -v covers both the absolute device
+# default and a bare-name override from the host test. (The old PortMaster
+# runtime preflight is gone with the runtime=native conversion - nothing
+# here needs PortMaster anymore.)
+if ! command -v "$NX_EXTRAS_UNZIP" >/dev/null 2>&1; then
+    fail "system unzip tool missing - update or reinstall NX Redux, then retry"
 fi
 
 rm -rf "$TMPDIR_NX"
 mkdir -p "$TMPDIR_NX" "$EXTRAS_PORTS_DIR" || fail "cannot create install dirs"
-echo "@5 Starting install..."
+echo "@5 Checking latest versions..."
+echo "Checking latest versions..."
 
-fetch "$GEN1_ZIP_URL"    "$TMPDIR_NX/game.zip"    "$GEN1_ZIP_SHA256"    "gen1recomp 0.1.75 (~5 MB)"
+resolve_latest "$GEN1_REPO" "$GEN1_ASSET" || fail "$RL_ERR"
+GAME_TAG="$RL_TAG"
+GAME_URL="$RL_URL"
+GAME_SHA="$RL_SHA"
+echo "Latest game release: $GAME_TAG"
+
+# Voxel: live repo first, archived backup on any resolve failure (see the
+# constants block above - the network is already proven good by this point).
+if resolve_latest "$MOD_REPO" "$MOD_ASSET"; then
+    MOD_TAG="$RL_TAG"
+    MOD_URL="$RL_URL"
+    MOD_SHA="$RL_SHA"
+    echo "Latest mod release: $MOD_TAG"
+else
+    MOD_TAG="1.7.2-backup"
+    MOD_URL="$NX_VOXEL_URL"
+    MOD_SHA="$NX_VOXEL_SHA256"
+    echo "Voxel Mod upstream unavailable - using archived $MOD_TAG"
+fi
+
+resolve_latest "$SHOES_REPO" "$SHOES_ASSET" || fail "$RL_ERR"
+SHOES_TAG="$RL_TAG"
+SHOES_URL="$RL_URL"
+SHOES_SHA="$RL_SHA"
+echo "Latest running shoes release: $SHOES_TAG"
+
+resolve_latest "$WILDS_REPO" "$WILDS_ASSET" || fail "$RL_ERR"
+WILDS_TAG="$RL_TAG"
+WILDS_URL="$RL_URL"
+WILDS_SHA="$RL_SHA"
+echo "Latest wilds of kanto release: $WILDS_TAG"
+
+GEN1_YELLOW_URL="https://raw.githubusercontent.com/$GEN1_REPO/$GAME_TAG/tools/rom_manifest_yellow.json"
+echo "@10 Starting install..."
+
+fetch "$GAME_URL"        "$TMPDIR_NX/game.zip"    "$GAME_SHA" "gen1recomp $GAME_TAG (~5 MB)"
 echo "@20 Downloaded gen1recomp"
-fetch "$GEN1_YELLOW_URL" "$TMPDIR_NX/yellow.json" "$GEN1_YELLOW_SHA256" "Yellow ROM manifest (~1 MB)"
-echo "@35 Downloaded Yellow manifest"
-fetch "$GEN1_MOD_URL"    "$TMPDIR_NX/mod.zip"     "$GEN1_MOD_SHA256"    "Voxel Mod 1.6.2 (~8 MB)"
-echo "@55 Downloaded Voxel Mod"
+fetch "$GEN1_YELLOW_URL" "$TMPDIR_NX/yellow.json" ""          "Yellow ROM manifest (~1 MB)"
+echo "@25 Downloaded Yellow manifest"
+fetch "$MOD_URL"         "$TMPDIR_NX/mod.zip"     "$MOD_SHA"  "Voxel Mod $MOD_TAG (~8 MB)"
+echo "@40 Downloaded Voxel Mod"
+fetch "$SHOES_URL"       "$TMPDIR_NX/shoes.zip"   "$SHOES_SHA" "Running Shoes Mod $SHOES_TAG (<1 MB)"
+echo "@45 Downloaded Running Shoes Mod"
+fetch "$WILDS_URL"       "$TMPDIR_NX/wilds.zip"   "$WILDS_SHA" "Wilds of Kanto $WILDS_TAG (~18 MB)"
+echo "@65 Downloaded Wilds of Kanto"
 
 echo "@70 Extracting..."
 echo "Extracting game..."
@@ -132,6 +270,31 @@ cp "$TMPDIR_NX/yellow.json" "$LOVE/tools/rom_manifest_yellow.json" || fail "yell
 echo "Installing Voxel Mod..."
 mkdir -p "$LOVE/mods/DRAMATIC_SHAPE"
 extract "$TMPDIR_NX/mod.zip" "$LOVE/mods/DRAMATIC_SHAPE" || fail "could not extract voxel mod"
+
+# PokePC Followers was bundled briefly on 2026-08-10 and then dropped the
+# same day (user-confirmed: Wilds of Kanto ships its own follower system and
+# the two overlap) - remove it from any install that picked it up.
+rm -rf "$LOVE/mods/pokepcfollowers"
+
+echo "Installing Running Shoes Mod..."
+mkdir -p "$LOVE/mods/running_shoes"
+extract "$TMPDIR_NX/shoes.zip" "$LOVE/mods/running_shoes" || fail "could not extract running shoes mod"
+
+echo "Installing Wilds of Kanto..."
+# Source-archive layout: find the dir holding manifest.json (the zip root
+# itself, or a single "<repo>-<branch>/" wrapper) rather than assuming one.
+mkdir -p "$TMPDIR_NX/wilds"
+extract "$TMPDIR_NX/wilds.zip" "$TMPDIR_NX/wilds" || fail "could not extract wilds of kanto mod"
+rm -f "$TMPDIR_NX/wilds.zip" # free ~18 MB before the copy below doubles the payload
+WILDS_SRC="$TMPDIR_NX/wilds"
+if [ ! -f "$WILDS_SRC/manifest.json" ]; then
+    for _wd in "$TMPDIR_NX/wilds"/*/; do
+        [ -f "${_wd}manifest.json" ] && WILDS_SRC="${_wd%/}" && break
+    done
+fi
+[ -f "$WILDS_SRC/manifest.json" ] || fail "unexpected wilds of kanto zip layout"
+mkdir -p "$LOVE/mods/overworld_wild_spawns"
+cp -R "$WILDS_SRC/." "$LOVE/mods/overworld_wild_spawns/" || fail "could not install wilds of kanto mod"
 echo "@80 Yellow support and mods installed"
 
 echo "@90 Scanning for ROMs..."
@@ -177,7 +340,26 @@ if [ ! -f "$EMU_PAK/launch.sh" ] && [ -f "$PAK_DIR/extras_games_launch.sh" ]; th
     cp "$PAK_DIR/extras_games_launch.sh" "$EMU_PAK/launch.sh" || fail "could not install EXTRAS.pak"
 fi
 
-echo "$VERSION" > "$TARGET/.nx_addon_version" || fail "could not write version marker"
+# Both records carry the resolved game tag: the XTRAS_STATE_DIR file is what
+# extras.elf's update check reads; the legacy in-target marker keeps an
+# older Xtras.pak (pre-update-tracking) reading this install as installed.
+mkdir -p "$XTRAS_STATE_DIR" || fail "cannot create version state dir"
+printf '%s\n' "$GAME_TAG" > "$XTRAS_STATE_DIR/gen1recomp.version" || fail "could not write version record"
+printf '%s\n' "$GAME_TAG" > "$TARGET/.nx_addon_version" || fail "could not write version marker"
+
+# Display alias: the launcher filename would render as "Gen1recomp" in the
+# game list; a map.txt line (filename<TAB>alias - content.c Directory_index)
+# sets the shown name without renaming the file, so resume slots, this
+# script's own cleanup paths, and existing installs stay keyed to
+# Gen1recomp.sh. Upsert keyed on the filename so other entries' alias lines
+# in the shared folder are preserved. Written before the launcher lands so
+# the entry never appears under the wrong name.
+MAP="$EXTRAS_ROMS_DIR/map.txt"
+TAB="$(printf '\t')"
+{
+    [ -f "$MAP" ] && grep -v "^Gen1recomp\.sh$TAB" "$MAP"
+    printf 'Gen1recomp.sh\tGen1Recomp (Pokemon R/B/Y)\n'
+} > "$MAP.tmp" && mv "$MAP.tmp" "$MAP" || fail "could not write display name"
 
 # LAST STEP: the visible menu entry. Everything above must already be good.
 cp "$CATALOG_DIR/files/Gen1recomp.sh" "$EXTRAS_ROMS_DIR/Gen1recomp.sh" || fail "could not register launcher"

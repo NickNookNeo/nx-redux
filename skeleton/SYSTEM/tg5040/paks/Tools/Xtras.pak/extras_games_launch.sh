@@ -6,8 +6,8 @@
 #     Native entries own their ENTIRE runtime themselves (env vars,
 #     background services, cleanup) - this dispatcher does nothing else
 #     for them. Declared in the entry's meta.txt via runtime=native.
-#     No native catalog entry exists yet, so this branch is currently
-#     unreached in practice; it's a seam for future entries.
+#     gen1recomp is native as of 2026-08-10 (its bundled LOVE runtime
+#     resolves every lib from the firmware, so PortMaster isn't needed).
 #   - ports (default - no marker, e.g. gen1recomp's meta.txt declares
 #     runtime=ports explicitly): run through the proven PORTS runtime,
 #     as today.

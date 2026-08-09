@@ -1,25 +1,32 @@
 /*
  * extras.elf — the Xtras catalog: browse curated games/tools, install
  * on-device. Entries live in ./catalog/<id>/{meta.txt,install.sh,files/}.
- * Games install into "Roms/Xtra Games (EXTRAS)"; tools into Tools/.
+ * Games install into "Roms/Xtra Games (EXTRAS)"; tools into Tools/ - except
+ * where an entry's install.sh targets somewhere else entirely (psp installs
+ * an emulator pak into Emus/), flagged per-entry via meta.txt's done_msg.
  */
 
 #include <ctype.h>
 #include <dirent.h>
 #include <netdb.h>
+#include <pthread.h> // background latest-release check thread
+#include <signal.h>	 // sig_atomic_t for the thread's done flag
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h> // strcasecmp
+#include <strings.h>  // strcasecmp
+#include <sys/stat.h> // mkdir (state dir), stat (latest-cache TTL)
 #include <sys/statvfs.h>
 #include <sys/wait.h> // WIFEXITED/WEXITSTATUS on run_install's pclose() status
+#include <time.h>	  // latest-cache TTL comparison
 #include <unistd.h>
 
 #include <msettings.h>
 
 #include "defines.h"
 #include "api.h"
+#include "wget_fetch.h" // latest-release API queries (settings_updater's helper)
 #include "ui_buttonhintbar.h"
 #include "ui_confirmdialog.h"
 #include "ui_downloadprogress.h"
@@ -60,14 +67,30 @@
 // explicit one-time `mv`/reinstall migration note).
 #define EXTRAS_ROMS_DIRNAME "Xtra Games (EXTRAS)"
 
+// Per-entry version state lives OUTSIDE the catalog (update-tracking spec,
+// 2026-08-10): install.sh records the release tag it actually installed in
+// XTRAS_STATE_DIR/<id>.version, and the background check thread below caches
+// each repo's latest release tag in <id>.latest. "Update available" is
+// simply installed != latest - the catalog itself no longer pins versions.
+#define XTRAS_STATE_DIR SHARED_USERDATA_PATH "/xtras"
+// Latest-release cache freshness window: within it the check thread skips
+// the GitHub API entirely (rate limit is 60/hr/IP unauthenticated - ample,
+// but re-hitting it on every app open is still pointless).
+#define LATEST_CACHE_TTL_S 3600
+
 typedef struct {
 	char id[64]; // catalog folder name
 	char name[META_STR];
 	char category[16]; // "GAME" | "TOOL"
 	char desc[1024];
-	char version[64];
+	char repo[128];	 // GitHub owner/name whose releases drive the update check ("" = untracked)
+	char latest[64]; // latest upstream release tag, from the <id>.latest cache ("" = unknown)
 	int size_mb;
-	char installed[64]; // "" = not installed, else marker contents
+	char installed[64]; // "" = not installed, else the installed release tag
+	char done_msg[128]; // optional: install-success subtitle override, for
+						// entries whose payload doesn't land in the default
+						// category folder (e.g. psp installs to Emus/, not
+						// Tools/, so "Find it in Tools." would mislead)
 } AddonEntry;
 
 static AddonEntry entries[MAX_ENTRIES];
@@ -83,10 +106,14 @@ static void meta_set(AddonEntry* e, const char* key, const char* val) {
 		snprintf(e->category, sizeof(e->category), "%s", val);
 	else if (!strcmp(key, "desc"))
 		snprintf(e->desc, sizeof(e->desc), "%s", val);
-	else if (!strcmp(key, "version"))
-		snprintf(e->version, sizeof(e->version), "%s", val);
+	else if (!strcmp(key, "repo"))
+		snprintf(e->repo, sizeof(e->repo), "%s", val);
 	else if (!strcmp(key, "size_mb"))
 		e->size_mb = atoi(val);
+	else if (!strcmp(key, "done_msg"))
+		snprintf(e->done_msg, sizeof(e->done_msg), "%s", val);
+	// "version" (pre-update-tracking pin) and "asset" (consumed only by the
+	// entry's own install.sh) fall through to the unknown-key ignore.
 }
 
 static bool meta_parse(const char* path, AddonEntry* e) {
@@ -105,24 +132,150 @@ static bool meta_parse(const char* path, AddonEntry* e) {
 		meta_set(e, line, eq + 1);
 	}
 	fclose(f);
-	return e->name[0] && e->category[0] && e->version[0];
+	return e->name[0] && e->category[0];
 }
 
-// Marker written by install.sh; GAME entries only in v1.
-static void read_installed(AddonEntry* e) {
-	char path[MAX_PATH];
-	snprintf(path, sizeof(path),
-			 "%s/Roms/" EXTRAS_ROMS_DIRNAME "/.ports/%s/.nx_addon_version",
-			 SDCARD_PATH, e->id);
+// First line of a small state file -> out (newline stripped). false (and an
+// empty out) when the file is missing/unreadable/empty.
+static bool read_line_file(const char* path, char* out, int out_size) {
+	out[0] = '\0';
 	FILE* f = fopen(path, "r");
 	if (!f)
-		return;
-	if (fgets(e->installed, sizeof(e->installed), f)) {
-		char* nl = strchr(e->installed, '\n');
-		if (nl)
-			*nl = '\0';
-	}
+		return false;
+	bool ok = fgets(out, out_size, f) != NULL;
 	fclose(f);
+	if (!ok) {
+		out[0] = '\0';
+		return false;
+	}
+	char* nl = strchr(out, '\n');
+	if (nl)
+		*nl = '\0';
+	return out[0] != '\0';
+}
+
+// Installed-version record, written by install.sh to XTRAS_STATE_DIR. Falls
+// back to the legacy pre-update-tracking marker (.nx_addon_version inside
+// the entry's ports dir) and migrates the value forward so cards installed
+// before the switch keep reading as installed; the legacy file itself is
+// left for uninstall.sh to clear (and for an older Xtras.pak to read, if
+// the system is ever downgraded).
+static void read_installed(AddonEntry* e) {
+	char path[MAX_PATH];
+	snprintf(path, sizeof(path), XTRAS_STATE_DIR "/%s.version", e->id);
+	if (read_line_file(path, e->installed, sizeof(e->installed)))
+		return;
+
+	char legacy[MAX_PATH];
+	snprintf(legacy, sizeof(legacy),
+			 "%s/Roms/" EXTRAS_ROMS_DIRNAME "/.ports/%s/.nx_addon_version",
+			 SDCARD_PATH, e->id);
+	if (!read_line_file(legacy, e->installed, sizeof(e->installed)))
+		return;
+
+	// One-time forward migration; best-effort (a read-only card just retries
+	// next launch). SHARED_USERDATA_PATH itself always exists on a booted card.
+	mkdir(XTRAS_STATE_DIR, 0755);
+	FILE* out = fopen(path, "w");
+	if (out) {
+		fprintf(out, "%s\n", e->installed);
+		fclose(out);
+	}
+}
+
+// Latest upstream release tag, cached by the background check thread.
+static void read_latest(AddonEntry* e) {
+	char path[MAX_PATH];
+	snprintf(path, sizeof(path), XTRAS_STATE_DIR "/%s.latest", e->id);
+	read_line_file(path, e->latest, sizeof(e->latest));
+}
+
+// The one predicate behind the "Update Available" group, the row badge and
+// the detail page's UPDATE action: a tracked entry is updatable once both
+// tags are known and differ (plain inequality - no semver parsing, matching
+// the spec).
+static bool entry_update_available(const AddonEntry* e) {
+	return e->installed[0] && e->latest[0] && strcmp(e->installed, e->latest) != 0;
+}
+
+// --- background latest-release check --------------------------------------
+// One sweep per app open (same worker-thread shape as settings_updater.c's
+// download thread): for every repo-tracked entry whose <id>.latest cache is
+// stale, fetch the repo's latest-release JSON and rewrite the cache with its
+// tag_name. The thread only ever touches the cache FILES - never entries[]
+// - and raises latest_check_done when the sweep ends; run_list's loop sees
+// the flag, re-reads the caches into entries[] and rebuilds its rows. That
+// file-based handoff is the whole synchronization story: no locks, no
+// shared mutable state beyond one sig_atomic_t flag.
+//
+// Offline behaviour: a single getaddrinfo() gate skips the entire sweep
+// (and each wget_fetch failure just leaves that entry's cache alone), so
+// stale-or-missing info degrades to "no update shown" - it never blocks the
+// UI or surfaces an error. The flag is raised on every exit path so nothing
+// waits forever.
+static volatile sig_atomic_t latest_check_done = 0;
+
+// The thread's private snapshot of each tracked entry's id+repo, filled by
+// main() BEFORE the thread starts. entries[] itself is off-limits to the
+// thread: run_detail's post-install path calls catalog_load(), which
+// rewrites entries[] while a slow sweep may still be running.
+static struct {
+	char id[64];
+	char repo[128];
+} check_items[MAX_ENTRIES];
+static int check_count = 0;
+
+static void* latest_check_thread(void* arg) {
+	(void)arg;
+	struct addrinfo* res = NULL;
+	struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
+	if (getaddrinfo("api.github.com", "443", &hints, &res) != 0 || !res) {
+		latest_check_done = 1;
+		return NULL;
+	}
+	freeaddrinfo(res);
+
+	mkdir(XTRAS_STATE_DIR, 0755); // best-effort; parent always exists on a booted card
+
+	time_t now = time(NULL);
+	for (int i = 0; i < check_count; i++) {
+		char cache[MAX_PATH];
+		snprintf(cache, sizeof(cache), XTRAS_STATE_DIR "/%s.latest", check_items[i].id);
+		struct stat st;
+		if (stat(cache, &st) == 0 && now - st.st_mtime < LATEST_CACHE_TTL_S)
+			continue;
+
+		char url[256];
+		snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/latest",
+				 check_items[i].repo);
+		// 64 KB holds any realistic release JSON (asset lists included);
+		// wget_fetch truncates beyond that, which at worst loses trailing
+		// assets - tag_name sits at the top of the document.
+		static uint8_t buf[64 * 1024];
+		int n = wget_fetch(url, buf, sizeof(buf) - 1);
+		if (n <= 0)
+			continue;
+		buf[n] = '\0';
+
+		char* tag = strstr((char*)buf, "\"tag_name\"");
+		if (!tag)
+			continue;
+		tag = strchr(tag + 10, '"'); // opening quote of the value
+		if (!tag)
+			continue;
+		tag++;
+		char* end = strchr(tag, '"');
+		if (!end || end == tag || end - tag >= 64)
+			continue;
+
+		FILE* f = fopen(cache, "w");
+		if (f) {
+			fprintf(f, "%.*s\n", (int)(end - tag), tag);
+			fclose(f);
+		}
+	}
+	latest_check_done = 1;
+	return NULL;
 }
 
 static int entry_cmp(const void* a, const void* b) {
@@ -150,6 +303,7 @@ static void catalog_load(void) {
 		if (!meta_parse(meta, e))
 			continue;
 		read_installed(e);
+		read_latest(e);
 		entry_count++;
 	}
 	closedir(d);
@@ -170,15 +324,18 @@ static const char* const TAB_CATEGORY[TAB_COUNT] = {"GAME", "TOOL"};
 static const char* const TAB_LABEL[TAB_COUNT] = {"GAMES", "TOOLS"};
 
 // One tab's rows, in display order: every not-installed entry first (own
-// group, no header), then every installed entry (the "Installed" header is
-// drawn separately by the renderer once it reaches installed_start).
-// Rebuilt on tab switch and after any install/uninstall so it always
-// reflects current AddonEntry.installed state - entries[] itself is never
-// reordered by this, only entry_cmp() (via catalog_load's qsort, unchanged)
-// still governs category+name order within each group.
+// group, no header), then installed entries with a newer upstream release
+// (the "Update Available" header), then the rest of the installed entries
+// (the "Installed" header) - headers are drawn separately by the renderer
+// when it reaches each group's start index. Rebuilt on tab switch, after
+// any install/uninstall, and when the background latest-check completes, so
+// it always reflects current installed/latest state - entries[] itself is
+// never reordered by this, only entry_cmp() (via catalog_load's qsort,
+// unchanged) still governs category+name order within each group.
 typedef struct {
 	int indices[MAX_ENTRIES]; // entries[] index for each row, in display order
 	int count;				  // total rows in this tab
+	int update_start;		  // indices[update_start..installed_start) is the "Update Available" group
 	int installed_start;	  // indices[installed_start..count) is the "Installed" group; == count if none installed
 } TabRows;
 
@@ -187,9 +344,13 @@ static void build_tab_rows(AddonTab tab, TabRows* rows) {
 	for (int i = 0; i < entry_count; i++)
 		if (!strcmp(entries[i].category, TAB_CATEGORY[tab]) && !entries[i].installed[0])
 			rows->indices[rows->count++] = i;
+	rows->update_start = rows->count;
+	for (int i = 0; i < entry_count; i++)
+		if (!strcmp(entries[i].category, TAB_CATEGORY[tab]) && entry_update_available(&entries[i]))
+			rows->indices[rows->count++] = i;
 	rows->installed_start = rows->count;
 	for (int i = 0; i < entry_count; i++)
-		if (!strcmp(entries[i].category, TAB_CATEGORY[tab]) && entries[i].installed[0])
+		if (!strcmp(entries[i].category, TAB_CATEGORY[tab]) && entries[i].installed[0] && !entry_update_available(&entries[i]))
 			rows->indices[rows->count++] = i;
 }
 
@@ -295,52 +456,18 @@ static int render_section_header(SDL_Surface* screen, ListLayout* layout,
 // background + text position, UI_renderListItemText for the clipped/
 // scrolling label) - just driven by an explicit running y instead of a flat
 // item index, so a header row can sit between groups without perturbing any
-// entry's position math. No more "[installed]"/"[update]" name suffix
-// (Task 12; grouping into Installed already says "installed") - an
-// update-available entry (installed marker present but stale vs
-// e->version) instead gets a minimal right-aligned "update" marker, same
-// lightweight approach scraper.c's renderMainMenuBadge() uses for its own
-// right-side pill badge (small font.tiny text, dim unless the row is
-// selected) rather than the heavier two-row UI_renderListItemPillBadged.
-//
-// Fix round 1 (review Important): the badge occupies a fixed strip at the
-// screen's right edge, independent of the pill/text. Without reserving that
-// strip, a long name that has to truncate is sized/truncated against the
-// FULL row width and can reach - or on a long enough name, exactly overlap
-// - the same right-edge coordinate the badge occupies, so name tail +
-// ellipsis render underneath the badge text. `reserve` below (badge width +
-// one PADDING gap) is fed in as UI_renderListItemPill's `prefix_width` -
-// the exact mechanism the pill/text-truncation math already has for "leave
-// room for something else on this row" (musicplayer's ui_music.c uses it
-// the mirror way, reserving LEFT-side room for a leading icon before the
-// text) - so GFX_truncateText (inside UI_calcListPillWidth, called from
-// UI_renderListItemPill) computes the truncation point against the
-// narrowed budget up front, before any text is measured or drawn, rather
-// than the badge being layered on after the fact. Non-badged rows pass
-// reserve=0, i.e. exactly the prior behavior/full width.
+// entry's position math. No name suffixes or badges: the group an entry
+// sits in ("Update Available"/"Installed" section headers) already says
+// everything the old right-aligned "update" marker said (user feedback
+// 2026-08-10 - the marker was redundant once the group existed).
 static int render_entry_row(SDL_Surface* screen, ListLayout* layout,
 							const AddonEntry* e, int y, bool selected) {
-	bool update_available = e->installed[0] && strcmp(e->installed, e->version) != 0;
-	const char* badge = "update";
-	int badge_w = 0, badge_h = 0, reserve = 0;
-	if (update_available) {
-		TTF_SizeUTF8(font.tiny, badge, &badge_w, &badge_h);
-		reserve = badge_w + SCALE1(PADDING);
-	}
-
 	char truncated[256];
 	ListItemPos pos = UI_renderListItemPill(screen, layout, font.large, e->name,
-											truncated, y, selected, reserve);
-	int text_w = pos.pill_width - SCALE1(BUTTON_PADDING * 2) - reserve;
+											truncated, y, selected, 0);
+	int text_w = pos.pill_width - SCALE1(BUTTON_PADDING * 2);
 	UI_renderListItemText(screen, NULL, truncated, font.large,
 						  pos.text_x, pos.text_y, text_w, selected);
-
-	if (update_available) {
-		SDL_Color color = selected ? COLOR_WHITE : COLOR_GRAY;
-		int bx = screen->w - SCALE1(PADDING) - badge_w - SCALE1(PADDING);
-		int by = y + (layout->item_h - badge_h) / 2;
-		GFX_blitText(font.tiny, badge, 0, color, screen, &(SDL_Rect){bx, by, badge_w, badge_h});
-	}
 	return y + layout->item_h;
 }
 
@@ -362,10 +489,16 @@ static void render_extras_list(SDL_Surface* screen, AddonTab active_tab, int sel
 
 	int y = layout.list_y;
 	for (int i = 0; i < rows->count; i++) {
+		// Headers sat flush against the pill right below them; a quarter
+		// item height of breathing room reads right on device (half was too
+		// much - user feedback 2026-08-08). The update_start header only
+		// draws when its group is non-empty (update_start ==
+		// installed_start when nothing is updatable); installed_start ==
+		// count when nothing is current needs no guard - the loop never
+		// reaches it.
+		if (i == rows->update_start && rows->update_start < rows->installed_start)
+			y = render_section_header(screen, &layout, "Update Available", y) + layout.item_h / 4;
 		if (i == rows->installed_start)
-			// The header sat flush against the pill right below it; a
-			// quarter item height of breathing room reads right on device
-			// (half was too much - user feedback 2026-08-08).
 			y = render_section_header(screen, &layout, "Installed", y) + layout.item_h / 4;
 		y = render_entry_row(screen, &layout, &entries[rows->indices[i]], y, i == selected);
 	}
@@ -416,6 +549,19 @@ static void run_list(void) {
 			active_tab = (active_tab == TAB_GAMES) ? TAB_TOOLS : TAB_GAMES;
 			build_tab_rows(active_tab, &rows);
 			selected = 0;
+			dirty = true;
+		}
+		// Background latest-check finished: pull the fresh caches into
+		// entries[] and regroup - rows may shuffle into/out of the "Update
+		// Available" group, so clamp the selection rather than letting it
+		// dangle past the (unchanged-length, but regrouped) list.
+		if (latest_check_done) {
+			latest_check_done = 0;
+			for (int i = 0; i < entry_count; i++)
+				read_latest(&entries[i]);
+			build_tab_rows(active_tab, &rows);
+			if (selected >= rows.count)
+				selected = rows.count ? rows.count - 1 : 0;
 			dirty = true;
 		}
 		if (PAD_navigateMenu(&selected, rows.count))
@@ -723,6 +869,7 @@ static int run_entry_script(AddonEntry* e, const char* script_name, const char* 
 			 "PLATFORM='%s' SDCARD_PATH='%s' LOGS_PATH='%s' "
 			 "EXTRAS_ROMS_DIR='%s/Roms/" EXTRAS_ROMS_DIRNAME "' "
 			 "EXTRAS_PORTS_DIR='%s/Roms/" EXTRAS_ROMS_DIRNAME "/.ports' "
+			 "XTRAS_STATE_DIR='" XTRAS_STATE_DIR "' "
 			 "CATALOG_DIR='%s/catalog/%s' "
 			 "sh '%s/catalog/%s/%s' 2>&1",
 			 PLATFORM, SDCARD_PATH, logs_path,
@@ -806,8 +953,13 @@ static int run_entry_script(AddonEntry* e, const char* script_name, const char* 
 	if (code == 0) {
 		char ok_title[24];
 		snprintf(ok_title, sizeof(ok_title), "%sed", title); // "Installed"/"Uninstalled"
-		char subtitle[64];
-		if (!strcmp(title, "Install"))
+		char subtitle[128];
+		if (!strcmp(title, "Install") && e->done_msg[0])
+			// Entry-provided override (meta.txt done_msg) for payloads that
+			// don't land in the category's default folder - see the struct
+			// field's own comment.
+			snprintf(subtitle, sizeof(subtitle), "%s", e->done_msg);
+		else if (!strcmp(title, "Install"))
 			// GAME entries land in EXTRAS_ROMS_DIRNAME ("Xtra Games (EXTRAS)",
 			// shown to the user without the "(EXTRAS)" tag suffix - see that
 			// macro's own comment); TOOL entries land in Tools/ instead
@@ -891,6 +1043,12 @@ static int uninstall_generic(AddonEntry* e) {
 	snprintf(marker, sizeof(marker),
 			 "%s/Roms/" EXTRAS_ROMS_DIRNAME "/.ports/%s/.nx_addon_version",
 			 SDCARD_PATH, e->id);
+	remove(marker);
+
+	// The update-tracking installed-version record (the legacy marker above
+	// is its pre-migration location; both must go or the entry reads as
+	// still installed).
+	snprintf(marker, sizeof(marker), XTRAS_STATE_DIR "/%s.version", e->id);
 	remove(marker);
 
 	UI_showMessage(screen, "Saves and ROMs kept.", EXTRAS_MESSAGE_MS);
@@ -1098,6 +1256,10 @@ static int run_detail(AddonEntry* e) {
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(screen);
+			// Same menu bar as the list screen (status icons/battery/clock
+			// live there); layout.list_y below already reserves its band, the
+			// bar just wasn't drawn here (user-reported 2026-08-09).
+			UI_renderMenuBar(screen, "Xtras");
 			ListLayout layout = UI_calcListLayout(screen);
 			int x = SCALE1(PADDING);
 			int y = layout.list_y;
@@ -1115,23 +1277,37 @@ static int run_detail(AddonEntry* e) {
 			}
 			y += SCALE1(4);
 
-			// Metadata line: category, version, install state, download
-			// size - one compact dim line instead of three settings rows.
-			char meta[192];
-			const char* state = !e->installed[0]				   ? "Not installed"
-								: strcmp(e->installed, e->version) ? "Update available"
-																   : "Installed";
-			snprintf(meta, sizeof(meta), "%s  \xC2\xB7  v%s  \xC2\xB7  %s  \xC2\xB7  ~%d MB",
-					 e->category, e->version, state, e->size_mb);
-			SDL_Surface* meta_surf = TTF_RenderUTF8_Blended(font.small, meta, COLOR_GRAY);
-			if (meta_surf) {
-				SDL_BlitSurface(meta_surf, NULL, screen, &(SDL_Rect){x, y, 0, 0});
-				y += meta_surf->h;
-				SDL_FreeSurface(meta_surf);
-			} else {
-				y += TTF_FontHeight(font.small);
+			// Metadata block, two compact dim lines (user layout 2026-08-10):
+			//   GAME  ·  ~40 MB
+			//   Installed v0.1.75  ·  Latest v0.1.76
+			// Release tags are shown verbatim - upstreams differ on the "v"
+			// prefix. The Latest segment appears only once the background
+			// check has cached a value.
+			char meta_lines[2][192];
+			snprintf(meta_lines[0], sizeof(meta_lines[0]), "%s  \xC2\xB7  ~%d MB",
+					 e->category, e->size_mb);
+			int voff;
+			if (e->installed[0])
+				voff = snprintf(meta_lines[1], sizeof(meta_lines[1]),
+								"Installed %s", e->installed);
+			else
+				voff = snprintf(meta_lines[1], sizeof(meta_lines[1]),
+								"Not installed");
+			if (e->latest[0] && voff < (int)sizeof(meta_lines[1]))
+				snprintf(meta_lines[1] + voff, sizeof(meta_lines[1]) - voff,
+						 "  \xC2\xB7  Latest %s", e->latest);
+			for (int i = 0; i < 2; i++) {
+				SDL_Surface* meta_surf = TTF_RenderUTF8_Blended(font.small, meta_lines[i], COLOR_GRAY);
+				if (meta_surf) {
+					SDL_BlitSurface(meta_surf, NULL, screen, &(SDL_Rect){x, y, 0, 0});
+					y += meta_surf->h;
+					SDL_FreeSurface(meta_surf);
+				} else {
+					y += TTF_FontHeight(font.small);
+				}
+				y += SCALE1(2);
 			}
-			y += SCALE1(8);
+			y += SCALE1(6);
 
 			// Description: font.tiny - one size below the metadata line's
 			// font.small, per on-device feedback that the old settings-row
@@ -1160,10 +1336,14 @@ static int run_detail(AddonEntry* e) {
 			// X/UNINSTALL only once an entry is installed; hint-bar order is
 			// the repo convention (B first, middle buttons next, A last -
 			// matches every other X-hint call site, e.g. minarch's
-			// ma_menu.c "B" "BACK" "X" "CLEAR" "A" "SET").
+			// ma_menu.c "B" "BACK" "X" "CLEAR" "A" "SET"). A's verb tracks
+			// the update state - UPDATE, REINSTALL and INSTALL all run the
+			// same install.sh (it always installs the latest release); only
+			// the wording differs.
 			if (e->installed[0])
 				UI_renderButtonHintBar(screen, (char*[]){"B", "BACK",
-														 "X", "UNINSTALL", "A", "REINSTALL", NULL});
+														 "X", "UNINSTALL", "A",
+														 entry_update_available(e) ? "UPDATE" : "REINSTALL", NULL});
 			else
 				UI_renderButtonHintBar(screen, (char*[]){"B", "BACK",
 														 "A", "INSTALL", NULL});
@@ -1196,6 +1376,27 @@ int main(int argc, char* argv[]) {
 	PWR_disablePowerOff();
 
 	catalog_load();
+
+	// Snapshot the tracked entries for the release-check thread (its own
+	// comment explains why it must not read entries[] directly), then fire
+	// it. Detached: it owns no UI and the file-based handoff means nothing
+	// joins on it; if it outlives an early quit the process teardown reaps
+	// it. Creation failure just raises the done flag so run_list never
+	// waits on a sweep that isn't coming.
+	check_count = 0;
+	for (int i = 0; i < entry_count; i++) {
+		if (!entries[i].repo[0])
+			continue;
+		snprintf(check_items[check_count].id, sizeof(check_items[0].id), "%s", entries[i].id);
+		snprintf(check_items[check_count].repo, sizeof(check_items[0].repo), "%s", entries[i].repo);
+		check_count++;
+	}
+	pthread_t latest_thread;
+	if (pthread_create(&latest_thread, NULL, latest_check_thread, NULL) == 0)
+		pthread_detach(latest_thread);
+	else
+		latest_check_done = 1;
+
 	run_list();
 
 	PWR_enableSleep();

@@ -41,7 +41,94 @@ echo '{"id":"DRAMATIC_SHAPE"}' > "$MODFIX/manifest.json"
 echo 'voxels' > "$MODFIX/assets/a.bin"
 (cd "$MODFIX" && zip -qr "$TMP/mod.zip" manifest.json assets)
 
+# Running Shoes fixture: versioned asset name, contents at the zip root.
+SHOESFIX="$TMP/shoesfix"
+mkdir -p "$SHOESFIX"
+echo '{"id":"running_shoes"}' > "$SHOESFIX/manifest.json"
+echo 'lua' > "$SHOESFIX/main.lua"
+(cd "$SHOESFIX" && zip -qr "$TMP/shoes.zip" manifest.json main.lua)
+
+# Wilds of Kanto fixture: a GitHub SOURCE archive - everything under a
+# "<repo>-<branch>/" wrapper dir, NOT at the zip root - so this exercises
+# install.sh's manifest.json-locating step, not just a plain extract.
+WILDSFIX="$TMP/wildsfix"
+mkdir -p "$WILDSFIX/overworld-spawn-mod-main/assets"
+echo '{"id":"overworld_wild_spawns"}' > "$WILDSFIX/overworld-spawn-mod-main/manifest.json"
+echo 'lua'    > "$WILDSFIX/overworld-spawn-mod-main/main.lua"
+echo 'sprite' > "$WILDSFIX/overworld-spawn-mod-main/assets/a.png"
+(cd "$WILDSFIX" && zip -qr "$TMP/wilds.zip" overworld-spawn-mod-main)
+
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
+# Fake GitHub latest-release API responses. Decoy assets sit FIRST so the
+# "matched by glob, paired with its own digest" logic is actually exercised.
+# Field order inside each asset (name -> digest -> browser_download_url)
+# mirrors the real API - resolve_latest's token-stream walk depends on it.
+write_game_json() { # digest
+  cat > "$TMP/game_release.json" <<EOF
+{
+  "tag_name": "v9.9.9",
+  "name": "Release v9.9.9",
+  "assets": [
+    {
+      "name": "gen1recomp-9.9.9-linux.zip",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "browser_download_url": "https://github.com/bryanthaboi/gen1recomp/releases/download/v9.9.9/gen1recomp-9.9.9-linux.zip"
+    },
+    {
+      "name": "gen1recomp-9.9.9-rg34xxsp-stockos64-mod.zip",
+      "digest": "sha256:$1",
+      "browser_download_url": "https://github.com/bryanthaboi/gen1recomp/releases/download/v9.9.9/gen1recomp-9.9.9-rg34xxsp-stockos64-mod.zip"
+    }
+  ]
+}
+EOF
+}
+write_mod_json() { # digest
+  cat > "$TMP/mod_release.json" <<EOF
+{
+  "tag_name": "v1.2.3",
+  "name": "Release v1.2.3",
+  "assets": [
+    {
+      "name": "DRAMATIC_SHAPE-1.2.3.zip",
+      "digest": "sha256:$1",
+      "browser_download_url": "https://github.com/DramaticShape/DramaticShapeVoxelMod/releases/download/v1.2.3/DRAMATIC_SHAPE-1.2.3.zip"
+    }
+  ]
+}
+EOF
+}
+write_shoes_json() { # digest
+  cat > "$TMP/shoes_release.json" <<EOF
+{
+  "tag_name": "v1.4.1",
+  "name": "running_shoes 1.4.1",
+  "assets": [
+    {
+      "name": "running_shoes-1.4.1.zip",
+      "digest": "sha256:$1",
+      "browser_download_url": "https://github.com/MadeinTaly/gen1recomp-running-shoes/releases/download/v1.4.1/running_shoes-1.4.1.zip"
+    }
+  ]
+}
+EOF
+}
+write_wilds_json() { # digest
+  cat > "$TMP/wilds_release.json" <<EOF
+{
+  "tag_name": "v1.12.1",
+  "name": "Wilds of Kanto v1.12.1",
+  "assets": [
+    {
+      "name": "Wilds.of.Kanto.v1.12.1.zip",
+      "digest": "sha256:$1",
+      "browser_download_url": "https://github.com/YoDrehDenSwagAuf/overworld-spawn-mod/releases/download/v1.12.1/Wilds.of.Kanto.v1.12.1.zip"
+    }
+  ]
+}
+EOF
+}
 
 # ---- sandbox SD card --------------------------------------------------
 SD="$TMP/sd"
@@ -68,9 +155,18 @@ while [ \$# -gt 0 ]; do
   shift
 done
 case "\$url" in
+  *bryanthaboi/gen1recomp/releases/latest) cp "$TMP/game_release.json" "\$out" ;;
+  *DramaticShapeVoxelMod/releases/latest)
+    # flag file simulates the (real, 2026-08-10) deleted/private upstream
+    if [ -f "$TMP/voxel_upstream_down" ]; then exit 1; fi
+    cp "$TMP/mod_release.json" "\$out" ;;
+  *gen1recomp-running-shoes/releases/latest) cp "$TMP/shoes_release.json" "\$out" ;;
+  *overworld-spawn-mod/releases/latest)    cp "$TMP/wilds_release.json" "\$out" ;;
   *stockos64-mod.zip)        cp "$TMP/game.zip" "\$out" ;;
   *rom_manifest_yellow.json) cp "$TMP/rom_manifest_yellow.json" "\$out" ;;
   *DRAMATIC_SHAPE*.zip)      cp "$TMP/mod.zip" "\$out" ;;
+  *running_shoes-*.zip)      cp "$TMP/shoes.zip" "\$out" ;;
+  *Wilds.of.Kanto*.zip)      cp "$TMP/wilds.zip" "\$out" ;;
   *) echo "wget shim: unknown url \$url" >&2; exit 1 ;;
 esac
 SHIM
@@ -94,15 +190,20 @@ SHIM
 chmod +x "$BIN/sha256sum"
 
 run_install() {
-  # Default to the fixtures' real (current) hashes but honor a
-  # caller-supplied override (e.g. GEN1_ZIP_SHA256=deadbeef run_install)
-  # so the sha mismatch case below actually reaches install.sh
-  # unclobbered. Locals so nothing leaks as global state between the
-  # repeated calls below (test 2 rebuilds game.zip with new content, so
-  # each call must recompute rather than reuse a stale hash).
-  local zip_sha="${GEN1_ZIP_SHA256:-$(sha "$TMP/game.zip")}"
-  local yellow_sha="${GEN1_YELLOW_SHA256:-$(sha "$TMP/rom_manifest_yellow.json")}"
-  local mod_sha="${GEN1_MOD_SHA256:-$(sha "$TMP/mod.zip")}"
+  # Regenerate the API fixtures each call: digests default to the CURRENT
+  # payload hashes (test 2 rebuilds game.zip; test 4 corrupts mod.zip and
+  # relies on its hash being recomputed so the failure lands at extract,
+  # not fetch), and the GAME_DIGEST override lets the mismatch scenario
+  # serve a bad digest without touching the happy-path plumbing. The voxel
+  # mod has BOTH a live-API fixture (mod_release.json, used when the
+  # upstream-down flag file is absent) and the pinned-backup override
+  # NX_VOXEL_SHA256 below (used when the fallback path runs, test 1b) -
+  # each follows the same recompute-from-current-payload rule.
+  write_game_json "${GAME_DIGEST:-$(sha "$TMP/game.zip")}"
+  write_mod_json  "${MOD_DIGEST:-$(sha "$TMP/mod.zip")}"
+  write_shoes_json "${SHOES_DIGEST:-$(sha "$TMP/shoes.zip")}"
+  write_wilds_json "${WILDS_DIGEST:-$(sha "$TMP/wilds.zip")}"
+  NX_VOXEL_SHA256="$(sha "$TMP/mod.zip")" \
   PATH="$BIN:$PATH" \
   PLATFORM=tg5050 \
   SDCARD_PATH="$SD" \
@@ -110,61 +211,28 @@ run_install() {
   EXTRAS_ROMS_DIR="$SD/Roms/Xtra Games (EXTRAS)" \
   EXTRAS_PORTS_DIR="$SD/Roms/Xtra Games (EXTRAS)/.ports" \
   CATALOG_DIR="$ENTRY" \
-  NX_EXTRAS_UNZIP=unzip \
-  GEN1_ZIP_SHA256="$zip_sha" \
-  GEN1_YELLOW_SHA256="$yellow_sha" \
-  GEN1_MOD_SHA256="$mod_sha" \
+  XTRAS_STATE_DIR="$SD/.userdata/shared/xtras" \
+  NX_EXTRAS_UNZIP="${NX_EXTRAS_UNZIP_OVERRIDE:-unzip}" \
   bash "$ENTRY/install.sh"
 }
 
 G="$SD/Roms/Xtra Games (EXTRAS)/.ports/gen1recomp"
 
-# ---- 0. preflight: PortMaster runtime dependency probes ---------------
-# Task 15 fix round 1 (user-reproduced on-device bug): a bare
-# `[ -d Emus/shared/PortMaster ]` check is insufficient - the nx-redux
-# skeleton itself ships patchedScripts/ and files/ under that same
-# directory, so the dir exists even when the real runtime (unzip binary,
-# control.txt) was never unpacked or was removed. install.sh now probes
-# those two files directly. Both scenarios below run before either probe
-# file exists, so both genuinely exercise the failure path.
-
-# 0a. skeleton-shipped dir present (patchedScripts/ + files/, like a real
-# card) but neither runtime probe file - this is the user's exact
-# reproduced scenario (PortMaster removed/never installed, dir survives
-# from the skeleton anyway). Fixture content is arbitrary; install.sh
-# never reads it, only -x/-f the two runtime paths.
-mkdir -p "$SD/Emus/shared/PortMaster/patchedScripts" "$SD/Emus/shared/PortMaster/files"
-echo 'stub' > "$SD/Emus/shared/PortMaster/patchedScripts/SteelAssault.sh"
-if run_install > "$TMP/log0a.txt" 2>&1; then
-  fail "preflight: skeleton-only PortMaster dir (no runtime files) did not abort"
-else pass "preflight: skeleton-only PortMaster dir (no runtime files) aborts"; fi
-grep -q 'PortMaster runtime not set up' "$TMP/log0a.txt" \
-  && pass "preflight (0a): message printed" || fail "preflight (0a): message missing"
-! grep -q 'Downloading' "$TMP/log0a.txt" \
-  && pass "preflight (0a): no download attempted" || fail "preflight (0a): a download was attempted despite missing runtime files"
+# ---- 0. preflight: system unzip tool probe ----------------------------
+# Since the runtime=native conversion (2026-08-10) nothing here depends on
+# PortMaster; the only preflight is the SYSTEM-shipped 7zzs (psp/install.sh
+# posture). A missing/broken system tree must abort before any network use.
+if NX_EXTRAS_UNZIP_OVERRIDE="$TMP/no-such-7zzs" run_install > "$TMP/log0.txt" 2>&1; then
+  fail "preflight: missing system unzip did not abort"
+else pass "preflight: missing system unzip aborts"; fi
+grep -q 'system unzip tool missing' "$TMP/log0.txt" \
+  && pass "preflight: message printed" || fail "preflight: message missing"
+! grep -q 'Downloading' "$TMP/log0.txt" \
+  && pass "preflight: no download attempted" || fail "preflight: a download was attempted despite missing unzip"
 [ ! -d "$G" ] \
-  && pass "preflight (0a): nothing written to install target" || fail "preflight (0a): install target created despite missing runtime files"
+  && pass "preflight: nothing written to install target" || fail "preflight: install target created despite missing unzip"
 [ ! -e "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" ] \
-  && pass "preflight (0a): no launcher registered" || fail "preflight (0a): launcher registered despite missing runtime files"
-
-# 0b. dir fully absent too - the original (now-superseded) failure mode,
-# kept as a regression guard.
-rm -rf "$SD/Emus/shared/PortMaster"
-if run_install > "$TMP/log0b.txt" 2>&1; then
-  fail "preflight: fully-absent PortMaster dir did not abort"
-else pass "preflight: fully-absent PortMaster dir aborts"; fi
-grep -q 'PortMaster runtime not set up' "$TMP/log0b.txt" \
-  && pass "preflight (0b): message printed" || fail "preflight (0b): message missing"
-! grep -q 'Downloading' "$TMP/log0b.txt" \
-  && pass "preflight (0b): no download attempted" || fail "preflight (0b): a download was attempted despite missing dir"
-
-# PortMaster runtime now genuinely present (both probe files) - every
-# scenario below is the happy path for this dependency. Fake content is
-# fine; install.sh only checks -x/-f, never reads either file.
-mkdir -p "$SD/Emus/shared/PortMaster/bin"
-echo 'fake-7zzs' > "$SD/Emus/shared/PortMaster/bin/7zzs.aarch64"
-chmod +x "$SD/Emus/shared/PortMaster/bin/7zzs.aarch64"
-echo 'fake-control' > "$SD/Emus/shared/PortMaster/control.txt"
+  && pass "preflight: no launcher registered" || fail "preflight: launcher registered despite missing unzip"
 
 # ---- 1. fresh install -------------------------------------------------
 if run_install > "$TMP/log1.txt" 2>&1; then pass "fresh install exits 0"
@@ -172,6 +240,12 @@ else fail "fresh install exited non-zero: $(tail -3 "$TMP/log1.txt")"; fi
 [ -f "$G/bin/love.aarch64" ]                        && pass "runtime extracted"        || fail "runtime missing"
 [ -f "$G/lovegame/tools/rom_manifest_yellow.json" ] && pass "yellow manifest in place" || fail "yellow manifest missing"
 [ -f "$G/lovegame/mods/DRAMATIC_SHAPE/manifest.json" ] && pass "voxel mod installed"   || fail "voxel mod missing"
+[ -f "$G/lovegame/mods/running_shoes/manifest.json" ] && pass "running shoes mod installed" || fail "running shoes mod missing"
+# Wrapper dir must be stripped: manifest.json at the mod root, not nested.
+[ -f "$G/lovegame/mods/overworld_wild_spawns/manifest.json" ] \
+                                                     && pass "wilds of kanto mod installed (wrapper stripped)" || fail "wilds of kanto mod missing or still wrapped"
+[ ! -d "$G/lovegame/mods/overworld_wild_spawns/overworld-spawn-mod-main" ] \
+                                                     && pass "wilds of kanto wrapper dir not nested" || fail "wilds of kanto wrapper dir leaked into mod folder"
 [ -f "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" ] && pass "launcher registered"     || fail "launcher missing"
 # The EXTRAS platform runtime self-installs under .system/paks/Emus -
 # nextui's first-priority PAKS_PATH lookup location (hasEmu() in
@@ -186,10 +260,32 @@ else fail "fresh install exited non-zero: $(tail -3 "$TMP/log1.txt")"; fi
   || fail "EXTRAS.pak wrongly installed at legacy Emus/\$PLATFORM location"
 grep -q 'GAMEDIR="$SHDIR/.ports/gen1recomp"' \
   "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh"      && pass "launcher is nx-patched"  || fail "launcher not patched"
+# runtime=native contract: extras_games_launch.sh execs the entry directly
+# only when this marker sits in the script's first 20 lines.
+head -20 "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" | grep -q '^# NX_RUNTIME: native' \
+                                                     && pass "launcher carries the native runtime marker" || fail "native runtime marker missing from launcher"
+# Display alias (map.txt is filename<TAB>alias, content.c Directory_index):
+# without it the list shows the launcher basename "Gen1recomp" (lowercase r).
+MAPFILE="$SD/Roms/Xtra Games (EXTRAS)/map.txt"
+TAB="$(printf '\t')"
+[ "$(grep -c "^Gen1recomp\.sh$TAB" "$MAPFILE" 2>/dev/null)" = "1" ] \
+                                                     && pass "display alias written once"  || fail "display alias missing or duplicated"
+grep -q "^Gen1recomp\.sh${TAB}Gen1Recomp (Pokemon R/B/Y)\$" "$MAPFILE" \
+                                                     && pass "display alias has the right name" || fail "display alias name wrong"
 [ -f "$G/lovegame/Pokemon Red.gb" ]                  && pass "ROM scan copied Red"      || fail "Red not copied"
 [ ! -f "$G/lovegame/Tetris.gb" ]                     && pass "ROM scan skipped junk"    || fail "junk ROM copied"
-[ "$(cat "$G/.nx_addon_version" 2>/dev/null)" = "0.1.75+mod1.6.2" ] \
+[ "$(cat "$G/.nx_addon_version" 2>/dev/null)" = "v9.9.9" ] \
                                                      && pass "version marker written"  || fail "version marker wrong"
+[ "$(cat "$SD/.userdata/shared/xtras/gen1recomp.version" 2>/dev/null)" = "v9.9.9" ] \
+                                                     && pass "version record written"  || fail "version record wrong"
+grep -q 'Latest game release: v9.9.9' "$TMP/log1.txt" \
+                                                     && pass "resolved game release announced" || fail "no resolved game release line"
+grep -q 'Latest mod release: v1.2.3' "$TMP/log1.txt" \
+                                                     && pass "resolved mod release announced (live upstream)" || fail "no resolved mod release line"
+grep -q 'Latest running shoes release: v1.4.1' "$TMP/log1.txt" \
+                                                     && pass "resolved running shoes release announced" || fail "no resolved running shoes release line"
+grep -q 'Latest wilds of kanto release: v1.12.1' "$TMP/log1.txt" \
+                                                     && pass "resolved wilds release announced" || fail "no resolved wilds release line"
 # Task 11: install.sh's "@NN status text" progress hints - a bare "@90 " (NN
 # followed by a space) proves the hint syntax parses correctly, and that the
 # original human-readable message on the very next line ("Looking for your
@@ -200,10 +296,36 @@ grep -q '^Looking for your Pokemon ROMs\.\.\.$' "$TMP/log1.txt" \
                                                      && pass "hint line doesn't clobber the adjacent message line" \
                                                      || fail "message line after a hint was altered"
 
+# ---- 1b. voxel upstream gone -> archived-backup fallback ---------------
+# Reality as of 2026-08-10: the DramaticShape account 404s (deleted or
+# private - the API can't tell). The live repo is still tried first so a
+# restored repo resumes latest-tracking on its own; this scenario flips the
+# shim to fail that ONE API call. The install must still succeed, announce
+# the fallback, and install the voxel mod from the pinned backup URL (whose
+# DRAMATIC_SHAPE-*.zip basename the download shim case serves the same way).
+touch "$TMP/voxel_upstream_down"
+rm -rf "$G/lovegame/mods/DRAMATIC_SHAPE"   # so success below proves a fresh install
+if run_install > "$TMP/log1b.txt" 2>&1; then pass "install with dead voxel upstream exits 0"
+else fail "install with dead voxel upstream exited non-zero: $(tail -3 "$TMP/log1b.txt")"; fi
+grep -q 'Voxel Mod upstream unavailable - using archived 1.7.2-backup' "$TMP/log1b.txt" \
+  && pass "voxel fallback announced" || fail "no voxel fallback announcement"
+[ -f "$G/lovegame/mods/DRAMATIC_SHAPE/manifest.json" ] \
+  && pass "voxel mod installed from backup" || fail "voxel mod missing after fallback"
+! grep -q '^ERROR' "$TMP/log1b.txt" \
+  && pass "fallback surfaced no error" || fail "fallback surfaced an ERROR line"
+rm -f "$TMP/voxel_upstream_down"
+
 # ---- 2. reinstall preserves user data ---------------------------------
 mkdir -p "$G/lovegame/red" "$G/conf"
 echo 'save' > "$G/lovegame/red/cache.bin"
 echo 'opts' > "$G/lovegame/options.lua"
+# A foreign alias line (another catalog entry / a user rename) must survive
+# the reinstall's upsert, and our own line must not duplicate.
+printf 'Other.sh\tOther Game\n' >> "$MAPFILE"
+# A pokepcfollowers dir left by the briefly-bundled (2026-08-10, dropped
+# same day) follower mod must be cleaned up by the reinstall.
+mkdir -p "$G/lovegame/mods/pokepcfollowers"
+echo 'stale' > "$G/lovegame/mods/pokepcfollowers/manifest.json"
 echo 'love-bin-v2' > "$FIX/gen1recomp/bin/love.aarch64"
 (cd "$FIX" && zip -qr "$TMP/game.zip" Gen1recomp.sh gen1recomp)  # rebuild zip
 if run_install > "$TMP/log2.txt" 2>&1; then pass "reinstall exits 0"
@@ -211,12 +333,17 @@ else fail "reinstall exited non-zero: $(tail -3 "$TMP/log2.txt")"; fi
 [ "$(cat "$G/lovegame/red/cache.bin")" = "save" ] && pass "ROM cache preserved"    || fail "ROM cache clobbered"
 [ "$(cat "$G/lovegame/options.lua")" = "opts" ]   && pass "options.lua preserved"  || fail "options.lua clobbered"
 [ "$(cat "$G/bin/love.aarch64")" = "love-bin-v2" ] && pass "engine payload updated" || fail "engine not updated"
+[ "$(grep -c "^Gen1recomp\.sh$TAB" "$MAPFILE" 2>/dev/null)" = "1" ] \
+                                                  && pass "reinstall: alias upserted, not duplicated" || fail "reinstall: alias duplicated or lost"
+grep -q "^Other\.sh${TAB}Other Game\$" "$MAPFILE" && pass "reinstall: foreign alias line kept" || fail "reinstall: foreign alias line lost"
+[ ! -d "$G/lovegame/mods/pokepcfollowers" ] \
+                                                  && pass "reinstall: stale pokepcfollowers removed" || fail "reinstall: stale pokepcfollowers still present"
 
-# ---- 3. sha mismatch aborts before touching the install ---------------
+# ---- 3. digest mismatch aborts before touching the install ------------
 rm -rf "$SD/Roms/Xtra Games (EXTRAS)"
-if GEN1_ZIP_SHA256="deadbeef" run_install > "$TMP/log3.txt" 2>&1; then
-  fail "sha mismatch did not abort"
-else pass "sha mismatch aborts"; fi
+if GAME_DIGEST="deadbeef" run_install > "$TMP/log3.txt" 2>&1; then
+  fail "digest mismatch did not abort"
+else pass "digest mismatch aborts"; fi
 [ ! -e "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" ] \
   && pass "no launcher registered on failure" || fail "launcher registered despite failure"
 grep -qi 'checksum' "$TMP/log3.txt" && pass "failure names the checksum" || fail "no checksum message"
@@ -230,8 +357,8 @@ else fail "setup: baseline install exited non-zero: $(tail -3 "$TMP/log4-setup.t
 [ -f "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" ] \
   && pass "setup: baseline launcher present" || fail "setup: baseline launcher missing"
 
-# Corrupt the mod payload in place. run_install() (below) recomputes its sha
-# default from the CURRENT file when GEN1_MOD_SHA256 isn't overridden, so the
+# Corrupt the voxel payload in place. run_install() recomputes its
+# NX_VOXEL_SHA256 override from the CURRENT file each call, so the
 # download/checksum step still passes and the failure instead happens during
 # extraction - i.e. after the game payload overlay-copy has already started
 # writing into $TARGET, which is exactly the scenario the fix covers.
@@ -262,7 +389,7 @@ mkdir -p "$BIN_NOSHA1"
 # internally (macOS has no real sha256sum) - it lives in a different real
 # directory (/usr/bin) than this host's real sha1sum (/sbin), so symlinking
 # it by exact binary keeps the "no sha1sum anywhere on PATH" guarantee.
-for c in bash mkdir rm cp basename cut unzip dirname shasum; do
+for c in bash mkdir rm cp mv basename cut unzip dirname shasum sed grep head; do
   tool_path="$(command -v "$c")" || { fail "host is missing '$c', can't build the no-sha1 PATH fixture"; tool_path=""; }
   [ -n "$tool_path" ] && ln -s "$tool_path" "$BIN_NOSHA1/$c"
 done
@@ -276,28 +403,27 @@ ln -s "$BIN/sha256sum" "$BIN_NOSHA1/sha256sum"
 rm -f "$TMP/mod.zip"
 (cd "$MODFIX" && zip -qr "$TMP/mod.zip" manifest.json assets)
 
-# Compute the shas with the CURRENT (unmodified) PATH/shasum, as separate
-# statements before the PATH override below - a `PATH=... VAR=$(cmd) ...`
-# prefix list is not safe to rely on for ordering: bash applies earlier
-# prefix assignments before expanding later ones' command substitutions on
-# the same line, so folding these into that line would make `sha` itself
-# resolve against the isolated (sha1-less, and shasum-less) PATH too.
-zip_sha="$(sha "$TMP/game.zip")"
-yellow_sha="$(sha "$TMP/rom_manifest_yellow.json")"
-mod_sha="$(sha "$TMP/mod.zip")"
+# Write the API fixtures (and the voxel pin override) with the CURRENT
+# (unmodified) PATH/shasum, as separate statements before the PATH override
+# below - the digest defaults inside them run `sha`, which must not resolve
+# against the isolated (sha1-less, and shasum-less) PATH.
+write_game_json "$(sha "$TMP/game.zip")"
+write_mod_json  "$(sha "$TMP/mod.zip")"
+write_shoes_json "$(sha "$TMP/shoes.zip")"
+write_wilds_json "$(sha "$TMP/wilds.zip")"
+VOXEL_SHA_NOSHA1="$(sha "$TMP/mod.zip")"
 
 rm -rf "$SD/Roms/Xtra Games (EXTRAS)"
-if PATH="$BIN_NOSHA1" \
+if NX_VOXEL_SHA256="$VOXEL_SHA_NOSHA1" \
+   PATH="$BIN_NOSHA1" \
    PLATFORM=tg5050 \
    SDCARD_PATH="$SD" \
    LOGS_PATH="$SD/.userdata/tg5050/logs" \
    EXTRAS_ROMS_DIR="$SD/Roms/Xtra Games (EXTRAS)" \
    EXTRAS_PORTS_DIR="$SD/Roms/Xtra Games (EXTRAS)/.ports" \
    CATALOG_DIR="$ENTRY" \
+   XTRAS_STATE_DIR="$SD/.userdata/shared/xtras" \
    NX_EXTRAS_UNZIP=unzip \
-   GEN1_ZIP_SHA256="$zip_sha" \
-   GEN1_YELLOW_SHA256="$yellow_sha" \
-   GEN1_MOD_SHA256="$mod_sha" \
    bash "$ENTRY/install.sh" > "$TMP/log5.txt" 2>&1
 then pass "install with no sha1 tool anywhere still exits 0"
 else fail "install with no sha1 tool anywhere exited non-zero: $(tail -3 "$TMP/log5.txt")"; fi
@@ -322,6 +448,7 @@ run_uninstall() {
   EXTRAS_ROMS_DIR="$SD/Roms/Xtra Games (EXTRAS)" \
   EXTRAS_PORTS_DIR="$SD/Roms/Xtra Games (EXTRAS)/.ports" \
   CATALOG_DIR="$ENTRY" \
+  XTRAS_STATE_DIR="$SD/.userdata/shared/xtras" \
   bash "$ENTRY/uninstall.sh"
 }
 
@@ -338,14 +465,22 @@ mkdir -p "$G/lovegame/red" "$G/conf"
 echo 'save' > "$G/lovegame/red/cache.bin"
 echo 'opts' > "$G/lovegame/options.lua"
 echo 'cfg'  > "$G/conf/settings.cfg"
+# A foreign alias line: uninstall must drop only this entry's line.
+printf 'Other.sh\tOther Game\n' >> "$MAPFILE"
 
 if run_uninstall > "$TMP/log6.txt" 2>&1; then pass "uninstall exits 0"
 else fail "uninstall exited non-zero: $(tail -3 "$TMP/log6.txt")"; fi
 
 [ ! -e "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" ] \
   && pass "uninstall: launcher removed"        || fail "uninstall: launcher still present"
+! grep -q "^Gen1recomp\.sh$TAB" "$MAPFILE" 2>/dev/null \
+  && pass "uninstall: display alias removed"   || fail "uninstall: display alias still present"
+grep -q "^Other\.sh${TAB}Other Game\$" "$MAPFILE" 2>/dev/null \
+  && pass "uninstall: foreign alias line kept" || fail "uninstall: foreign alias line lost"
 [ ! -e "$G/.nx_addon_version" ]                 \
   && pass "uninstall: version marker removed"  || fail "uninstall: version marker still present"
+[ ! -e "$SD/.userdata/shared/xtras/gen1recomp.version" ] \
+  && pass "uninstall: version record removed"  || fail "uninstall: version record still present"
 [ ! -d "$G/bin" ]                               \
   && pass "uninstall: bin/ removed"             || fail "uninstall: bin/ still present"
 [ ! -d "$G/libs.aarch64" ]                      \
@@ -386,7 +521,9 @@ else fail "reinstall after uninstall exited non-zero: $(tail -3 "$TMP/log7.txt")
   && pass "reinstall after uninstall: engine restored"   || fail "reinstall after uninstall: engine missing"
 [ -f "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" ] \
   && pass "reinstall after uninstall: launcher restored" || fail "reinstall after uninstall: launcher missing"
-[ "$(cat "$G/.nx_addon_version" 2>/dev/null)" = "0.1.75+mod1.6.2" ] \
+grep -q "^Gen1recomp\.sh${TAB}Gen1Recomp (Pokemon R/B/Y)\$" "$MAPFILE" 2>/dev/null \
+  && pass "reinstall after uninstall: display alias restored" || fail "reinstall after uninstall: display alias missing"
+[ "$(cat "$G/.nx_addon_version" 2>/dev/null)" = "v9.9.9" ] \
   && pass "reinstall after uninstall: version marker restored" || fail "reinstall after uninstall: version marker missing"
 [ "$(cat "$G/lovegame/red/cache.bin" 2>/dev/null)" = "save" ] \
   && pass "reinstall after uninstall: save cache still kept"   || fail "reinstall after uninstall: save cache lost"

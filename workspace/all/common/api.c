@@ -1353,8 +1353,11 @@ void GFX_blitButton(char* hint, char* button, SDL_Surface* dst, SDL_Rect* dst_re
 	SDL_Surface* text;
 	int ox = 0;
 	int btn_sz = SCALE1(BUTTON_SIZE);
-	SDL_Color btn_color_sdl = uintToColour(THEME_COLOR1_255);
-	Uint32 btn_color = SDL_MapRGB(dst->format, btn_color_sdl.r, btn_color_sdl.g, btn_color_sdl.b);
+	// Drawn fallback (any button with no nav_*.png glyph, e.g. "L1/R1" combo
+	// pills): white disc/pill with black lettering, matching the white glyph
+	// discs beside it, instead of the old THEME_COLOR1 fill whose contrast
+	// depended on the theme (user feedback 2026-08-10).
+	Uint32 btn_color = SDL_MapRGB(dst->format, TRIAD_WHITE);
 
 	// button
 	struct NavGlyph* g = GFX_getNavGlyph(button);
@@ -1371,12 +1374,12 @@ void GFX_blitButton(char* hint, char* button, SDL_Surface* dst, SDL_Rect* dst_re
 		GFX_drawFilledCircle(dst, dst_rect->x + btn_sz / 2, dst_rect->y + btn_sz / 2, btn_sz / 2, btn_color);
 
 		// label
-		text = TTF_RenderUTF8_Blended(font.tiny, button, ALT_BUTTON_TEXT_COLOR);
+		text = TTF_RenderUTF8_Blended(font.tiny, button, COLOR_BLACK);
 		SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){dst_rect->x + (btn_sz - text->w) / 2, dst_rect->y + (btn_sz - text->h) / 2});
 		SDL_FreeSurface(text);
 		ox += btn_sz;
 	} else {
-		text = TTF_RenderUTF8_Blended(font.tiny, button, ALT_BUTTON_TEXT_COLOR);
+		text = TTF_RenderUTF8_Blended(font.tiny, button, COLOR_BLACK);
 		int pill_w = btn_sz / 2 + text->w;
 		GFX_drawFilledRoundedRect(dst, dst_rect->x, dst_rect->y, pill_w, btn_sz, btn_color);
 		ox += btn_sz / 4;

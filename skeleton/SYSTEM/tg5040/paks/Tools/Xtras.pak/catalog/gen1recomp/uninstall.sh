@@ -16,14 +16,31 @@ set -u
 
 TARGET="$EXTRAS_PORTS_DIR/gen1recomp"
 LOVE="$TARGET/lovegame"
+: "${XTRAS_STATE_DIR:=$SDCARD_PATH/.userdata/shared/xtras}"
 
 echo "@10 Removing launcher..."
 echo "Removing launcher..."
 rm -f "$EXTRAS_ROMS_DIR/Gen1recomp.sh"
 
+# Drop only this entry's display-alias line from the shared map.txt (see
+# install.sh: filename<TAB>alias); other entries' lines are kept, and the
+# file itself is removed once nothing is left in it. Idempotent: a missing
+# map.txt or an already-removed line is a no-op.
+MAP="$EXTRAS_ROMS_DIR/map.txt"
+TAB="$(printf '\t')"
+if [ -f "$MAP" ]; then
+    grep -v "^Gen1recomp\.sh$TAB" "$MAP" > "$MAP.tmp"
+    if [ -s "$MAP.tmp" ]; then
+        mv "$MAP.tmp" "$MAP"
+    else
+        rm -f "$MAP.tmp" "$MAP"
+    fi
+fi
+
 echo "@30 Removing version marker..."
 echo "Removing version marker..."
 rm -f "$TARGET/.nx_addon_version"
+rm -f "$XTRAS_STATE_DIR/gen1recomp.version"
 
 echo "@55 Removing engine..."
 echo "Removing engine..."

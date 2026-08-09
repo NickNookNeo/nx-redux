@@ -24,7 +24,7 @@ INCDIR = -I. -I../common/ -I../../$(PLATFORM)/platform/
 include ../common/ui/ui.mk
 SOURCE = extras.c \
          ../common/utils.c ../common/api.c ../common/audio_manager.c \
-         ../common/config.c ../common/scaler.c \
+         ../common/config.c ../common/scaler.c ../common/wget_fetch.c \
          $(UI_COMPONENT_SRCS) $(UI_DIR)/ui_list.c \
          ../../$(PLATFORM)/platform/platform.c
 
