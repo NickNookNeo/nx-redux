@@ -342,6 +342,13 @@ void startLoadFolderBackground(const char* imagePath, BackgroundLoadedCallback c
 
 void onBackgroundLoaded(SDL_Surface* surface) {
 	SDL_LockMutex(bgMutex);
+	// "no background" replacing "no background" is a no-op: don't set
+	// folderbgchanged, or updateBackgroundLayer re-uploads the full-screen
+	// black layer (~25ms) for nothing — one hitch per selection change.
+	if (!surface && !folderbgbmp) {
+		SDL_UnlockMutex(bgMutex);
+		return;
+	}
 	folderbgchanged = 1;
 	if (folderbgbmp)
 		SDL_FreeSurface(folderbgbmp);

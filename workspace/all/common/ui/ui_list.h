@@ -152,11 +152,16 @@ typedef struct {
 	int current_y;
 	int target_y;
 	int start_y;
+	// Width glides alongside y: a snap to the new row's width while y is still
+	// travelling reads as a jump, not a glide (short -> long titles especially).
+	int current_w;
+	int target_w;
+	int start_w;
 	uint32_t start_time; // SDL_GetTicks() when the current glide began
 	bool active;
 } PillAnimState;
 
-void UI_pillAnimSetTarget(PillAnimState* state, int target_y, bool animate);
+void UI_pillAnimSetTarget(PillAnimState* state, int target_y, int target_w, bool animate);
 int UI_pillAnimTick(PillAnimState* state);
 bool UI_pillAnimIsActive(PillAnimState* state);
 

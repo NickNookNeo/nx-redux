@@ -1087,26 +1087,55 @@ void PLAT_setOverlay(const char* filename, const char* tag) {
 }
 
 
+// Per-layer content tracking: layer_has_content[n] is false while
+// target_layer<n> is known to be fully transparent (cleared and not drawn on
+// since), letting the flip paths skip compositing it. During list browsing 3
+// of the 5 layers are typically empty — real GPU fill-rate savings at 60fps.
+// Every site that renders INTO a layer texture must mark it below; start true
+// (textures begin with undefined content until the first clear).
+static bool layer_has_content[6] = {true, true, true, true, true, true};
+
+// Composite the UI layers into the backbuffer, skipping layers known to be
+// empty. The stream layer (the app's software screen) is always copied.
+static void compositeLayers(void) {
+	if (layer_has_content[1])
+		SDL_RenderCopy(vid.renderer, vid.target_layer1, NULL, NULL);
+	if (layer_has_content[2])
+		SDL_RenderCopy(vid.renderer, vid.target_layer2, NULL, NULL);
+	SDL_RenderCopy(vid.renderer, vid.stream_layer1, NULL, NULL);
+	if (layer_has_content[3])
+		SDL_RenderCopy(vid.renderer, vid.target_layer3, NULL, NULL);
+	if (layer_has_content[4])
+		SDL_RenderCopy(vid.renderer, vid.target_layer4, NULL, NULL);
+	if (layer_has_content[5])
+		SDL_RenderCopy(vid.renderer, vid.target_layer5, NULL, NULL);
+}
+
 void PLAT_clearLayers(int layer) {
 	if (layer == 0 || layer == 1) {
 		SDL_SetRenderTarget(vid.renderer, vid.target_layer1);
 		SDL_RenderClear(vid.renderer);
+		layer_has_content[1] = false;
 	}
 	if (layer == 0 || layer == 2) {
 		SDL_SetRenderTarget(vid.renderer, vid.target_layer2);
 		SDL_RenderClear(vid.renderer);
+		layer_has_content[2] = false;
 	}
 	if (layer == 0 || layer == 3) {
 		SDL_SetRenderTarget(vid.renderer, vid.target_layer3);
 		SDL_RenderClear(vid.renderer);
+		layer_has_content[3] = false;
 	}
 	if (layer == 0 || layer == 4) {
 		SDL_SetRenderTarget(vid.renderer, vid.target_layer4);
 		SDL_RenderClear(vid.renderer);
+		layer_has_content[4] = false;
 	}
 	if (layer == 0 || layer == 5) {
 		SDL_SetRenderTarget(vid.renderer, vid.target_layer5);
 		SDL_RenderClear(vid.renderer);
+		layer_has_content[5] = false;
 	}
 
 	SDL_SetRenderTarget(vid.renderer, NULL);
@@ -1147,6 +1176,7 @@ void PLAT_drawOnLayer(SDL_Surface* inputSurface, int x, int y, int w, int h, flo
 		SDL_SetRenderTarget(vid.renderer, vid.target_layer1);
 		break;
 	}
+	layer_has_content[(layer >= 1 && layer <= 5) ? layer : 1] = true;
 
 	// Adjust brightness
 	Uint8 r = 255, g = 255, b = 255;
@@ -1226,6 +1256,7 @@ void PLAT_animateSurface(
 			SDL_SetRenderTarget(vid.renderer, vid.target_layer2);
 		else
 			SDL_SetRenderTarget(vid.renderer, vid.target_layer4);
+		layer_has_content[layer == 0 ? 2 : 4] = true;
 
 		SDL_SetRenderDrawColor(vid.renderer, 0, 0, 0, 0);
 		SDL_RenderClear(vid.renderer);
@@ -1313,6 +1344,7 @@ void PLAT_scrollTextTexture(
 	SDL_SetTextureAlphaMod(full_text_texture, color.a);
 
 	SDL_SetRenderTarget(vid.renderer, vid.target_layer4);
+	layer_has_content[4] = true;
 
 	SDL_Rect src_rect = {text_offset, 0, w, single_height};
 	SDL_Rect dst_rect = {x, y, w, single_height};
@@ -1349,12 +1381,7 @@ void PLAT_scrollTextTexture(
 void PLAT_GPU_Flip() {
 	capture_check();
 	SDL_RenderClear(vid.renderer);
-	SDL_RenderCopy(vid.renderer, vid.target_layer1, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.target_layer2, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.stream_layer1, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.target_layer3, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.target_layer4, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.target_layer5, NULL, NULL);
+	compositeLayers();
 	capture_write();
 	SDL_RenderPresent(vid.renderer);
 }
@@ -1390,6 +1417,7 @@ void PLAT_animateSurfaceOpacity(
 		SDL_DestroyTexture(tempTexture);
 		return;
 	}
+	layer_has_content[layer == 0 ? 2 : 4] = true;
 
 	for (int frame = 0; frame <= total_frames; ++frame) {
 		float t = (float)frame / total_frames;
@@ -1516,6 +1544,7 @@ void PLAT_animateSlidePages(
 			SDL_SetRenderTarget(vid.renderer, vid.target_layer1);
 			break;
 		}
+		layer_has_content[(layer >= 1 && layer <= 5) ? layer : 1] = true;
 		SDL_SetRenderDrawColor(vid.renderer, 0, 0, 0, 0);
 		SDL_RenderClear(vid.renderer);
 
@@ -1835,12 +1864,7 @@ void PLAT_flipHidden() {
 	SDL_RenderClear(vid.renderer);
 	resizeVideo(device_width, device_height, FIXED_PITCH); // !!!???
 	SDL_UpdateTexture(vid.stream_layer1, NULL, vid.screen->pixels, vid.screen->pitch);
-	SDL_RenderCopy(vid.renderer, vid.target_layer1, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.target_layer2, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.stream_layer1, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.target_layer3, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.target_layer4, NULL, NULL);
-	SDL_RenderCopy(vid.renderer, vid.target_layer5, NULL, NULL);
+	compositeLayers();
 	//  SDL_RenderPresent(vid.renderer); // no present want to flip  hidden
 }
 
@@ -1852,12 +1876,7 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 	if (!vid.blit) {
 		resizeVideo(device_width, device_height, FIXED_PITCH); // !!!???
 		SDL_UpdateTexture(vid.stream_layer1, NULL, vid.screen->pixels, vid.screen->pitch);
-		SDL_RenderCopy(vid.renderer, vid.target_layer1, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.target_layer2, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.stream_layer1, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.target_layer3, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.target_layer4, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.target_layer5, NULL, NULL);
+		compositeLayers();
 		capture_write();
 		SDL_RenderPresent(vid.renderer);
 		return;
@@ -1869,12 +1888,7 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 		vid.blit = NULL;
 		resizeVideo(device_width, device_height, FIXED_PITCH);
 		SDL_UpdateTexture(vid.stream_layer1, NULL, vid.screen->pixels, vid.screen->pitch);
-		SDL_RenderCopy(vid.renderer, vid.target_layer1, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.target_layer2, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.stream_layer1, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.target_layer3, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.target_layer4, NULL, NULL);
-		SDL_RenderCopy(vid.renderer, vid.target_layer5, NULL, NULL);
+		compositeLayers();
 		capture_write();
 		SDL_RenderPresent(vid.renderer);
 		return;

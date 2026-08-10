@@ -102,16 +102,30 @@ void PLAT_wifiInit() {
 	wifilog("Wifi init\n");
 }
 
+// PLAT_wifiEnabled is polled every rendered frame (menu-bar wifi indicator via
+// GFX_blitHardwareGroup), and the sysfs open/read/close costs ~1-2ms of frame
+// budget. Cache the result for 1s — outside toggles (e.g. the OSD overlay)
+// still show within a second, and our own toggles bust the cache immediately.
+static uint32_t wifi_enabled_checked_at = 0;
+static bool wifi_enabled_cached = false;
+
 bool PLAT_wifiEnabled() {
+	uint32_t now = SDL_GetTicks();
+	if (wifi_enabled_checked_at != 0 && now - wifi_enabled_checked_at < 1000)
+		return wifi_enabled_cached;
 	// Live interface state (IFF_UP), not the cached config value: wifi can be
 	// toggled outside this process (e.g. the OSD overlay) and the UI should
 	// reflect reality.
+	wifi_enabled_checked_at = now ? now : 1;
 	FILE* f = fopen("/sys/class/net/" WIFI_INTERFACE "/flags", "r");
-	if (!f)
+	if (!f) {
+		wifi_enabled_cached = false;
 		return false;
+	}
 	unsigned int flags = 0;
 	bool up = fscanf(f, "%x", &flags) == 1 && (flags & 0x1); // IFF_UP
 	fclose(f);
+	wifi_enabled_cached = up;
 	return up;
 }
 
@@ -128,6 +142,7 @@ void PLAT_wifiEnable(bool on) {
 		// Keep config in sync
 		CFG_setWifi(on);
 	}
+	wifi_enabled_checked_at = 0; // bust the PLAT_wifiEnabled cache immediately
 }
 
 int PLAT_wifiScan(struct WIFI_network* networks, int max) {

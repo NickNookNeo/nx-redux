@@ -20,11 +20,12 @@ int UI_renderMenuBar(SDL_Surface* screen, const char* title) {
 		char truncated[256];
 		GFX_truncateText(font.small, title, truncated, max_title_w, 0);
 
-		SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, truncated, COLOR_GRAY);
+		// Cached (do not free): the bar redraws every frame during list
+		// animation; the title itself only changes on folder navigation.
+		SDL_Surface* text = GFX_getCachedText(font.small, truncated, COLOR_GRAY);
 		if (text) {
 			int text_y = (bar_h - text->h) / 2;
 			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(PADDING + BUTTON_PADDING), text_y});
-			SDL_FreeSurface(text);
 		}
 	}
 

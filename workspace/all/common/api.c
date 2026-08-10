@@ -203,10 +203,79 @@ FALLBACK_IMPLEMENTATION void PLAT_getGPUUsage() {
 	perf.gpu_usage = 0.0;
 }
 
+// ---- Cached text rendering ----------------------------------------------
+// TTF_RenderUTF8_Blended is expensive (per-glyph FreeType rasterization). List
+// animations redraw every visible row each frame; without caching that starves
+// the 60fps budget. Entries are keyed on (font, text, color) — a theme colour
+// change simply produces new keys, so only a font reload needs invalidation.
+#define TEXT_CACHE_SIZE 48
+typedef struct {
+	TTF_Font* font;
+	SDL_Color color;
+	char text[256];
+	SDL_Surface* surf;
+	uint32_t lru;
+} TextCacheEntry;
+static TextCacheEntry text_cache[TEXT_CACHE_SIZE];
+static uint32_t text_cache_lru = 0;
+
+static void GFX_clearTextCache(void) {
+	for (int i = 0; i < TEXT_CACHE_SIZE; i++) {
+		if (text_cache[i].surf)
+			SDL_FreeSurface(text_cache[i].surf);
+		text_cache[i] = (TextCacheEntry){0};
+	}
+	text_cache_lru = 0;
+}
+
+SDL_Surface* GFX_getCachedText(TTF_Font* font, const char* text, SDL_Color color) {
+	if (!font || !text || !text[0])
+		return NULL;
+	if (strlen(text) >= sizeof(text_cache[0].text))
+		return NULL; // oversized — caller falls back to a direct render
+
+	int free_slot = -1;
+	int lru_slot = 0;
+	for (int i = 0; i < TEXT_CACHE_SIZE; i++) {
+		TextCacheEntry* e = &text_cache[i];
+		if (!e->surf) {
+			if (free_slot < 0)
+				free_slot = i;
+			continue;
+		}
+		if (e->font == font && e->color.r == color.r && e->color.g == color.g &&
+			e->color.b == color.b && e->color.a == color.a &&
+			strcmp(e->text, text) == 0) {
+			e->lru = ++text_cache_lru;
+			return e->surf;
+		}
+		if (text_cache[lru_slot].surf && e->lru < text_cache[lru_slot].lru)
+			lru_slot = i;
+	}
+
+	SDL_Surface* surf = TTF_RenderUTF8_Blended(font, text, color);
+	if (!surf)
+		return NULL;
+
+	int slot = (free_slot >= 0) ? free_slot : lru_slot;
+	if (text_cache[slot].surf)
+		SDL_FreeSurface(text_cache[slot].surf);
+	text_cache[slot].font = font;
+	text_cache[slot].color = color;
+	strncpy(text_cache[slot].text, text, sizeof(text_cache[slot].text) - 1);
+	text_cache[slot].text[sizeof(text_cache[slot].text) - 1] = '\0';
+	text_cache[slot].surf = surf;
+	text_cache[slot].lru = ++text_cache_lru;
+	return surf;
+}
+
 int GFX_loadSystemFont(const char* fontPath) {
 	// Load/Reload fonts
 	if (!TTF_WasInit())
 		TTF_Init();
+
+	// Cached text surfaces hold now-dangling font pointers; drop them all.
+	GFX_clearTextCache();
 
 	TTF_CloseFont(font.xlarge);
 	TTF_CloseFont(font.title);
@@ -1373,30 +1442,31 @@ void GFX_blitButton(char* hint, char* button, SDL_Surface* dst, SDL_Rect* dst_re
 	} else if (strlen(button) == 1) {
 		GFX_drawFilledCircle(dst, dst_rect->x + btn_sz / 2, dst_rect->y + btn_sz / 2, btn_sz / 2, btn_color);
 
-		// label
-		text = TTF_RenderUTF8_Blended(font.tiny, button, COLOR_BLACK);
-		SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){dst_rect->x + (btn_sz - text->w) / 2, dst_rect->y + (btn_sz - text->h) / 2});
-		SDL_FreeSurface(text);
+		// label (cached — hint bars redraw every frame during list animation)
+		text = GFX_getCachedText(font.tiny, button, COLOR_BLACK);
+		if (text)
+			SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){dst_rect->x + (btn_sz - text->w) / 2, dst_rect->y + (btn_sz - text->h) / 2});
 		ox += btn_sz;
 	} else {
-		text = TTF_RenderUTF8_Blended(font.tiny, button, COLOR_BLACK);
-		int pill_w = btn_sz / 2 + text->w;
+		text = GFX_getCachedText(font.tiny, button, COLOR_BLACK);
+		int pill_w = btn_sz / 2 + (text ? text->w : 0);
 		GFX_drawFilledRoundedRect(dst, dst_rect->x, dst_rect->y, pill_w, btn_sz, btn_color);
 		ox += btn_sz / 4;
 
-		SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ox + dst_rect->x, dst_rect->y + (btn_sz - text->h) / 2, text->w, text->h});
-		ox += text->w;
+		if (text) {
+			SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ox + dst_rect->x, dst_rect->y + (btn_sz - text->h) / 2, text->w, text->h});
+			ox += text->w;
+		}
 		ox += btn_sz / 4;
-		SDL_FreeSurface(text);
 	}
 
 	ox += SCALE1(BUTTON_TEXT_GAP);
 
-	// hint text
+	// hint text (cached; colour is part of the cache key so theme changes are safe)
 	SDL_Color text_color = uintToColour(THEME_COLOR6_255);
-	text = TTF_RenderUTF8_Blended(font.tiny, hint, text_color);
-	SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ox + dst_rect->x, dst_rect->y + (btn_sz - text->h) / 2, text->w, text->h});
-	SDL_FreeSurface(text);
+	text = GFX_getCachedText(font.tiny, hint, text_color);
+	if (text)
+		SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ox + dst_rect->x, dst_rect->y + (btn_sz - text->h) / 2, text->w, text->h});
 }
 void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_rect) {
 	if (!dst_rect)
@@ -1602,7 +1672,7 @@ int GFX_blitHardwareGroup(SDL_Surface* dst, IndicatorType show_setting) {
 
 			ow += battery_rect.w + SCALE1(BUTTON_MARGIN);
 
-			SDL_Surface* clock = NULL;
+			SDL_Surface* clock = NULL; // cache-owned — do not free
 			if (show_clock) {
 				int clock_width = 0;
 				char timeString[12];
@@ -1614,7 +1684,9 @@ int GFX_blitHardwareGroup(SDL_Surface* dst, IndicatorType show_setting) {
 					strftime(timeString, 12, "%-I:%M %p", &tm);
 				char display_name[12];
 				clock_width = GFX_getTextWidth(font.small, timeString, display_name, bar_h, 0);
-				clock = TTF_RenderUTF8_Blended(font.small, display_name, uintToColour(THEME_COLOR6_255));
+				// Cached: redrawn every frame during list animation but the
+				// string only changes once a minute (one stale entry at most).
+				clock = GFX_getCachedText(font.small, display_name, uintToColour(THEME_COLOR6_255));
 				ow += clock_width + SCALE1(BUTTON_MARGIN);
 			}
 
@@ -1663,7 +1735,7 @@ int GFX_blitHardwareGroup(SDL_Surface* dst, IndicatorType show_setting) {
 				int x = ox;
 				int y = (bar_h - clock->h) / 2;
 				SDL_BlitSurface(clock, NULL, dst, &(SDL_Rect){x, y});
-				SDL_FreeSurface(clock);
+				// no free — surface is owned by the text cache
 			}
 		}
 	}

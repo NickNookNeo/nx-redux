@@ -58,6 +58,14 @@ static char folderBgPath[1024] = {0};
 // last background type loaded; file-scope so it can be reset alongside
 // folderBgPath when another screen clears the shared background surface
 static int bgLastType = -1;
+// Per-frame short-circuit for resolveAndLoadBackground: the same entry is
+// re-rendered every frame during animation, and the full resolve does
+// filesystem stats (Shortcuts_exists / exists) on the SD card each call.
+// bgResolveForcedNames replays the only caller-visible side effect
+// (*list_show_entry_names forced true when there is genuinely no background).
+static char bgResolvePath[1024] = {0};
+static bool bgResolveValid = false;
+static bool bgResolveForcedNames = false;
 
 void GameList_invalidateBackground(void) {
 	// force resolveAndLoadBackground to reload next render — call this whenever
@@ -65,6 +73,7 @@ void GameList_invalidateBackground(void) {
 	// the change-detection cache thinks it's still loaded and skips the reload
 	folderBgPath[0] = '\0';
 	bgLastType = -1;
+	bgResolveValid = false;
 }
 
 void GameList_init(bool simple_mode) {
@@ -102,6 +111,20 @@ static void resolveAndLoadBackground(Entry* entry, const char* rompath,
 	// (file-scope bgLastType so GameList_invalidateBackground can reset it)
 	int* lastType = &bgLastType;
 
+	// Same entry as the last call (every frame of a glide/marquee redraw):
+	// skip the resolve — and with it the per-frame SD-card stats below.
+	if (entry && bgResolveValid && exactMatch(entry->path, bgResolvePath)) {
+		if (bgResolveForcedNames)
+			*list_show_entry_names = true;
+		return;
+	}
+	if (entry) {
+		strncpy(bgResolvePath, entry->path, sizeof(bgResolvePath) - 1);
+		bgResolvePath[sizeof(bgResolvePath) - 1] = '\0';
+	}
+	bgResolveValid = entry != NULL;
+	bgResolveForcedNames = false;
+
 	char defaultBgPath[512];
 	snprintf(defaultBgPath, sizeof(defaultBgPath), SDCARD_PATH "/bg.png");
 
@@ -132,6 +155,7 @@ static void resolveAndLoadBackground(Entry* entry, const char* rompath,
 	} else {
 		// genuinely no background to show — the list needs its names
 		*list_show_entry_names = true;
+		bgResolveForcedNames = true; // replay this on per-entry skips above
 		return;
 	}
 
@@ -1617,6 +1641,8 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 		// the per-row loop, so it can sit between rows mid-slide; the rows below
 		// then draw text only (no per-row pill background).
 		bool pill_animating = false;
+		int pill_y = -1; // current pill top-y; used by the row loop to tint the
+						 // row the pill is over (see color-tracking note below)
 		if (list_show_entry_names) {
 			Entry* sel = top->entries->items[top->selected];
 			char* sel_name = sel->name;
@@ -1651,14 +1677,32 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 					list_pill_anim.current_y = target_y - SCALE1(PILL_SIZE);
 				else if (wrap_bwd)
 					list_pill_anim.current_y = target_y + SCALE1(PILL_SIZE);
-				UI_pillAnimSetTarget(&list_pill_anim, target_y, animate);
+				UI_pillAnimSetTarget(&list_pill_anim, target_y, sel_pill_w, animate);
 				list_pill_target = target_y;
 			}
-			int pill_y = UI_pillAnimTick(&list_pill_anim);
+			pill_y = UI_pillAnimTick(&list_pill_anim);
 			pill_animating = UI_pillAnimIsActive(&list_pill_anim);
+			if (!pill_animating) {
+				// Width changes outside a glide (e.g. a thumbnail arriving
+				// re-truncates the selected title) snap directly — only
+				// selection moves are animated.
+				list_pill_anim.current_w = sel_pill_w;
+				list_pill_anim.target_w = sel_pill_w;
+			}
+			// Clip the pill to the list band: a wrap glide seeds the pill one
+			// row beyond the list edge, and unclipped it would slide over the
+			// menu bar (top) or button hint bar (bottom). Clipped, the incoming
+			// pill is revealed only through the first/last row.
+			int band_rows = top->end - top->start;
+			SDL_Rect band = {0, SCALE1(PADDING + PILL_SIZE),
+							 screen->w, SCALE1(band_rows * PILL_SIZE)};
+			SDL_Rect prev_clip;
+			SDL_GetClipRect(screen, &prev_clip);
+			SDL_SetClipRect(screen, &band);
 			UI_drawListItemBg(screen,
-							  &(SDL_Rect){SCALE1(PADDING), pill_y, sel_pill_w, SCALE1(PILL_SIZE)},
+							  &(SDL_Rect){SCALE1(PADDING), pill_y, list_pill_anim.current_w, SCALE1(PILL_SIZE)},
 							  true);
+			SDL_SetClipRect(screen, &prev_clip);
 		}
 
 		for (int i = top->start, j = 0; i < top->end; i++, j++) {
@@ -1717,16 +1761,22 @@ void GameList_render(SDL_Surface* screen, int lastScreen,
 				// a full-screen flash on every keypress. Passing NULL takes the
 				// static/truncated path (no present), which is also the correct
 				// modal behaviour. Same class of bug as 81a0c40a.
-				// Give the selected row its selected colour + marquee only once the
-				// pill has arrived — mid-glide the selected colour (which is picked
-				// to sit on the pill) would otherwise show over the bare background.
-				bool text_sel = row_is_selected && !pill_animating;
+				// Tint the row the pill is physically over, so the selected colour
+				// (picked to sit on the pill) swaps in lockstep with the glide: the
+				// old row stays lit until the pill leaves it and the new row lights
+				// the moment the pill arrives, rather than the colour flipping only
+				// when the animation ends. "Over" = the pill covers a majority of
+				// the row, which also guarantees the colour never shows on bare
+				// background. The marquee still waits until the pill has fully
+				// settled on the actual selection (and the context menu is closed).
+				bool pill_over = pill_y >= 0 &&
+								 abs(pill_y - y) * 2 < SCALE1(PILL_SIZE);
+				bool use_marquee = row_is_selected && !pill_animating &&
+								   !ContextMenu_isOpen();
 				UI_renderListItemText(screen,
-									  (text_sel && !ContextMenu_isOpen())
-										  ? &list_scroll
-										  : NULL,
+									  use_marquee ? &list_scroll : NULL,
 									  display_text, font.large,
-									  pos.text_x, pos.text_y, text_width, text_sel);
+									  pos.text_x, pos.text_y, text_width, pill_over);
 			}
 		}
 		UI_renderScrollIndicators(screen, top->start, MAIN_ROW_COUNT - 1, total);

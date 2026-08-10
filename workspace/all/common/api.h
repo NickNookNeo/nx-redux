@@ -298,6 +298,15 @@ enum {
 
 void GFX_setVsync(int vsync);
 
+// Returns a cached TTF_RenderUTF8_Blended surface for (font, text, color). The
+// returned surface is owned by the cache — the caller must blit it but must NOT
+// free it. Returns NULL if the text is empty/oversized or rendering failed, in
+// which case the caller should fall back to a direct render+free. The cache is
+// invalidated automatically when fonts are reloaded (GFX_loadSystemFont); theme
+// colour changes need no invalidation because the colour is part of the key.
+// Purpose: eliminate per-frame TTF rasterization in animated list redraws.
+SDL_Surface* GFX_getCachedText(TTF_Font* font, const char* text, SDL_Color color);
+
 int GFX_truncateText(TTF_Font* font, const char* in_name, char* out_name, int max_width, int padding); // returns final width
 int PLAT_textShouldScroll(TTF_Font* font, const char* in_name, int max_width, SDL_mutex* fontMutex);
 void PLAT_resetScrollText(void);

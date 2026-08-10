@@ -395,8 +395,16 @@ int main(int argc, char* argv[]) {
 				updateBackgroundLayer(blackBG);
 				renderThumbnail(1, false);
 			} else if (lastScreen == SCREEN_GAMELIST) {
-				updateBackgroundLayer(blackBG);
-				renderThumbnail(1, false);
+				// Both GPU-layer uploads are deferred while the selection pill
+				// is gliding: a full-screen layer upload costs ~25ms in one
+				// frame — a visible mid-glide hitch. folderbgchanged /
+				// thumbchanged stay latched, so the new background/thumbnail
+				// lands on the first frame after the glide settles (via the
+				// idle thumbchanged branch below).
+				if (!GameList_pillAnimating()) {
+					updateBackgroundLayer(blackBG);
+					renderThumbnail(1, false);
+				}
 
 				GFX_clearLayers(LAYER_TRANSITION);
 				if (!GameList_scrollIsScrolling())

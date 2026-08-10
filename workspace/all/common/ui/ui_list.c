@@ -278,11 +278,19 @@ void UI_renderListItemText(SDL_Surface* screen, ScrollTextState* scroll_state,
 		ScrollText_update(scroll_state, text, font, max_text_width,
 						  text_color, screen, text_x, text_y, true);
 	} else {
-		SDL_Surface* text_surf = TTF_RenderUTF8_Blended(font, text, text_color);
+		// Cached surface (owned by the cache — do NOT free). Falls back to a
+		// one-off render+free only for oversized strings the cache rejects.
+		SDL_Surface* text_surf = GFX_getCachedText(font, text, text_color);
+		bool owned = false;
+		if (!text_surf) {
+			text_surf = TTF_RenderUTF8_Blended(font, text, text_color);
+			owned = true;
+		}
 		if (text_surf) {
 			SDL_Rect src = {0, 0, text_surf->w > max_text_width ? max_text_width : text_surf->w, text_surf->h};
 			SDL_BlitSurface(text_surf, &src, screen, &(SDL_Rect){text_x, text_y, 0, 0});
-			SDL_FreeSurface(text_surf);
+			if (owned)
+				SDL_FreeSurface(text_surf);
 		}
 	}
 
@@ -641,23 +649,32 @@ void UI_renderScrollIndicators(SDL_Surface* screen, int scroll, int items_per_pa
 
 // Duration of the selection pill's glide to a new row, in milliseconds. The
 // glide is time-based (elapsed vs SDL_GetTicks) so it lasts the same wall-clock
-// time no matter how fast the caller redraws — lower = snappier.
-#define PILL_ANIM_MS 80
+// time no matter how fast the caller redraws — lower = snappier. Kept at 150ms:
+// the number of interpolation frames is duration / frame time, and a nextui
+// list frame measures ~30ms on device (vsync-locked, ~2 refresh periods of
+// CPU+GPU work — see 2026-08-10 frame profiling). 80ms yielded ~3 frames and
+// read as a snap; 150ms gives ~5 evenly-paced frames, which with the
+// smoothstep easing below reads as a glide while staying responsive.
+#define PILL_ANIM_MS 150
 
 
-void UI_pillAnimSetTarget(PillAnimState* state, int target_y, bool animate) {
-	if (target_y == state->current_y && !state->active)
+void UI_pillAnimSetTarget(PillAnimState* state, int target_y, int target_w, bool animate) {
+	if (target_y == state->current_y && target_w == state->current_w && !state->active)
 		return;
 
 	if (!animate) {
 		state->current_y = target_y;
 		state->target_y = target_y;
+		state->current_w = target_w;
+		state->target_w = target_w;
 		state->active = false;
 		return;
 	}
 
 	state->start_y = state->current_y;
 	state->target_y = target_y;
+	state->start_w = state->current_w;
+	state->target_w = target_w;
 	state->start_time = SDL_GetTicks();
 	state->active = true;
 }
@@ -669,13 +686,18 @@ int UI_pillAnimTick(PillAnimState* state) {
 	uint32_t elapsed = SDL_GetTicks() - state->start_time;
 	if (elapsed >= PILL_ANIM_MS) {
 		state->current_y = state->target_y;
+		state->current_w = state->target_w;
 		state->active = false;
 		return state->current_y;
 	}
 
 	float t = (float)elapsed / PILL_ANIM_MS;
-	t = 1.0f - (1.0f - t) * (1.0f - t); // ease-out quad — fast start, gentle finish
+	// smoothstep (ease-in-out): peak velocity mid-glide so the travel itself is
+	// visible. The previous ease-out quad front-loaded ~75% of the distance into
+	// the first frames, which read as a snap rather than a glide.
+	t = t * t * (3.0f - 2.0f * t);
 	state->current_y = state->start_y + (int)((state->target_y - state->start_y) * t);
+	state->current_w = state->start_w + (int)((state->target_w - state->start_w) * t);
 	return state->current_y;
 }
 
