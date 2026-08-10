@@ -977,6 +977,11 @@ static bool entryNetplayCapable(Entry* entry) {
 	return entryEmuMarker(entry, "netplay", netplay_cap_path, &netplay_cap);
 }
 
+// Exported for search.c: same one-entry cache, same marker probe.
+bool GameList_entryNetplayCapable(Entry* entry) {
+	return entryNetplayCapable(entry);
+}
+
 // Mirrors entryNetplayCapable: an emu pak opts into the pre-launch options
 // editor by shipping options.sh beside its launch.sh.
 static char emuopts_cap_path[MAX_PATH] = {0};

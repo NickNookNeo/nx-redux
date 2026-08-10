@@ -18,17 +18,7 @@
 #include "ui_list.h"
 #include "ui_image.h"
 #include "ui_menubar.h"
-
-static int rat_render_text(SDL_Surface* screen, const char* text, TTF_Font* f,
-						   SDL_Color color, int x, int y) {
-	SDL_Surface* s = TTF_RenderUTF8_Blended(f, text, color);
-	if (!s)
-		return 0;
-	SDL_BlitSurface(s, NULL, screen, &(SDL_Rect){x, y, s->w, s->h});
-	int w = s->w;
-	SDL_FreeSurface(s);
-	return w;
-}
+#include "ui_emptystate.h"
 
 // Image slot size inside a rich pill row (matches
 // UI_renderListItemPillRich: item_h 1.5x PILL_SIZE minus 4px padding each side)
@@ -378,8 +368,8 @@ static void rat_show_achievements(SDL_Surface* screen, const RAT_Game* game) {
 			UI_renderScrollIndicators(screen, scroll, rows_visible, count);
 
 			if (count == 0) {
-				rat_render_text(screen, "No achievement data cached for this game",
-								font.medium, col_desc, SCALE1(20), list_top);
+				UI_renderEmptyState(screen, "No achievements cached",
+									"Data downloads when this game is played online", NULL);
 			} else if (achs[selected].description[0]) {
 				// right under the last row - fills the gap to the list and
 				// stays clear of the bottom scroll indicator
@@ -388,7 +378,8 @@ static void rat_show_achievements(SDL_Surface* screen, const RAT_Game* game) {
 										list_top + rows_visible * row_h + SCALE1(4));
 			}
 
-			UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "DETAILS", NULL});
+			if (count > 0)
+				UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "DETAILS", NULL});
 			GFX_flip(screen);
 			dirty = false;
 		} else {
@@ -501,11 +492,10 @@ void RATBrowser_run(SDL_Surface* screen) {
 			UI_renderScrollIndicators(screen, scroll, rows_visible, count);
 
 			if (count == 0)
-				rat_render_text(screen,
-								"No cached games. Play online once or run Download all game data.",
-								font.small, col_sub, SCALE1(20), list_top);
-
-			UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "OPEN", NULL});
+				UI_renderEmptyState(screen, "No cached games",
+									"Play online once or download game data in Settings", NULL);
+			else
+				UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "OPEN", NULL});
 			GFX_flip(screen);
 			dirty = false;
 		} else {

@@ -3,6 +3,7 @@
 
 #include "api.h"
 #include "sdl.h"
+#include "types.h"
 #include <stdbool.h>
 
 typedef struct {
@@ -37,5 +38,8 @@ void GameList_invalidateBackground(void);
 // Run a context-menu action selected in the overlay (the id built in
 // GameList_handleInput). Called by nextui.c when ContextMenu returns SELECTED.
 void GameList_runContextAction(int id);
+
+// Netplay-capable = the entry's owning emu pak ships a "netplay" marker file.
+bool GameList_entryNetplayCapable(Entry* entry);
 
 #endif // GAMELIST_H
