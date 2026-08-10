@@ -14,7 +14,7 @@
 #include "display_helper.h"
 #include "ui_confirmdialog.h"
 #include "ui_playlist.h"
-#include "ui_list.h"
+#include "ui_listview.h"
 
 // Internal states
 typedef enum {
@@ -22,17 +22,14 @@ typedef enum {
 	PLAYLIST_INTERNAL_DETAIL
 } PlaylistInternalState;
 
-// List state
+// List state (selection/scroll live in the ListViews owned by
+// ui_playlist.c - see PlaylistList_view()/PlaylistDetail_view())
 static PlaylistInfo playlists[MAX_PLAYLISTS];
 static int playlist_count = 0;
-static int list_selected = 0;
-static int list_scroll = 0;
 
 // Detail state
 static PlaylistTrack detail_tracks[PLAYLIST_MAX_TRACKS];
 static int detail_track_count = 0;
-static int detail_selected = 0;
-static int detail_scroll = 0;
 static int current_playlist_index = -1; // Index into playlists[] for current detail view
 
 // Toast
@@ -81,30 +78,39 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
 		if (show_confirm) {
 			if (PAD_justPressed(BTN_A)) {
 				if (confirm_action == 0) {
-					// Delete playlist
+					// Delete playlist. Content changed: reset the view to the
+					// rebuilt array (glide snap + marquee clear), then restore
+					// the cursor clamped like the old code did.
 					int idx = confirm_target;
 					if (idx >= 0 && idx < playlist_count) {
 						M3U_delete(playlists[idx].path);
 						refresh_playlists();
-						// Adjust selection
-						if (list_selected >= playlist_count)
-							list_selected = playlist_count - 1;
-						if (list_selected < 0)
-							list_selected = 0;
+						ListView* lv = PlaylistList_view();
+						int prev_selected = lv->selected;
+						UI_listViewReset(lv, playlist_count, playlists);
+						if (playlist_count > 0)
+							lv->selected = (prev_selected < playlist_count)
+											   ? prev_selected
+											   : playlist_count - 1;
 						show_toast("Playlist deleted");
 					}
 				} else if (confirm_action == 1) {
-					// Remove track
+					// Remove track. Same Reset-then-assign: the tracks buffer
+					// was refilled in place, keyed by the playlist's name.
 					int idx = confirm_target;
 					if (current_playlist_index >= 0 && current_playlist_index < playlist_count) {
 						M3U_removeTrack(playlists[current_playlist_index].path, idx);
 						refresh_detail();
 						// Update parent count
 						playlists[current_playlist_index].track_count = detail_track_count;
-						if (detail_selected >= detail_track_count)
-							detail_selected = detail_track_count - 1;
-						if (detail_selected < 0)
-							detail_selected = 0;
+						ListView* dv = PlaylistDetail_view();
+						int prev_selected = dv->selected;
+						UI_listViewReset(dv, detail_track_count,
+										 playlists[current_playlist_index].name);
+						if (detail_track_count > 0)
+							dv->selected = (prev_selected < detail_track_count)
+											   ? prev_selected
+											   : detail_track_count - 1;
 						show_toast("Track removed");
 					}
 				}
@@ -139,126 +145,119 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
 		}
 
 		if (state == PLAYLIST_INTERNAL_LIST) {
-			int total_items = playlist_count;
+			ListView* v = PlaylistList_view();
 
-			if (PAD_justPressed(BTN_B)) {
-				GFX_clearLayers(LAYER_SCROLLTEXT);
-				return MODULE_EXIT_TO_MENU;
-			} else if (total_items > 0 && PAD_justRepeated(BTN_UP)) {
-				list_selected = (list_selected > 0) ? list_selected - 1 : total_items - 1;
-				dirty = 1;
-			} else if (total_items > 0 && PAD_justRepeated(BTN_DOWN)) {
-				list_selected = (list_selected < total_items - 1) ? list_selected + 1 : 0;
-				dirty = 1;
-			} else if (PAD_justPressed(BTN_A)) {
-				// Enter playlist detail
-				if (list_selected >= 0 && list_selected < playlist_count) {
-					current_playlist_index = list_selected;
+			// The ListView owns navigation; the module switches on actions.
+			ListViewAction act = UI_listViewHandleInput(v);
+			switch (act.type) {
+			case LISTVIEW_ACTIVATED:
+				// Enter playlist detail. Reset keys the detail view to this
+				// playlist's name (glide snap + marquee clear + cursor to 0).
+				if (act.index >= 0 && act.index < playlist_count) {
+					current_playlist_index = act.index;
 					refresh_detail();
-					detail_selected = 0;
-					detail_scroll = 0;
+					UI_listViewReset(PlaylistDetail_view(), detail_track_count,
+									 playlists[act.index].name);
 					state = PLAYLIST_INTERNAL_DETAIL;
-					GFX_clearLayers(LAYER_SCROLLTEXT);
 					dirty = 1;
 				}
-			} else if (PAD_justPressed(BTN_Y)) {
-				// New Playlist
-				char* name = UIKeyboard_open("Playlist name");
-				PAD_poll();
-				PAD_reset();
-				{
-					SDL_Surface* ns = DisplayHelper_getReinitScreen();
-					if (ns)
-						screen = ns;
-				}
-				if (name && name[0]) {
-					if (M3U_create(name) == 0) {
-						show_toast("Playlist created");
-						refresh_playlists();
-					} else {
-						show_toast("Already exists");
+				break;
+			case LISTVIEW_BACK:
+				GFX_clearLayers(LAYER_SCROLLTEXT);
+				return MODULE_EXIT_TO_MENU;
+			case LISTVIEW_BUTTON:
+				if (act.btn == BTN_Y) {
+					// New Playlist: works from the empty list too (act.index
+					// is -1 there)
+					char* name = UIKeyboard_open("Playlist name");
+					PAD_poll();
+					PAD_reset();
+					{
+						SDL_Surface* ns = DisplayHelper_getReinitScreen();
+						if (ns)
+							screen = ns;
 					}
-					free(name);
-				} else if (name) {
-					free(name);
-				}
-				dirty = 1;
-			} else if (PAD_justPressed(BTN_X)) {
-				// Delete playlist
-				if (list_selected >= 0 && list_selected < playlist_count) {
-					snprintf(confirm_name, sizeof(confirm_name), "%s", playlists[list_selected].name);
+					if (name && name[0]) {
+						if (M3U_create(name) == 0) {
+							show_toast("Playlist created");
+							refresh_playlists();
+						} else {
+							show_toast("Already exists");
+						}
+						free(name);
+					} else if (name) {
+						free(name);
+					}
+					dirty = 1;
+				} else if (act.btn == BTN_X && act.index >= 0 &&
+						   act.index < playlist_count) {
+					// Delete playlist
+					snprintf(confirm_name, sizeof(confirm_name), "%s", playlists[act.index].name);
 					confirm_action = 0;
-					confirm_target = list_selected;
+					confirm_target = act.index;
 					show_confirm = true;
 					GFX_clearLayers(LAYER_SCROLLTEXT);
 					dirty = 1;
 				}
+				break;
+			default:
+				break;
 			}
-
-			// Animate scroll
-			if (playlist_list_needs_scroll_refresh()) {
-				playlist_list_animate_scroll();
-			}
-			if (playlist_list_scroll_needs_render())
-				dirty = 1;
 
 		} else if (state == PLAYLIST_INTERNAL_DETAIL) {
-			int total_items = detail_track_count;
+			ListView* v = PlaylistDetail_view();
 
-			if (PAD_justPressed(BTN_B)) {
+			// The ListView owns navigation; the module switches on actions.
+			ListViewAction act = UI_listViewHandleInput(v);
+			switch (act.type) {
+			case LISTVIEW_ACTIVATED:
+				if (act.index >= 0 && act.index < detail_track_count) {
+					// Play the playlist starting from selected track
+					GFX_clearLayers(LAYER_SCROLLTEXT);
+					PlayerModule_setResumePlaylistPath(playlists[current_playlist_index].path);
+					PlayerModule_runWithPlaylist(screen, detail_tracks, detail_track_count, act.index);
+					PlayerModule_setResumePlaylistPath(NULL);
+					// On return, refresh and go back to detail
+					refresh_detail();
+					if (v->selected >= detail_track_count)
+						v->selected = detail_track_count - 1;
+					if (v->selected < 0)
+						v->selected = 0;
+					dirty = 1;
+				}
+				break;
+			case LISTVIEW_BACK:
 				GFX_clearLayers(LAYER_SCROLLTEXT);
 				refresh_playlists(); // Refresh counts
 				state = PLAYLIST_INTERNAL_LIST;
 				dirty = 1;
-			} else if (total_items > 0 && PAD_justRepeated(BTN_UP)) {
-				detail_selected = (detail_selected > 0) ? detail_selected - 1 : total_items - 1;
-				dirty = 1;
-			} else if (total_items > 0 && PAD_justRepeated(BTN_DOWN)) {
-				detail_selected = (detail_selected < total_items - 1) ? detail_selected + 1 : 0;
-				dirty = 1;
-			} else if (PAD_justPressed(BTN_A)) {
-				if (detail_track_count > 0) {
-					// Play the playlist starting from selected track
-					GFX_clearLayers(LAYER_SCROLLTEXT);
-					PlayerModule_setResumePlaylistPath(playlists[current_playlist_index].path);
-					PlayerModule_runWithPlaylist(screen, detail_tracks, detail_track_count, detail_selected);
-					PlayerModule_setResumePlaylistPath(NULL);
-					// On return, refresh and go back to detail
-					refresh_detail();
-					if (detail_selected >= detail_track_count)
-						detail_selected = detail_track_count - 1;
-					if (detail_selected < 0)
-						detail_selected = 0;
-					dirty = 1;
-				}
-			} else if (PAD_justPressed(BTN_X)) {
-				// Remove track
-				if (detail_selected >= 0 && detail_selected < detail_track_count) {
-					snprintf(confirm_name, sizeof(confirm_name), "%s", detail_tracks[detail_selected].name);
+				break;
+			case LISTVIEW_BUTTON:
+				if (act.btn == BTN_X && act.index >= 0 &&
+					act.index < detail_track_count) {
+					// Remove track
+					snprintf(confirm_name, sizeof(confirm_name), "%s", detail_tracks[act.index].name);
 					confirm_action = 1;
-					confirm_target = detail_selected;
+					confirm_target = act.index;
 					show_confirm = true;
 					GFX_clearLayers(LAYER_SCROLLTEXT);
 					dirty = 1;
 				}
+				break;
+			default:
+				break;
 			}
-
-			// Animate scroll
-			if (playlist_list_needs_scroll_refresh()) {
-				playlist_list_animate_scroll();
-			}
-			if (playlist_list_scroll_needs_render())
-				dirty = 1;
 		}
 
 		// Power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render. The glide checks keep the dirty-flag loop redrawing (and
-		// ticking the pill animation) until the selection pill settles.
+		// Render. The busy checks keep the dirty-flag loop redrawing while
+		// the active view's pill glides or its marquee needs a main-surface
+		// render.
 		if (dirty ||
-			(state == PLAYLIST_INTERNAL_LIST && playlist_list_glide_active()) ||
-			(state == PLAYLIST_INTERNAL_DETAIL && playlist_detail_glide_active())) {
+			(state == PLAYLIST_INTERNAL_LIST && UI_listViewBusy(PlaylistList_view())) ||
+			(state == PLAYLIST_INTERNAL_DETAIL && UI_listViewBusy(PlaylistDetail_view()))) {
 			// Bounds check: if current playlist was deleted externally, go back to list
 			if (state == PLAYLIST_INTERNAL_DETAIL &&
 				(current_playlist_index < 0 || current_playlist_index >= playlist_count)) {
@@ -266,14 +265,10 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
 			}
 
 			if (state == PLAYLIST_INTERNAL_LIST) {
-				int items_per_page = UI_calcListLayout(screen).items_per_page;
-				UI_adjustListScroll(list_selected, &list_scroll, items_per_page);
-				render_playlist_list(screen, show_setting, playlists, playlist_count, list_selected, list_scroll);
+				render_playlist_list(screen, show_setting, playlists, playlist_count);
 			} else {
-				int items_per_page = UI_calcListLayout(screen).items_per_page;
-				UI_adjustListScroll(detail_selected, &detail_scroll, items_per_page);
 				render_playlist_detail(screen, show_setting, playlists[current_playlist_index].name,
-									   detail_tracks, detail_track_count, detail_selected, detail_scroll);
+									   detail_tracks, detail_track_count);
 			}
 
 			// Toast
@@ -284,6 +279,12 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
 
 			ModuleCommon_tickToast(playlist_toast_message, playlist_toast_time, &dirty);
 		} else {
+			// Idle marquee tick for the active list view (activate-after-
+			// delay + steady GPU scroll happen here, not via dirty).
+			if (state == PLAYLIST_INTERNAL_LIST)
+				UI_listViewTickIdle(PlaylistList_view());
+			else
+				UI_listViewTickIdle(PlaylistDetail_view());
 			GFX_sync();
 		}
 	}

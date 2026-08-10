@@ -4,38 +4,59 @@
 #include "defines.h"
 #include "api.h"
 #include "ui_buttonhintbar.h"
-#include "ui_emptystate.h"
 #include "ui_menubar.h"
 #include "ui_radio.h"
 #include "ui_fonts.h"
 #include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_toast.h"
 #include "ui_album_art.h"
 #include "album_art.h"
 #include "radio.h"
 
-// Selection glide state (one per list surface)
-static ListGlide radio_list_glide;
-static ListGlide radio_country_glide;
+// Full-mode ListViews (the widget owns selection, scroll, glide and marquee;
+// module_radio drives input through the accessors below).
+static ListView radio_list_view;
+static ListView radio_countries_view;
 
-// For the module's dirty-flag loop: keep redrawing while a pill glides
-bool radio_list_glide_active(void) {
-	return UI_listGlideActive(&radio_list_glide);
+ListView* RadioList_view(void) {
+	return &radio_list_view;
+}
+ListView* RadioCountries_view(void) {
+	return &radio_countries_view;
 }
 
-bool radio_country_glide_active(void) {
-	return UI_listGlideActive(&radio_country_glide);
+static void radio_list_get_row(void* ctx, int i, bool selected,
+							   ListViewRow* out) {
+	RadioStation* stations = ctx;
+	out->label = stations[i].name;
+	if (stations[i].genre[0])
+		out->annotation = stations[i].genre;
+	(void)selected;
+}
+
+// "%d stations" scratch: the widget consumes the annotation before the next
+// get_row call, so one static buffer per provider is enough.
+static char country_annotation_buf[32];
+
+static void radio_countries_get_row(void* ctx, int i, bool selected,
+									ListViewRow* out) {
+	const CuratedCountry* countries = ctx;
+	out->label = countries[i].name;
+	snprintf(country_annotation_buf, sizeof(country_annotation_buf),
+			 "%d stations", Radio_getCuratedStationCount(countries[i].code));
+	out->annotation = country_annotation_buf;
+	(void)selected;
 }
 
 // Render the radio station list
 void render_radio_list(SDL_Surface* screen, IndicatorType show_setting,
-					   int radio_selected, int* radio_scroll,
 					   const char* toast_message, uint32_t toast_time) {
+	(void)show_setting;
 	GFX_clear(screen);
 
 	int hw = screen->w;
 	int hh = screen->h;
-	char truncated[256];
 
 	UI_renderMenuBar(screen, "Online Radio");
 
@@ -43,60 +64,21 @@ void render_radio_list(SDL_Surface* screen, IndicatorType show_setting,
 	RadioStation* stations;
 	int station_count = Radio_getStations(&stations);
 
-	// Empty state - no stations saved
-	if (station_count == 0) {
-		UI_renderEmptyState(screen, "No stations saved", "Press Y to manage stations", "MANAGE");
-		return;
-	}
-
-	// Use common list layout calculation
-	ListLayout layout = UI_calcListLayout(screen);
-	UI_adjustListScroll(radio_selected, radio_scroll, layout.items_per_page);
-
-	// Selection glide: size the selected pill, draw the moving pill BEFORE
-	// row content; rows pass selected=false and tint by pill position.
-	int rows = layout.items_per_page;
-	if (*radio_scroll + rows > station_count)
-		rows = station_count - *radio_scroll;
-	char sel_trunc[256];
-	int sel_pill_w = UI_calcListPillWidth(font.medium,
-										  stations[radio_selected].name,
-										  sel_trunc, layout.max_width, 0);
-	ListGlideFrame gf = UI_listGlideDraw(&radio_list_glide, screen,
-										 (const void*)stations,
-										 radio_selected - *radio_scroll, rows,
-										 layout.list_y, layout.item_h,
-										 sel_pill_w, true);
-
-	for (int i = 0; i < layout.items_per_page && *radio_scroll + i < station_count; i++) {
-		int idx = *radio_scroll + i;
-		RadioStation* station = &stations[idx];
-
-		int y = layout.list_y + i * layout.item_h;
-		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
-
-		// Render pill background and get text position
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, station->name, truncated, y, false, 0);
-
-		// Station name (no scrolling for radio list)
-		UI_renderListItemText(screen, NULL, station->name, font.medium,
-							  pos.text_x, pos.text_y, layout.max_width, row_sel);
-
-		// Genre (if available)
-		if (station->genre[0]) {
-			SDL_Color genre_color = row_sel ? COLOR_GRAY : COLOR_DARK_TEXT;
-			SDL_Surface* genre_text = TTF_RenderUTF8_Blended(font.tiny, station->genre, genre_color);
-			if (genre_text) {
-				SDL_BlitSurface(genre_text, NULL, screen, &(SDL_Rect){hw - genre_text->w - SCALE1(PADDING * 2), y + (layout.item_h - genre_text->h) / 2});
-				SDL_FreeSurface(genre_text);
-			}
-		}
-	}
-
-	UI_renderScrollIndicators(screen, *radio_scroll, layout.items_per_page, station_count);
+	ListView* v = &radio_list_view;
+	v->title = NULL; // menu bar drawn above (caller-owned chrome)
+	v->font = font.medium;
+	v->count = station_count;
+	v->get_row = radio_list_get_row;
+	v->ctx = stations;
+	v->list_id = (const void*)stations;
+	v->empty_title = "No stations saved";
+	v->empty_subtitle = "Press Y to manage stations";
+	v->empty_y_label = "MANAGE";
+	v->hint_pairs = (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "PLAY", NULL};
+	UI_listViewRender(v, screen);
 
 	// Show note for users using default stations (no custom stations yet)
-	if (!Radio_hasUserStations()) {
+	if (station_count > 0 && !Radio_hasUserStations()) {
 		int note_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING + 55);
 
 		const char* note1 = "These are default stations";
@@ -116,9 +98,6 @@ void render_radio_list(SDL_Surface* screen, IndicatorType show_setting,
 
 	// Toast notification
 	UI_renderToast(screen, toast_message, toast_time);
-
-	// Button hints
-	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "PLAY", NULL});
 }
 
 // Helper to get current station by index
@@ -340,12 +319,9 @@ void render_radio_playing(SDL_Surface* screen, IndicatorType show_setting, int r
 }
 
 // Render add stations - country selection screen
-void render_radio_add(SDL_Surface* screen, IndicatorType show_setting,
-					  int add_country_selected, int* add_country_scroll) {
+void render_radio_add(SDL_Surface* screen, IndicatorType show_setting) {
+	(void)show_setting;
 	GFX_clear(screen);
-
-	int hw = screen->w;
-	char truncated[256];
 
 	UI_renderMenuBar(screen, "Manage Stations");
 
@@ -353,57 +329,16 @@ void render_radio_add(SDL_Surface* screen, IndicatorType show_setting,
 	int country_count = Radio_getCuratedCountryCount();
 	const CuratedCountry* countries = Radio_getCuratedCountries();
 
-	// Use common list layout calculation
-	ListLayout layout = UI_calcListLayout(screen);
-	UI_adjustListScroll(add_country_selected, add_country_scroll, layout.items_per_page);
-
-	// Selection glide: moving pill drawn before row content (see radio list)
-	ListGlideFrame gf = {layout.list_y, false};
-	if (country_count > 0) {
-		int rows = layout.items_per_page;
-		if (*add_country_scroll + rows > country_count)
-			rows = country_count - *add_country_scroll;
-		char sel_trunc[256];
-		int sel_pill_w = UI_calcListPillWidth(font.medium,
-											  countries[add_country_selected].name,
-											  sel_trunc, layout.max_width, 0);
-		gf = UI_listGlideDraw(&radio_country_glide, screen,
-							  (const void*)countries,
-							  add_country_selected - *add_country_scroll, rows,
-							  layout.list_y, layout.item_h,
-							  sel_pill_w, true);
-	}
-
-	for (int i = 0; i < layout.items_per_page && *add_country_scroll + i < country_count; i++) {
-		int idx = *add_country_scroll + i;
-		const CuratedCountry* country = &countries[idx];
-
-		int y = layout.list_y + i * layout.item_h;
-		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
-
-		// Render pill background and get text position
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, country->name, truncated, y, false, 0);
-
-		// Country name
-		UI_renderListItemText(screen, NULL, country->name, font.medium,
-							  pos.text_x, pos.text_y, layout.max_width, row_sel);
-
-		// Station count on right
-		int curated_station_count = Radio_getCuratedStationCount(country->code);
-		char count_str[32];
-		snprintf(count_str, sizeof(count_str), "%d stations", curated_station_count);
-		SDL_Color count_color = row_sel ? COLOR_GRAY : COLOR_DARK_TEXT;
-		SDL_Surface* count_text = TTF_RenderUTF8_Blended(font.tiny, count_str, count_color);
-		if (count_text) {
-			SDL_BlitSurface(count_text, NULL, screen, &(SDL_Rect){hw - count_text->w - SCALE1(PADDING * 2), y + (layout.item_h - count_text->h) / 2});
-			SDL_FreeSurface(count_text);
-		}
-	}
-
-	UI_renderScrollIndicators(screen, *add_country_scroll, layout.items_per_page, country_count);
-
-	// Button hints
-	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "SELECT", NULL});
+	ListView* v = &radio_countries_view;
+	v->title = NULL; // menu bar drawn above (caller-owned chrome)
+	v->font = font.medium;
+	v->count = country_count;
+	v->get_row = radio_countries_get_row;
+	v->ctx = (void*)countries;
+	v->list_id = (const void*)countries;
+	v->empty_title = NULL; // curated catalog is never empty
+	v->hint_pairs = (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "SELECT", NULL};
+	UI_listViewRender(v, screen);
 }
 
 // Render add stations - station selection screen

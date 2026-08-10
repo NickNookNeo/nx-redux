@@ -2,6 +2,7 @@
 #define SEARCH_H
 
 #include "sdl.h"
+#include "ui_listview.h"
 #include <stdbool.h>
 
 typedef struct {
@@ -20,11 +21,8 @@ bool Search_open(void);
 SearchResult Search_handleInput(unsigned long now);
 void Search_render(SDL_Surface* screen, int lastScreen);
 
-// True while the results-list selection pill is mid-glide (dirty-loop hook).
-bool Search_pillAnimating(void);
-
-// Marquee driving for the results list (see GameList_scrollBusy twin).
-bool Search_scrollBusy(void);
-void Search_scrollTickIdle(void);
+// The results-list widget — nextui.c drives its busy/marquee/tick hooks
+// (UI_listViewBusy / UI_listViewMarqueeBusy / UI_listViewTickIdle) directly.
+ListView* Search_view(void);
 
 #endif // SEARCH_H

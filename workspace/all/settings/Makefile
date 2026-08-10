@@ -29,7 +29,7 @@ include ../common/ui/ui.mk
 SOURCE = settings.c settings_menu.c settings_wifi.c settings_bt.c settings_led.c settings_developer.c settings_updater.c settings_input.c settings_clock.c settings_bootlogo.c settings_audio.c \
          $(COMMON_PATH)/utils.c $(COMMON_PATH)/api.c $(COMMON_PATH)/audio_manager.c \
          $(COMMON_PATH)/config.c $(COMMON_PATH)/scaler.c \
-         $(UI_COMPONENT_SRCS) $(UI_DIR)/ui_list.c \
+         $(UI_COMPONENT_SRCS) $(UI_DIR)/ui_list.c $(UI_LISTVIEW_SRCS) \
          $(UI_DIR)/ui_keyboard.c \
          $(COMMON_PATH)/wget_fetch.c \
          $(COMMON_PATH)/display_helper.c \

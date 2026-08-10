@@ -5,8 +5,6 @@
 #include "defines.h"
 #include "config.h"
 #include "ui_draw.h"
-#include "ui_buttonhintbar.h"
-#include "ui_menubar.h"
 
 // Scroll gap for software scrolling
 #define SCROLL_GAP 30
@@ -766,22 +764,6 @@ ListGlideFrame UI_listGlideDrawAtY(ListGlide* g, SDL_Surface* screen,
 	return f;
 }
 
-ListGlideFrame UI_listGlideDraw(ListGlide* g, SDL_Surface* screen,
-								const void* list_id, int selected_row,
-								int rows_visible, int row0_y, int item_h,
-								int pill_w, bool allow_anim) {
-	if (rows_visible <= 0)
-		return (ListGlideFrame){row0_y, false};
-	if (selected_row < 0)
-		selected_row = 0;
-	if (selected_row >= rows_visible)
-		selected_row = rows_visible - 1;
-	return UI_listGlideDrawAtY(g, screen, list_id,
-							   row0_y + selected_row * item_h,
-							   row0_y, rows_visible * item_h,
-							   item_h, pill_w, allow_anim);
-}
-
 bool UI_listGlideRowSelected(const ListGlideFrame* f, int row_y, int item_h) {
 	return abs(f->pill_y - row_y) * 2 < item_h;
 }
@@ -887,111 +869,4 @@ MenuItemPos UI_renderMenuItemPill(SDL_Surface* screen, ListLayout* layout,
 
 void UI_renderRoundedRectBg(SDL_Surface* screen, int x, int y, int w, int h, uint32_t color) {
 	UI_fillRoundedRect(screen, x, y, w, h, SCALE1(7), color);
-}
-
-// ============================================
-// Generic Simple Menu Rendering
-// ============================================
-
-static ListGlide simple_menu_glide;
-
-bool UI_simpleMenuGlideActive(void) {
-	return UI_listGlideActive(&simple_menu_glide);
-}
-
-void UI_renderSimpleMenu(SDL_Surface* screen, int menu_selected,
-						 const SimpleMenuConfig* config) {
-	GFX_clear(screen);
-	char truncated[256];
-	char label_buffer[256];
-
-	UI_renderMenuBar(screen, config->title);
-	ListLayout layout = UI_calcListLayout(screen);
-
-	int icon_size = SCALE1(24);
-	int icon_spacing = SCALE1(6);
-
-	// Selection glide: size the selected item's pill, then draw the moving
-	// pill BEFORE any row content (rows below pass selected=false to the
-	// pill renderer and tint text by pill position instead).
-	ListGlideFrame glide_frame = {layout.list_y, false};
-	if (config->item_count > 0 && menu_selected >= 0 &&
-		menu_selected < config->item_count) {
-		const char* sel_label =
-			(config->items) ? config->items[menu_selected] : "";
-		if (config->get_label) {
-			const char* custom = config->get_label(
-				menu_selected, sel_label, label_buffer, sizeof(label_buffer));
-			if (custom)
-				sel_label = custom;
-		}
-		int sel_icon_offset = 0;
-		if (config->get_icon && config->get_icon(menu_selected, true))
-			sel_icon_offset = icon_size + icon_spacing;
-		int sel_pill_w = UI_calcListPillWidth(
-			font.large, sel_label, truncated,
-			layout.max_width - sel_icon_offset, sel_icon_offset);
-		// Identity: the items array pointer names the list content; title
-		// string literal is the fallback for get_label-only menus.
-		const void* list_id = config->items ? (const void*)config->items
-											: (const void*)config->title;
-		glide_frame = UI_listGlideDraw(&simple_menu_glide, screen, list_id,
-									   menu_selected, config->item_count,
-									   layout.list_y, SCALE1(PILL_SIZE),
-									   sel_pill_w, true);
-	}
-
-	for (int i = 0; i < config->item_count; i++) {
-		int row_y = layout.list_y + i * SCALE1(PILL_SIZE);
-		// Visual selection follows the pill, not the logical selection.
-		bool row_sel = UI_listGlideRowSelected(&glide_frame, row_y,
-											   SCALE1(PILL_SIZE));
-
-		const char* label = (config->items) ? config->items[i] : "";
-		if (config->get_label) {
-			const char* custom = config->get_label(i, label, label_buffer, sizeof(label_buffer));
-			if (custom)
-				label = custom;
-		}
-
-		SDL_Surface* icon = NULL;
-		int icon_offset = 0;
-		if (config->get_icon) {
-			icon = config->get_icon(i, row_sel);
-			if (icon) {
-				icon_offset = icon_size + icon_spacing;
-			}
-		}
-
-		MenuItemPos pos = UI_renderMenuItemPill(screen, &layout, label, truncated, i, false, icon_offset);
-
-		int text_x = pos.text_x;
-		if (icon) {
-			int icon_y = pos.item_y + (SCALE1(PILL_SIZE) - icon_size) / 2;
-			SDL_Rect src_rect = {0, 0, icon->w, icon->h};
-			SDL_Rect dst_rect = {pos.text_x, icon_y, icon_size, icon_size};
-			SDL_BlitScaled(icon, &src_rect, screen, &dst_rect);
-			text_x += icon_offset;
-		}
-
-		bool custom_rendered = false;
-		if (config->render_text) {
-			custom_rendered = config->render_text(screen, i, row_sel,
-												  text_x, pos.text_y, layout.max_width - icon_offset);
-		}
-		if (!custom_rendered) {
-			UI_renderListItemText(screen, NULL, truncated, font.large,
-								  text_x, pos.text_y, layout.max_width - icon_offset, row_sel);
-		}
-
-		if (config->render_badge) {
-			config->render_badge(screen, i, row_sel, pos.item_y, SCALE1(PILL_SIZE));
-		}
-	}
-
-	const char* a_label = config->btn_a_label ? config->btn_a_label : "OPEN";
-	if (config->hide_controls_hint)
-		UI_renderButtonHintBar(screen, (char*[]){"B", (char*)config->btn_b_label, "A", (char*)a_label, NULL});
-	else
-		UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", (char*)config->btn_b_label, "A", (char*)a_label, NULL});
 }

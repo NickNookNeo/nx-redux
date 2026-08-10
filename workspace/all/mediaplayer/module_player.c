@@ -12,14 +12,15 @@
 #include "display_helper.h"
 #include "ffplay_engine.h"
 #include "ui_player.h"
+#include "ui_listview.h"
 #include "positions.h"
 
-// Browser scroll text state (for selected item marquee)
-static ScrollTextState browser_scroll = {0};
-
-// Helper: load directory into browser context
+// Helper: load directory into browser context. Resets the browser ListView
+// so the new directory starts at row 0 (VideoBrowser_loadDirectory used to
+// zero the context's selection/scroll; the ListView owns them now).
 static void load_video_directory(VideoBrowserContext* browser, const char* path) {
 	VideoBrowser_loadDirectory(browser, path, VIDEO_ROOT);
+	UI_listViewReset(VideoBrowser_view(), browser->entry_count, browser->entries);
 }
 
 // Resume save policy: skip the first seconds (accidental opens), clear near
@@ -109,9 +110,6 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 	mkdir(VIDEO_ROOT, 0755);
 	load_video_directory(&browser, VIDEO_ROOT);
 
-	// Reset browser scroll state
-	memset(&browser_scroll, 0, sizeof(browser_scroll));
-
 	while (1) {
 		GFX_startFrame();
 		PAD_poll();
@@ -129,8 +127,12 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 			continue;
 		}
 
-		// Browser navigation
-		if (PAD_justPressed(BTN_B)) {
+		// Browser navigation: the ListView owns nav (UP/DOWN/pageing/wrap);
+		// the module switches on the actions it reports.
+		ListView* v = VideoBrowser_view();
+		ListViewAction act = UI_listViewHandleInput(v);
+		switch (act.type) {
+		case LISTVIEW_BACK:
 			// Go up or exit to menu
 			if (strcmp(browser.current_path, VIDEO_ROOT) != 0) {
 				// Navigate to parent directory
@@ -149,16 +151,10 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 				VideoBrowser_freeEntries(&browser);
 				return MODULE_EXIT_TO_MENU;
 			}
-		} else if (browser.entry_count > 0) {
-			if (PAD_justRepeated(BTN_UP)) {
-				browser.selected = (browser.selected > 0) ? browser.selected - 1 : browser.entry_count - 1;
-				dirty = 1;
-			} else if (PAD_justRepeated(BTN_DOWN)) {
-				browser.selected = (browser.selected < browser.entry_count - 1) ? browser.selected + 1 : 0;
-				dirty = 1;
-			} else if (PAD_justPressed(BTN_A)) {
-				VideoFileEntry* entry = &browser.entries[browser.selected];
-
+			break;
+		case LISTVIEW_ACTIVATED:
+			if (act.index >= 0 && act.index < browser.entry_count) {
+				VideoFileEntry* entry = &browser.entries[act.index];
 				if (entry->is_dir) {
 					// Open directory (handle ".." parent entry too)
 					char path_copy[512];
@@ -169,43 +165,43 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 				} else {
 					// A: play from the start
 					screen = play_video_file(screen, entry, 0);
-
-					// Reset scroll state and force full redraw
-					memset(&browser_scroll, 0, sizeof(browser_scroll));
-					dirty = 1;
-				}
-			} else if (PAD_justPressed(BTN_X)) {
-				// X: resume from the saved position (files with one only)
-				VideoFileEntry* entry = &browser.entries[browser.selected];
-				int resume_sec = entry->is_dir ? 0 : Positions_get(entry->path);
-				if (resume_sec > 0) {
-					screen = play_video_file(screen, entry, resume_sec);
-					memset(&browser_scroll, 0, sizeof(browser_scroll));
+					// Force full redraw and clear the stale marquee layer
+					GFX_clearLayers(LAYER_SCROLLTEXT);
 					dirty = 1;
 				}
 			}
-		}
-
-		// Animate browser scroll text (GPU mode)
-		if (ScrollText_isScrolling(&browser_scroll)) {
-			ScrollText_animateOnly(&browser_scroll);
-		}
-		if (ScrollText_needsRender(&browser_scroll)) {
-			dirty = 1;
+			break;
+		case LISTVIEW_BUTTON:
+			// X: resume from the saved position (files with one only)
+			if (act.btn == BTN_X && act.index >= 0 && act.index < browser.entry_count) {
+				VideoFileEntry* entry = &browser.entries[act.index];
+				int resume_sec = entry->is_dir ? 0 : Positions_get(entry->path);
+				if (resume_sec > 0) {
+					screen = play_video_file(screen, entry, resume_sec);
+					GFX_clearLayers(LAYER_SCROLLTEXT);
+					dirty = 1;
+				}
+			}
+			break;
+		default:
+			break;
 		}
 
 		// Handle power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render (keep redrawing while the selection pill glides)
-		if (dirty || browser_glide_active()) {
-			VideoFileEntry* sel = (browser.entry_count > 0) ? &browser.entries[browser.selected] : NULL;
+		// Render. The busy check keeps the dirty-flag loop redrawing while the
+		// selection pill glides or the marquee needs a main-surface render.
+		if (dirty || UI_listViewBusy(v)) {
+			VideoFileEntry* sel = (browser.entry_count > 0) ? &browser.entries[v->selected] : NULL;
 			int resume_sec = (sel && !sel->is_dir) ? Positions_get(sel->path) : 0;
-			render_video_browser(screen, show_setting, &browser, &browser_scroll, resume_sec);
+			render_video_browser(screen, show_setting, &browser, resume_sec);
 
 			GFX_flip(screen);
 			dirty = 0;
 		} else {
+			// Idle marquee tick (activate-after-delay + steady GPU scroll).
+			UI_listViewTickIdle(v);
 			GFX_sync();
 		}
 	}

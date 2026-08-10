@@ -31,8 +31,8 @@
 #include "ui_confirmdialog.h"
 #include "ui_downloadprogress.h"
 #include "ui_draw.h" // UI_renderCenteredButtons (draw_result_dialog)
-#include "ui_emptystate.h"
 #include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_menubar.h"
 #include "ui_message.h"
 #include "ui_splash.h"
@@ -361,9 +361,9 @@ static void build_tab_rows(AddonTab tab, TabRows* rows) {
 // the segments themselves (not full screen width); the active segment is a
 // smaller THEME_COLOR1 pill inset within the strip, same "bright selection"
 // family + text color (UI_getListTextColor) an entry row's own selected
-// pill uses; the inactive segment is plain text in the dim color
-// render_section_header uses for "Installed", sitting directly on the
-// strip with no background of its own.
+// pill uses; the inactive segment is plain text in the dim gray the shared
+// ListView's section-header rows use for "Installed", sitting directly on
+// the strip with no background of its own.
 //
 // Both the strip and the active pill are drawn with UI_renderRoundedRectBg
 // (a vector-drawn rounded rect, precise at any size) rather than the
@@ -389,8 +389,8 @@ static int render_tab_bar(SDL_Surface* screen, ListLayout* layout, AddonTab acti
 	// - "hugs the tabs", not full list width. UI_calcListPillWidth's own
 	// truncated-text buffer must stay sized 256 regardless of TAB_LABEL's
 	// short length (its internal strncpy(...,255) always writes the full
-	// 255+NUL - see the badge-reservation fix in render_entry_row for the
-	// stack-overflow this exact gotcha caused there).
+	// 255+NUL - this exact gotcha once caused a stack overflow in the old
+	// bespoke entry-row renderer's badge-reservation path).
 	int cell_w[TAB_COUNT];
 	char cell_text[TAB_COUNT][256];
 	int total_w = 0;
@@ -411,7 +411,7 @@ static int render_tab_bar(SDL_Surface* screen, ListLayout* layout, AddonTab acti
 		}
 
 		// Active label: same bright "selected" text color an entry row's own
-		// pill uses. Inactive label: the dim gray render_section_header uses
+		// pill uses. Inactive label: the dim gray a section-header row uses
 		// for "Installed" (COLOR_GRAY) - NOT UI_getListTextColor(false),
 		// which returns THEME_COLOR4 (the ordinary unselected list-row
 		// color, not this dim one) and made the inactive tab read as bright
@@ -430,265 +430,241 @@ static int render_tab_bar(SDL_Surface* screen, ListLayout* layout, AddonTab acti
 	return y + layout->item_h + SCALE1(PADDING);
 }
 
-// Non-selectable section header row ("Installed"): small, dim text with no
-// pill background so it reads clearly as a label rather than a selectable
-// item. Half the height of an entry row - one line of font.small doesn't
-// need a full pill's worth of vertical breathing room. Mirrors ratools.c's
-// render_main_header()/render_main_list() split (a non-selectable status
-// blit ahead of the selectable pill list, sharing the same
-// PADDING/BUTTON_PADDING x so everything lines up). Same function Task 8
-// used for the (now superseded-by-tabs) inline "GAMES"/"TOOLS" headers -
-// only the call site/label changed.
-static int render_section_header(SDL_Surface* screen, ListLayout* layout,
-								 const char* label, int y) {
-	int h = layout->item_h / 2;
-	SDL_Surface* surf = TTF_RenderUTF8_Blended(font.small, label, COLOR_GRAY);
-	if (surf) {
-		int x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
-		SDL_BlitSurface(surf, NULL, screen, &(SDL_Rect){x, y + (h - surf->h) / 2, 0, 0});
-		SDL_FreeSurface(surf);
-	}
-	return y + h;
+// Shared-ListView row model (Task 17): the widget's rows are the TabRows
+// entries PLUS synthesized section-header rows, interleaved in display
+// order:
+//   [not-installed...] ["Update Available"] [update...] ["Installed"] [installed...]
+// A header only exists when its group is non-empty (update_start ==
+// installed_start when nothing is updatable; installed_start == count when
+// nothing is current). The widget's `selected` and every ListViewAction
+// index are WIDGET-row indices - convert with extras_widget_to_entry /
+// extras_entry_to_widget at the A-press and every relocate-after-regroup
+// site; headers themselves are never selectable (the widget skips them).
+static int extras_h1(const TabRows* r) { // header before the update group?
+	return r->update_start < r->installed_start ? 1 : 0;
+}
+static int extras_h2(const TabRows* r) { // header before the installed group?
+	return r->installed_start < r->count ? 1 : 0;
+}
+static int extras_widget_count(const TabRows* r) {
+	return r->count + extras_h1(r) + extras_h2(r);
+}
+static int extras_h1_pos(const TabRows* r) {
+	return r->update_start;
+}
+static int extras_h2_pos(const TabRows* r) {
+	return r->installed_start + extras_h1(r);
+}
+// widget row -> TabRows entry index (-1 for a header row)
+static int extras_widget_to_entry(const TabRows* r, int wi) {
+	if (extras_h1(r) && wi == extras_h1_pos(r))
+		return -1;
+	if (extras_h2(r) && wi == extras_h2_pos(r))
+		return -1;
+	int ei = wi;
+	if (extras_h1(r) && wi > extras_h1_pos(r))
+		ei--;
+	if (extras_h2(r) && wi > extras_h2_pos(r))
+		ei--;
+	return ei;
+}
+// TabRows entry index -> widget row
+static int extras_entry_to_widget(const TabRows* r, int ei) {
+	int wi = ei;
+	if (extras_h1(r) && ei >= r->update_start)
+		wi++;
+	if (extras_h2(r) && ei >= r->installed_start)
+		wi++;
+	return wi;
 }
 
-// Selectable entry row, built from the same stateless pill primitives
-// UI_renderSimpleMenu itself uses (UI_renderListItemPill for the pill
-// background + text position, UI_renderListItemText for the clipped/
-// scrolling label) - just driven by an explicit running y instead of a flat
-// item index, so a header row can sit between groups without perturbing any
-// entry's position math. No name suffixes or badges: the group an entry
-// sits in ("Update Available"/"Installed" section headers) already says
-// everything the old right-aligned "update" marker said (user feedback
-// 2026-08-10 - the marker was redundant once the group existed).
-static int render_entry_row(SDL_Surface* screen, ListLayout* layout,
-							const AddonEntry* e, int y, const ListGlideFrame* gf) {
-	char truncated[256];
-	// selected=false always: the animated selection pill is drawn once per
-	// frame by UI_listGlideDrawAtY (before the row loop), not per row. Only
-	// the text tint follows the pill, flipping to the selected colour on
-	// whichever row the pill currently covers.
-	ListItemPos pos = UI_renderListItemPill(screen, layout, font.large, e->name,
-											truncated, y, false, 0);
-	bool row_sel = UI_listGlideRowSelected(gf, y, layout->item_h);
-	int text_w = pos.pill_width - SCALE1(BUTTON_PADDING * 2);
-	UI_renderListItemText(screen, NULL, truncated, font.large,
-						  pos.text_x, pos.text_y, text_w, row_sel);
-	return y + layout->item_h;
-}
+typedef struct {
+	const TabRows* rows;
+} ExtrasListCtx;
+static ExtrasListCtx extras_ctx;
+static ListView extras_view;
 
-// Selection-pill glide state for the catalog list (Task 9 of the list-glide
-// rollout). One TabRows instance lives on run_list's stack and is rebuilt IN
-// PLACE by build_tab_rows() on every tab switch/regroup, so its address (and
-// rows->indices) is identical across tabs - pointer identity can't detect a
-// tab switch here. Instead glide_last_tab remembers which tab the previous
-// frame drew and a mismatch forces a snap via allow_anim=false.
-// glide_last_selected remembers the previously drawn selection so an
-// adjacent-row step can be told apart from a wrap/relocation jump (see the
-// header-crossing comment in render_extras_list).
-static ListGlide extras_glide;
-static int glide_last_tab = -1;		 // AddonTab drawn last frame; -1 = never
-static int glide_last_selected = -1; // rows index drawn last frame; -1 = none
-
-// For run_list's dirty loop: keep redrawing while the pill is mid-glide.
-static bool Extras_listGlideActive(void) {
-	return UI_listGlideActive(&extras_glide);
-}
-
-// selected indexes rows->indices (0..rows->count-1) - never entries[]
-// directly, and never a header row, since build_tab_rows() above already
-// leaves headers out of the row list entirely. "Skip headers" falls out of
-// that for free in run_list()'s PAD navigation rather than needing
-// dedicated logic here, same as Task 8's approach to the inline headers it
-// superseded.
-static void render_extras_list(SDL_Surface* screen, AddonTab active_tab, int selected, const TabRows* rows) {
-	UI_renderMenuBar(screen, "Xtras");
-	ListLayout layout = UI_calcListLayout(screen);
-	layout.list_y = render_tab_bar(screen, &layout, active_tab);
-
-	bool allow_anim = ((int)active_tab == glide_last_tab);
-	glide_last_tab = (int)active_tab;
-
-	if (rows->count == 0) {
-		UI_renderEmptyState(screen, "Nothing here yet", NULL, NULL);
-		glide_last_selected = -1;
+// No name suffixes or badges: the group an entry sits in ("Update
+// Available"/"Installed" section headers) already says everything the old
+// right-aligned "update" marker said (user feedback 2026-08-10 - the marker
+// was redundant once the group existed).
+static void extras_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	(void)selected;
+	const TabRows* r = ((ExtrasListCtx*)ctx)->rows;
+	if (extras_h1(r) && i == extras_h1_pos(r)) {
+		out->is_header = true;
+		out->label = "Update Available";
 		return;
 	}
-
-	// Pre-pass: mirror the render pass's exact y-advance (entry rows advance
-	// item_h; a header row advances item_h/2 for render_section_header's own
-	// height plus the item_h/4 breathing gap its call site adds) to find the
-	// selected row's y and the band the pill may occupy - rows sit at
-	// irregular y here, so the uniform-row glide wrapper doesn't apply.
-	int sel_y = layout.list_y, band_y = layout.list_y;
-	int yy = layout.list_y;
-	for (int i = 0; i < rows->count; i++) {
-		if (i == rows->update_start && rows->update_start < rows->installed_start)
-			yy += layout.item_h / 2 + layout.item_h / 4;
-		if (i == rows->installed_start)
-			yy += layout.item_h / 2 + layout.item_h / 4;
-		if (i == 0)
-			band_y = yy; // band starts at the first ENTRY row, past any header
-		if (i == selected)
-			sel_y = yy;
-		yy += layout.item_h;
+	if (extras_h2(r) && i == extras_h2_pos(r)) {
+		out->is_header = true;
+		out->label = "Installed";
+		return;
 	}
-	int band_h = yy - band_y;
+	out->label = entries[r->indices[extras_widget_to_entry(r, i)]].name;
+}
 
-	// Same width the selected row's own UI_renderListItemPill computes.
-	char sel_trunc[256];
-	int sel_pill_w = UI_calcListPillWidth(font.large, entries[rows->indices[selected]].name,
-										  sel_trunc, layout.max_width, 0);
+// Tab bar/menu bar chrome stays app-drawn (title=NULL keeps the widget out
+// of the menu bar); the list band starts where the tab bar ends, passed via
+// list_y_override. list_id = TAB_LABEL[active_tab] gives each tab a static
+// identity, so a tab switch snaps the glide/marquee inside the widget - the
+// old glide_last_tab hack is gone, as is the bespoke adjacent-step-across-
+// header pre-target (the widget's internal pre-target handles it, including
+// the index-distance-2 adjacency headers-as-rows creates, via its
+// adjacent_selectable walk).
+static void render_extras_list(SDL_Surface* screen, AddonTab active_tab, const TabRows* rows) {
+	UI_renderMenuBar(screen, "Xtras");
+	ListLayout layout = UI_calcListLayout(screen);
+	// Function-scope arrays: hint_pairs must outlive the UI_listViewRender
+	// call below, so a branch-scoped compound literal would be UB (see
+	// ui_listview.h).
+	char* hints_full[] = {"L1/R1", "TAB", "B", "EXIT", "A", "DETAILS", NULL};
+	char* hints_empty[] = {"L1/R1", "TAB", "B", "EXIT", NULL};
 
-	// Header-crossing steps: an ADJACENT selection step across a section
-	// header travels item_h * 7/4 - more than the core's one-row jump
-	// threshold - so left alone the helper would treat it as a wrap/page
-	// jump and edge-enter (teleport ~3/4 row, then glide the last row). An
-	// adjacent step should read as continuous travel, so when the previous
-	// drawn selection is exactly one row away, pre-target the underlying
-	// pill anim from its true current position and mark the target as
-	// already-seen (prev_target_y) - UI_listGlideDrawAtY then just ticks,
-	// gliding the real pixel distance across the header. Wraps and detail-
-	// screen relocations move by more than one INDEX, miss this branch, and
-	// keep the core's edge-entry look.
-	const void* list_id = (const void*)rows;
-	if (allow_anim && list_id == extras_glide.list_id &&
-		!UI_listGlideActive(&extras_glide) &&
-		glide_last_selected >= 0 && abs(selected - glide_last_selected) == 1 &&
-		sel_y != extras_glide.prev_target_y &&
-		abs(sel_y - extras_glide.anim.current_y) > layout.item_h) {
-		UI_pillAnimSetTarget(&extras_glide.anim, sel_y, sel_pill_w, true);
-		extras_glide.prev_target_y = sel_y;
-	}
-	glide_last_selected = selected;
-
-	ListGlideFrame gf = UI_listGlideDrawAtY(&extras_glide, screen, list_id,
-											sel_y, band_y, band_h,
-											layout.item_h, sel_pill_w, allow_anim);
-
-	int y = layout.list_y;
-	for (int i = 0; i < rows->count; i++) {
-		// Headers sat flush against the pill right below them; a quarter
-		// item height of breathing room reads right on device (half was too
-		// much - user feedback 2026-08-08). The update_start header only
-		// draws when its group is non-empty (update_start ==
-		// installed_start when nothing is updatable); installed_start ==
-		// count when nothing is current needs no guard - the loop never
-		// reaches it.
-		if (i == rows->update_start && rows->update_start < rows->installed_start)
-			y = render_section_header(screen, &layout, "Update Available", y) + layout.item_h / 4;
-		if (i == rows->installed_start)
-			y = render_section_header(screen, &layout, "Installed", y) + layout.item_h / 4;
-		y = render_entry_row(screen, &layout, &entries[rows->indices[i]], y, &gf);
-	}
+	extras_ctx.rows = rows;
+	extras_view.title = NULL;
+	extras_view.font = font.large;
+	extras_view.count = extras_widget_count(rows);
+	extras_view.get_row = extras_get_row;
+	extras_view.ctx = &extras_ctx;
+	extras_view.list_id = TAB_LABEL[active_tab];
+	extras_view.empty_title = "Nothing here yet";
+	extras_view.list_y_override = render_tab_bar(screen, &layout, active_tab);
+	// L1/R1 leads the bar (user preference 2026-08-08), then B, then A.
+	// Always shown, even on an empty tab (v1 ships with TOOLS empty) -
+	// otherwise the tab switcher's only remaining discoverability hint (see
+	// run_list's own comment below) disappears exactly when a user most
+	// needs it, on the one screen with nothing else to look at. A/DETAILS
+	// only makes sense once there's a row to select.
+	if (rows->count)
+		extras_view.hint_pairs = hints_full;
+	else
+		extras_view.hint_pairs = hints_empty;
+	UI_listViewRender(&extras_view, screen);
 }
 
 static int run_detail(AddonEntry* e); // Task 4; returns 1 if install state changed
 
-// GFX_startFrame/PWR_update/UI_statusBarChanged and PAD_navigateMenu (rather
-// than hand-rolled BTN_UP/BTN_DOWN math) match every other pak-tool loop in
-// this tree (options.c's run_editor/run_picker, netplay-wizard's pickers) —
-// PWR_update still has to run every frame so the power button and battery/
-// clock status bar work here same as anywhere else, even though sleep/
-// autosleep/power-off themselves are held off for the whole session.
+// GFX_startFrame/PWR_update/UI_statusBarChanged and the shared ListView's
+// UI_listViewHandleInput (rather than hand-rolled BTN_UP/BTN_DOWN math)
+// match every other migrated pak-tool loop in this tree — PWR_update still
+// has to run every frame so the power button and battery/clock status bar
+// work here same as anywhere else, even though sleep/autosleep/power-off
+// themselves are held off for the whole session.
 //
-// `selected` is scoped to the ACTIVE tab's rows (0..rows.count-1), not a
-// global entries[] index - build_tab_rows() gives each tab its own
-// available/installed ordering, so "which entry is selected" only makes
-// sense relative to whichever tab is currently showing. Switching tabs
-// (L1/R1) resets it to 0 (first entry) rather than trying to carry a
-// position across two differently-ordered/differently-sized row lists; no
-// other nx-redux pak has an established L1/R1 tab-switch convention to
-// follow (checked gametime/scraper/musicplayer - their L1/R1 uses are
-// alpha-jump and value-step, not tab switching), so plain "either shoulder
-// button flips the tab" is used here - exactly two tabs makes wrap and
-// clamp the same thing anyway. Task 13 adds an "L1/R1"/"TAB" hint to the
-// bar below (user feedback: the switch wasn't discoverable) - one combined
-// button-pill hint ("L1/R1" as the button label, GFX_blitButton renders any
-// >1-char button string as a text pill rather than two separate circular
-// buttons) rather than two separate {L1,"..."}/{R1,"..."} pairs, since
-// UI_renderButtonHintBar caps at 4 total pairs and doesn't clip pixel
-// overflow past dst->w on its own - measured against the real theme font
-// (both device point sizes) before picking this: three pairs (B EXIT / A
-// DETAILS / L1/R1 TAB) sum to ~577px on the Brick's 1024px-wide bar and
-// ~387px on tg5050's 1280px - comfortable margin on both, see the report.
+// The widget owns the selection (extras_view.selected), and it is a
+// WIDGET-row index scoped to the ACTIVE tab's rows-plus-headers - not a
+// global entries[] index - so every read/write below goes through
+// extras_widget_to_entry/extras_entry_to_widget. Switching tabs (L1/R1)
+// resets it via UI_listViewReset (selected=0 may land on a header; the
+// widget clamps to the first selectable row, i.e. the first entry - same
+// as the old selected=0-of-entries) rather than trying to carry a position
+// across two differently-ordered/differently-sized row lists; no other
+// nx-redux pak has an established L1/R1 tab-switch convention to follow
+// (checked gametime/scraper/musicplayer - their L1/R1 uses are alpha-jump
+// and value-step, not tab switching), so plain "either shoulder button
+// flips the tab" is used here - exactly two tabs makes wrap and clamp the
+// same thing anyway. L1/R1 stays app-polled: the widget has no shoulder-
+// button vocabulary. Task 13 added the "L1/R1"/"TAB" hint (user feedback:
+// the switch wasn't discoverable) - one combined button-pill hint ("L1/R1"
+// as the button label, GFX_blitButton renders any >1-char button string as
+// a text pill rather than two separate circular buttons) rather than two
+// separate {L1,"..."}/{R1,"..."} pairs, since UI_renderButtonHintBar caps
+// at 4 total pairs and doesn't clip pixel overflow past dst->w on its own -
+// measured against the real theme font (both device point sizes) before
+// picking this: three pairs (B EXIT / A DETAILS / L1/R1 TAB) sum to ~577px
+// on the Brick's 1024px-wide bar and ~387px on tg5050's 1280px -
+// comfortable margin on both, see the Task 13 report.
 static void run_list(void) {
 	AddonTab active_tab = TAB_GAMES;
-	int selected = 0;
 	TabRows rows;
 	build_tab_rows(active_tab, &rows);
+	// Wire the provider before the first HandleInput (which runs before the
+	// first render this frame) so header-skip probes see real rows.
+	extras_ctx.rows = &rows;
+	extras_view.get_row = extras_get_row;
+	extras_view.ctx = &extras_ctx;
+	UI_listViewReset(&extras_view, extras_widget_count(&rows), TAB_LABEL[active_tab]);
 	bool dirty = true;
 	IndicatorType show_setting = INDICATOR_NONE;
 	while (1) {
 		GFX_startFrame();
 		PAD_poll();
-		if (PAD_justPressed(BTN_B))
-			break;
 		if (PAD_justPressed(BTN_L1) || PAD_justPressed(BTN_R1)) {
 			active_tab = (active_tab == TAB_GAMES) ? TAB_TOOLS : TAB_GAMES;
 			build_tab_rows(active_tab, &rows);
-			selected = 0;
+			UI_listViewReset(&extras_view, extras_widget_count(&rows), TAB_LABEL[active_tab]);
 			dirty = true;
 		}
 		// Background latest-check finished: pull the fresh caches into
 		// entries[] and regroup - rows may shuffle into/out of the "Update
-		// Available" group, so clamp the selection rather than letting it
-		// dangle past the (unchanged-length, but regrouped) list.
+		// Available" group, so keep the selection at the same (clamped)
+		// entry position rather than letting it dangle past the
+		// (unchanged-length, but regrouped) list. Reset-then-assign: the
+		// widget count may change even when rows.count doesn't (headers
+		// appear/disappear with their groups).
 		if (latest_check_done) {
 			latest_check_done = 0;
+			int sel_entry = extras_widget_to_entry(&rows, extras_view.selected);
 			for (int i = 0; i < entry_count; i++)
 				read_latest(&entries[i]);
 			build_tab_rows(active_tab, &rows);
-			if (selected >= rows.count)
-				selected = rows.count ? rows.count - 1 : 0;
+			if (sel_entry < 0)
+				sel_entry = 0;
+			if (sel_entry >= rows.count)
+				sel_entry = rows.count ? rows.count - 1 : 0;
+			UI_listViewReset(&extras_view, extras_widget_count(&rows), TAB_LABEL[active_tab]);
+			if (rows.count)
+				extras_view.selected = extras_entry_to_widget(&rows, sel_entry);
 			dirty = true;
 		}
-		if (PAD_navigateMenu(&selected, rows.count))
-			dirty = true;
-		if (PAD_justPressed(BTN_A) && rows.count) {
-			AddonEntry* e = &entries[rows.indices[selected]];
+		ListViewAction act = UI_listViewHandleInput(&extras_view);
+		if (act.type == LISTVIEW_BACK)
+			break;
+		if (act.type == LISTVIEW_ACTIVATED) {
+			// act.index is a widget row; ACTIVATED is never a header row.
+			AddonEntry* e = &entries[rows.indices[extras_widget_to_entry(&rows, act.index)]];
+			// A long entry name's marquee band (LAYER_SCROLLTEXT) must not
+			// bleed over the detail screen.
+			GFX_clearLayers(LAYER_SCROLLTEXT);
 			if (run_detail(e)) {
 				// The entry just acted on may move from the not-installed
 				// group to Installed (or back) once rows are rebuilt below
 				// - re-locate it by id so the selection stays on the same
 				// entry instead of landing on whatever unrelated row now
-				// occupies index `selected` in the regrouped list.
+				// occupies the same index in the regrouped list.
+				// Reset-then-assign, as everywhere a regroup moves rows.
 				char id[64];
 				snprintf(id, sizeof(id), "%s", e->id);
 				catalog_load();
 				build_tab_rows(active_tab, &rows);
-				selected = 0;
+				int found = 0;
 				for (int i = 0; i < rows.count; i++) {
 					if (!strcmp(entries[rows.indices[i]].id, id)) {
-						selected = i;
+						found = i;
 						break;
 					}
 				}
+				UI_listViewReset(&extras_view, extras_widget_count(&rows), TAB_LABEL[active_tab]);
+				if (rows.count)
+					extras_view.selected = extras_entry_to_widget(&rows, found);
 			}
 			dirty = true;
 		}
 		if (UI_statusBarChanged())
 			dirty = true;
-		if (Extras_listGlideActive())
+		if (UI_listViewBusy(&extras_view))
 			dirty = true;
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(screen);
-			render_extras_list(screen, active_tab, selected, &rows);
-			// L1/R1 leads the bar (user preference 2026-08-08), then B, then A.
-			// Always shown, even on an empty tab (v1 ships with TOOLS empty) -
-			// otherwise the tab switcher's only remaining discoverability
-			// hint (see run_list's own comment above) disappears exactly
-			// when a user most needs it, on the one screen with nothing else
-			// to look at. A/DETAILS only makes sense once there's a row to
-			// select.
-			if (rows.count)
-				UI_renderButtonHintBar(screen, (char*[]){"L1/R1", "TAB", "B", "EXIT", "A", "DETAILS", NULL});
-			else
-				UI_renderButtonHintBar(screen, (char*[]){"L1/R1", "TAB", "B", "EXIT", NULL});
+			render_extras_list(screen, active_tab, &rows);
 			GFX_flip(screen);
 			dirty = false;
-		} else
+		} else {
+			UI_listViewTickIdle(&extras_view);
 			GFX_sync();
+		}
 	}
 }
 

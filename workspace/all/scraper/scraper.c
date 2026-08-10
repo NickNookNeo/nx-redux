@@ -18,6 +18,7 @@
 #include "ui_splash.h"
 #include "ui_quitrequest.h"
 #include "ui_list.h"
+#include "ui_listview.h"
 #include "utils.h"
 
 #include "scraper_api.h"
@@ -142,16 +143,13 @@ static ScreenState current_screen = SCREEN_MAIN_MENU;
 
 static SystemEntry systems[MAX_SYSTEMS];
 static int system_count = 0;
-static int system_selected = 0;
-static int system_scroll = 0;
-static ListGlide systems_glide; // selection-pill glide for SCREEN_SYSTEMS
+static ListView systems_view;
+static char systems_badge_buf[64];
 
 static ROMEntry roms[MAX_ROMS];
 static int rom_count = 0;
 static int rom_selected = 0;
 static int rom_scroll = 0;
-
-static int menu_selected = 0;
 
 static int progress_selected = 0;
 static int progress_scroll = 0;
@@ -435,7 +433,7 @@ static int queueAddAllSystems(void) {
 
 	// Restore ROM list for current system if we were viewing one
 	if (current_screen == SCREEN_ROMS) {
-		scanROMs(&systems[system_selected]);
+		scanROMs(&systems[systems_view.selected]);
 		rom_selected = saved_rom_selected;
 		rom_scroll = saved_rom_scroll;
 	} else {
@@ -599,125 +597,75 @@ static const char* romStatusLabel(ROMEntry* rom) {
 // SCREEN_MAIN_MENU
 // ============================================
 
-static void renderMainMenuBadge(SDL_Surface* dst, int index, bool selected,
-								int item_y, int item_h) {
-	if (index != 1)
-		return; // Only badge on "Progress"
+static ListView main_menu_view;
+static const char* main_menu_items[] = {"Library", "Progress", "Settings"};
+static char progress_badge_buf[32];
 
-	int done, total, failed;
-	queueGetStats(&done, &total, &failed);
-	if (total == 0)
-		return;
-
-	char badge[32];
-	snprintf(badge, sizeof(badge), "%d/%d", done, total);
-
-	int tw = 0, th = 0;
-	TTF_SizeUTF8(font.tiny, badge, &tw, &th);
-
-	SDL_Color color = selected ? COLOR_WHITE : COLOR_GRAY;
-	int x = dst->w - SCALE1(PADDING) - tw - SCALE1(PADDING);
-	int y = item_y + (item_h - th) / 2;
-	GFX_blitText(font.tiny, badge, 0, color, dst, &(SDL_Rect){x, y, tw, th});
+static void main_menu_get_row(void* ctx, int i, bool selected,
+							  ListViewRow* out) {
+	(void)ctx;
+	(void)selected;
+	out->label = main_menu_items[i];
+	if (i == 1) {
+		int done, total, failed;
+		queueGetStats(&done, &total, &failed);
+		if (total > 0) {
+			snprintf(progress_badge_buf, sizeof(progress_badge_buf), "%d/%d",
+					 done, total);
+			out->annotation = progress_badge_buf;
+		}
+	}
 }
 
 static void renderMainMenu(void) {
 	GFX_clear(screen);
-
-	SimpleMenuConfig config = {
-		.title = "Artwork Manager",
-		.items = (const char*[]){"Library", "Progress", "Settings"},
-		.item_count = 3,
-		.btn_b_label = "EXIT",
-		.render_badge = renderMainMenuBadge,
-		.get_label = NULL,
-		.get_icon = NULL,
-		.render_text = NULL,
-		.hide_controls_hint = true,
-	};
-	UI_renderSimpleMenu(screen, menu_selected, &config);
+	ListView* v = &main_menu_view;
+	v->title = "Artwork Manager";
+	v->font = font.large;
+	v->count = 3;
+	v->get_row = main_menu_get_row;
+	v->ctx = NULL;
+	v->list_id = (const void*)main_menu_items;
+	v->hint_pairs = (char*[]){"B", "EXIT", "A", "OPEN", NULL};
+	UI_listViewRender(v, screen);
 	GFX_flip(screen);
 }
 
 // ============================================
-// SCREEN_SYSTEMS (pill-style, mostly unchanged)
+// SCREEN_SYSTEMS (full-mode ListView; in-pill %d/%d badge)
 // ============================================
+
+static void systems_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	(void)ctx;
+	(void)selected;
+	SystemEntry* sys = &systems[i];
+	out->label = sys->name;
+	snprintf(systems_badge_buf, sizeof(systems_badge_buf), "%d/%d",
+			 sys->scraped_count, sys->rom_count);
+	out->badge = systems_badge_buf;
+}
 
 static void renderSystemList(void) {
 	GFX_clear(screen);
-
-	UI_renderMenuBar(screen, "Artwork Manager | Library");
-
-	if (system_count == 0) {
-		UI_renderEmptyState(screen, "No supported systems found",
-							"Add ROMs to your SD card", NULL);
-		UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", NULL});
-		GFX_flip(screen);
-		return;
-	}
-
-	ListLayout layout = UI_calcListLayout(screen);
-	UI_adjustListScroll(system_selected, &system_scroll, layout.items_per_page);
-
-	// Selection glide: size the selected pill, draw the moving pill BEFORE
-	// row content; rows pass selected=false and tint by pill position. The
-	// %d/%d badge is a pill prefix, so the pre-pass computes the selected
-	// row's prefix the same way the row loop does (font.tiny badge width +
-	// PADDING) and hands it to UI_calcListPillWidth.
-	int rows = layout.items_per_page;
-	if (system_scroll + rows > system_count)
-		rows = system_count - system_scroll;
-	SystemEntry* sel_sys = &systems[system_selected];
-	char sel_badge[64];
-	snprintf(sel_badge, sizeof(sel_badge), "%d/%d",
-			 sel_sys->scraped_count, sel_sys->rom_count);
-	int sel_badge_tw = 0, sel_badge_th = 0;
-	TTF_SizeUTF8(font.tiny, sel_badge, &sel_badge_tw, &sel_badge_th);
-	int sel_badge_prefix = sel_badge_tw + SCALE1(PADDING);
-	char sel_trunc[256];
-	int sel_pill_w = UI_calcListPillWidth(font.large, sel_sys->name, sel_trunc,
-										  layout.max_width, sel_badge_prefix);
-	ListGlideFrame gf = UI_listGlideDraw(&systems_glide, screen,
-										 (const void*)systems,
-										 system_selected - system_scroll, rows,
-										 layout.list_y, layout.item_h,
-										 sel_pill_w, true);
-
-	for (int i = 0; i < layout.items_per_page && (system_scroll + i) < system_count; i++) {
-		int idx = system_scroll + i;
-		SystemEntry* sys = &systems[idx];
-
-		char label[256];
-		snprintf(label, sizeof(label), "%s", sys->name);
-
-		char truncated[256];
-		int y = layout.list_y + i * layout.item_h;
-		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
-
-		char badge[64];
-		snprintf(badge, sizeof(badge), "%d/%d", sys->scraped_count, sys->rom_count);
-		int badge_tw = 0, badge_th = 0;
-		TTF_SizeUTF8(font.tiny, badge, &badge_tw, &badge_th);
-		int badge_prefix = badge_tw + SCALE1(PADDING);
-
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.large,
-												label, truncated, y, false, badge_prefix);
-
-		SDL_Color text_color = UI_getListTextColor(row_sel);
-		SDL_Surface* text_surf = TTF_RenderUTF8_Blended(font.large, truncated, text_color);
-		if (text_surf) {
-			SDL_BlitSurface(text_surf, NULL, screen, &(SDL_Rect){pos.text_x, pos.text_y, 0, 0});
-			SDL_FreeSurface(text_surf);
-		}
-
-		SDL_Color badge_color = row_sel ? COLOR_BLACK : COLOR_GRAY;
-		int badge_x = pos.pill_width - SCALE1(PADDING) - badge_tw;
-		GFX_blitText(font.tiny, badge, 0, badge_color, screen,
-					 &(SDL_Rect){badge_x, pos.text_y + SCALE1(2), badge_tw, badge_th});
-	}
-
-	UI_renderScrollIndicators(screen, system_scroll, layout.items_per_page, system_count);
-	UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "Y", "QUEUE ALL", "A", "OPEN", NULL});
+	// Function-scope arrays: hint_pairs must outlive the UI_listViewRender
+	// call below, so a branch-scoped compound literal would be UB (see
+	// ui_listview.h).
+	char* hints_full[] = {"B", "BACK", "Y", "QUEUE ALL", "A", "OPEN", NULL};
+	char* hints_empty[] = {"B", "BACK", NULL};
+	ListView* v = &systems_view;
+	v->title = "Artwork Manager | Library";
+	v->font = font.large;
+	v->count = system_count;
+	v->get_row = systems_get_row;
+	v->ctx = NULL;
+	v->list_id = (const void*)systems;
+	v->empty_title = "No supported systems found";
+	v->empty_subtitle = "Add ROMs to your SD card";
+	if (system_count > 0)
+		v->hint_pairs = hints_full;
+	else
+		v->hint_pairs = hints_empty;
+	UI_listViewRender(v, screen);
 	GFX_flip(screen);
 }
 
@@ -728,7 +676,7 @@ static void renderSystemList(void) {
 static void renderROMList(void) {
 	GFX_clear(screen);
 
-	SystemEntry* sys = &systems[system_selected];
+	SystemEntry* sys = &systems[systems_view.selected];
 	UI_renderMenuBar(screen, sys->name);
 
 	if (rom_count == 0) {
@@ -963,6 +911,10 @@ int main(int argc, char* argv[]) {
 	mkdir_p(TMP_DIR);
 	scanSystems();
 
+	// Cold-start the main-menu ListView; selection persists across screen
+	// changes thereafter (static view), matching the old module-static index.
+	UI_listViewReset(&main_menu_view, 3, main_menu_items);
+
 	bool dirty = true;
 	IndicatorType show_setting = INDICATOR_NONE;
 
@@ -983,20 +935,16 @@ int main(int argc, char* argv[]) {
 
 		switch (current_screen) {
 		case SCREEN_MAIN_MENU: {
-			if (PAD_justPressed(BTN_B)) {
+			ListViewAction act = UI_listViewHandleInput(&main_menu_view);
+			if (act.type == LISTVIEW_BACK) {
 				app_quit = true;
 				break;
 			}
-
-			if (PAD_navigateMenu(&menu_selected, 3))
-				dirty = true;
-
-			if (PAD_justPressed(BTN_A)) {
-				switch (menu_selected) {
+			if (act.type == LISTVIEW_ACTIVATED) {
+				switch (act.index) {
 				case 0: // Library
 					current_screen = SCREEN_SYSTEMS;
-					system_selected = 0;
-					system_scroll = 0;
+					UI_listViewReset(&systems_view, system_count, systems);
 					dirty = true;
 					break;
 				case 1: // Progress
@@ -1022,23 +970,24 @@ int main(int argc, char* argv[]) {
 			break;
 		}
 		case SCREEN_SYSTEMS: {
-			if (PAD_justPressed(BTN_B)) {
+			ListViewAction act = UI_listViewHandleInput(&systems_view);
+			if (act.type == LISTVIEW_BACK) {
+				// Long system names marquee on LAYER_SCROLLTEXT; the band
+				// persists across screens unless cleared on the way out.
+				GFX_clearLayers(LAYER_SCROLLTEXT);
 				current_screen = SCREEN_MAIN_MENU;
 				dirty = true;
 				break;
 			}
-
-			if (PAD_navigateMenu(&system_selected, system_count))
-				dirty = true;
-
-			if (PAD_justPressed(BTN_A) && system_count > 0) {
-				scanROMs(&systems[system_selected]);
+			if (act.type == LISTVIEW_ACTIVATED) {
+				GFX_clearLayers(LAYER_SCROLLTEXT);
+				scanROMs(&systems[act.index]);
 				current_screen = SCREEN_ROMS;
 				dirty = true;
 				break;
 			}
-
-			if (PAD_justPressed(BTN_Y) && system_count > 0) {
+			if (act.type == LISTVIEW_BUTTON && act.btn == BTN_Y &&
+				system_count > 0 && act.index >= 0) {
 				if (!ScraperAPI_isOnline()) {
 					showNoNetworkOverlay();
 					dirty = true;
@@ -1054,8 +1003,8 @@ int main(int argc, char* argv[]) {
 		case SCREEN_ROMS: {
 			if (PAD_justPressed(BTN_B)) {
 				// Refresh system counts before going back
-				systems[system_selected].scraped_count =
-					countScrapedInDir(systems[system_selected].path);
+				systems[systems_view.selected].scraped_count =
+					countScrapedInDir(systems[systems_view.selected].path);
 				current_screen = SCREEN_SYSTEMS;
 				dirty = true;
 				break;
@@ -1077,7 +1026,7 @@ int main(int argc, char* argv[]) {
 					GFX_flip(screen);
 					SDL_Delay(800);
 				} else {
-					queueAddROM(rom, &systems[system_selected], true);
+					queueAddROM(rom, &systems[systems_view.selected], true);
 					UI_renderLoadingOverlay(screen, "Queued",
 											rom->filename);
 					GFX_flip(screen);
@@ -1093,7 +1042,7 @@ int main(int argc, char* argv[]) {
 					dirty = true;
 					break;
 				}
-				reportQueued(queueAddAllROMs(&systems[system_selected]));
+				reportQueued(queueAddAllROMs(&systems[systems_view.selected]));
 				dirty = true;
 				break;
 			}
@@ -1169,9 +1118,11 @@ int main(int argc, char* argv[]) {
 		if (UI_statusBarChanged())
 			dirty = true;
 		// Selection-pill glides advance frame-by-frame, so keep redrawing
-		// while either the systems list (SCREEN_SYSTEMS) or the simple-menu
-		// pill (main menu / settings) is still travelling.
-		if (UI_listGlideActive(&systems_glide) || UI_simpleMenuGlideActive())
+		// while the active screen's ListView pill is still travelling.
+		if ((current_screen == SCREEN_MAIN_MENU &&
+			 UI_listViewBusy(&main_menu_view)) ||
+			(current_screen == SCREEN_SYSTEMS &&
+			 UI_listViewBusy(&systems_view)))
 			dirty = true;
 
 		if (dirty) {
@@ -1194,6 +1145,10 @@ int main(int argc, char* argv[]) {
 			}
 			dirty = false;
 		} else {
+			if (current_screen == SCREEN_MAIN_MENU)
+				UI_listViewTickIdle(&main_menu_view);
+			else if (current_screen == SCREEN_SYSTEMS)
+				UI_listViewTickIdle(&systems_view);
 			GFX_sync();
 		}
 	}

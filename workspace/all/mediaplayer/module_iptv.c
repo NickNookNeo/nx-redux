@@ -14,6 +14,7 @@
 #include "ui_confirmdialog.h"
 #include "ui_iptv.h"
 #include "ui_icons.h"
+#include "ui_listview.h"
 #include "ui_toast.h"
 
 // Module states
@@ -23,11 +24,9 @@ typedef enum {
 	IPTV_STATE_CURATED_CHANNELS	  // Browse curated channels in a country
 } IPTVModuleState;
 
-static ScrollTextState iptv_scroll = {0};
-
-// Curated browse state
-static int curated_country_selected = 0;
-static int curated_country_scroll = 0;
+// Curated browse state (user-channel + country selection/scroll live in the
+// ListViews owned by ui_iptv.c - see IPTVUserChannels_view() and
+// IPTVCuratedCountries_view())
 static int curated_channel_selected = 0;
 static int curated_channel_scroll = 0;
 static const char* curated_selected_country_code = NULL;
@@ -66,10 +65,8 @@ static void build_sorted_channel_indices(const char* country_code) {
 ModuleExitReason IPTVModule_run(SDL_Surface* screen) {
 	bool dirty = true;
 	IndicatorType show_setting = INDICATOR_NONE;
-	int ch_selected = 0, ch_scroll = 0;
 	IPTVModuleState state = IPTV_STATE_USER_CHANNELS;
 
-	memset(&iptv_scroll, 0, sizeof(iptv_scroll));
 	show_confirm = false;
 
 	while (1) {
@@ -80,13 +77,19 @@ ModuleExitReason IPTVModule_run(SDL_Surface* screen) {
 		if (show_confirm) {
 			if (PAD_justPressed(BTN_A)) {
 				if (confirm_action_type == 0) {
-					// Delete from main list
+					// Delete from main list. Content changed: reset the view to
+					// the rebuilt array (glide snap + marquee clear), then
+					// restore the cursor clamped like the old code did.
 					IPTV_removeUserChannel(confirm_target_index);
+					const IPTVChannel* channels = IPTV_getUserChannels();
 					int user_count = IPTV_getUserChannelCount();
-					if (ch_selected >= user_count && ch_selected > 0) {
-						ch_selected--;
-					}
-					memset(&iptv_scroll, 0, sizeof(iptv_scroll));
+					ListView* lv = IPTVUserChannels_view();
+					int prev_selected = lv->selected;
+					UI_listViewReset(lv, user_count, channels);
+					if (user_count > 0)
+						lv->selected = (prev_selected < user_count)
+										   ? prev_selected
+										   : user_count - 1;
 				} else if (confirm_action_type == 1) {
 					// Remove from curated browse
 					IPTV_removeUserChannelByUrl(confirm_channel_url);
@@ -122,38 +125,39 @@ ModuleExitReason IPTVModule_run(SDL_Surface* screen) {
 				continue;
 			}
 
-			int country_count = IPTV_curated_get_country_count();
-
-			if (PAD_justRepeated(BTN_UP) && country_count > 0) {
-				curated_country_selected = (curated_country_selected > 0) ? curated_country_selected - 1 : country_count - 1;
-				dirty = 1;
-			} else if (PAD_justRepeated(BTN_DOWN) && country_count > 0) {
-				curated_country_selected = (curated_country_selected < country_count - 1) ? curated_country_selected + 1 : 0;
-				dirty = 1;
-			} else if (PAD_justPressed(BTN_A) && country_count > 0) {
+			// The ListView owns navigation; the module switches on actions.
+			ListView* v = IPTVCuratedCountries_view();
+			ListViewAction act = UI_listViewHandleInput(v);
+			switch (act.type) {
+			case LISTVIEW_ACTIVATED: {
+				GFX_clearLayers(LAYER_SCROLLTEXT);
 				const CuratedTVCountry* countries = IPTV_curated_get_countries();
-				curated_selected_country_code = countries[curated_country_selected].code;
+				curated_selected_country_code = countries[act.index].code;
 				curated_channel_selected = 0;
 				curated_channel_scroll = 0;
 				build_sorted_channel_indices(curated_selected_country_code);
 				state = IPTV_STATE_CURATED_CHANNELS;
 				dirty = 1;
-				continue;
-			} else if (PAD_justPressed(BTN_B)) {
-				state = IPTV_STATE_USER_CHANNELS;
-				ch_selected = 0;
-				ch_scroll = 0;
-				memset(&iptv_scroll, 0, sizeof(iptv_scroll));
-				dirty = 1;
-				continue;
+				break;
 			}
+			case LISTVIEW_BACK:
+				GFX_clearLayers(LAYER_SCROLLTEXT);
+				state = IPTV_STATE_USER_CHANNELS;
+				dirty = 1;
+				break;
+			default:
+				break;
+			}
+			if (UI_listViewBusy(v))
+				dirty = 1;
 
 			ModuleCommon_PWR_update(&dirty, &show_setting);
-			if (dirty || iptv_curated_countries_glide_active()) {
-				render_iptv_curated_countries(screen, show_setting, curated_country_selected, &curated_country_scroll);
+			if (dirty) {
+				render_iptv_curated_countries(screen, show_setting);
 				GFX_flip(screen);
 				dirty = 0;
 			} else {
+				UI_listViewTickIdle(v);
 				GFX_sync();
 			}
 			continue;
@@ -237,37 +241,16 @@ ModuleExitReason IPTVModule_run(SDL_Surface* screen) {
 			continue;
 		}
 
+		const IPTVChannel* channels = IPTV_getUserChannels();
 		int user_count = IPTV_getUserChannelCount();
+		ListView* v = IPTVUserChannels_view();
 
-		if (PAD_justPressed(BTN_B)) {
-			GFX_clearLayers(LAYER_SCROLLTEXT);
-			return MODULE_EXIT_TO_MENU;
-		} else if (PAD_justPressed(BTN_Y)) {
-			// Open curated channel browser
-			curated_country_selected = 0;
-			curated_country_scroll = 0;
-			state = IPTV_STATE_CURATED_COUNTRIES;
-			dirty = 1;
-			continue;
-		} else if (PAD_justPressed(BTN_X) && user_count > 0) {
-			// Confirm removal
-			const IPTVChannel* channels = IPTV_getUserChannels();
-			strncpy(confirm_channel_name, channels[ch_selected].name, IPTV_MAX_NAME - 1);
-			confirm_channel_name[IPTV_MAX_NAME - 1] = '\0';
-			confirm_target_index = ch_selected;
-			confirm_action_type = 0;
-			show_confirm = true;
-			dirty = 1;
-		} else if (user_count > 0) {
-			if (PAD_justRepeated(BTN_UP)) {
-				ch_selected = (ch_selected > 0) ? ch_selected - 1 : user_count - 1;
-				dirty = 1;
-			} else if (PAD_justRepeated(BTN_DOWN)) {
-				ch_selected = (ch_selected < user_count - 1) ? ch_selected + 1 : 0;
-				dirty = 1;
-			} else if (PAD_justPressed(BTN_A)) {
-				const IPTVChannel* channels = IPTV_getUserChannels();
-				const IPTVChannel* ch = &channels[ch_selected];
+		// The ListView owns navigation; the module switches on actions.
+		ListViewAction act = UI_listViewHandleInput(v);
+		switch (act.type) {
+		case LISTVIEW_ACTIVATED:
+			if (act.index >= 0 && act.index < user_count) {
+				const IPTVChannel* ch = &channels[act.index];
 
 				// Ensure WiFi and play stream
 				Wifi_ensureConnected(screen, show_setting);
@@ -293,27 +276,47 @@ ModuleExitReason IPTVModule_run(SDL_Surface* screen) {
 				}
 
 				Icons_init();
-				memset(&iptv_scroll, 0, sizeof(iptv_scroll));
+				GFX_clearLayers(LAYER_SCROLLTEXT);
 				dirty = 1;
 			}
+			break;
+		case LISTVIEW_BACK:
+			GFX_clearLayers(LAYER_SCROLLTEXT);
+			return MODULE_EXIT_TO_MENU;
+		case LISTVIEW_BUTTON:
+			if (act.btn == BTN_Y) {
+				// Open curated channel browser: works from the empty list too
+				// (act.index is -1 there). Reset clears layers + snaps glide.
+				UI_listViewReset(IPTVCuratedCountries_view(),
+								 IPTV_curated_get_country_count(),
+								 IPTV_curated_get_countries());
+				state = IPTV_STATE_CURATED_COUNTRIES;
+				dirty = 1;
+			} else if (act.btn == BTN_X && act.index >= 0 &&
+					   act.index < user_count) {
+				// Confirm removal
+				GFX_clearLayers(LAYER_SCROLLTEXT);
+				strncpy(confirm_channel_name, channels[act.index].name, IPTV_MAX_NAME - 1);
+				confirm_channel_name[IPTV_MAX_NAME - 1] = '\0';
+				confirm_target_index = act.index;
+				confirm_action_type = 0;
+				show_confirm = true;
+				dirty = 1;
+			}
+			break;
+		default:
+			break;
 		}
-
-		if (ScrollText_isScrolling(&iptv_scroll))
-			ScrollText_animateOnly(&iptv_scroll);
-		if (ScrollText_needsRender(&iptv_scroll))
+		if (UI_listViewBusy(v))
 			dirty = 1;
 
 		ModuleCommon_PWR_update(&dirty, &show_setting);
-		if (dirty || iptv_user_channels_glide_active()) {
-			if (user_count > 0) {
-				render_iptv_user_channels(screen, show_setting,
-										  ch_selected, ch_scroll, &iptv_scroll);
-			} else {
-				render_iptv_empty(screen, show_setting);
-			}
+		if (dirty) {
+			render_iptv_user_channels(screen, show_setting);
 			GFX_flip(screen);
 			dirty = 0;
 		} else {
+			UI_listViewTickIdle(v);
 			GFX_sync();
 		}
 	}

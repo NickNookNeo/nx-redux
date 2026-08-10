@@ -10,6 +10,7 @@
 #include "ui_utils.h"
 #include "utils.h"
 #include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_album_art.h"
 #include "spectrum.h"
 #include "lyrics.h"
@@ -23,15 +24,14 @@ static void format_khz(int rate, char* buf, size_t size) {
 		snprintf(buf, size, "%.1f", rate / 1000.0);
 }
 
-// Scroll text state for browser list (selected item)
-static ScrollTextState browser_scroll = {0};
+// Full-mode ListView for the file browser (the widget owns selection,
+// scroll, glide and marquee; module_player drives input through the
+// accessor below).
+static ListView browser_view;
+static char browser_row_buf[256];
 
-// Selection glide state for the browser list
-static ListGlide browser_glide;
-
-// For the module's dirty-flag loop: keep redrawing while the pill glides
-bool browser_glide_active(void) {
-	return UI_listGlideActive(&browser_glide);
+ListView* MusicBrowser_view(void) {
+	return &browser_view;
 }
 
 // Build the display label for a browser entry (folder brackets / play-all
@@ -56,6 +56,24 @@ static void browser_entry_display(const FileEntry* entry, char* display, size_t 
 	}
 }
 
+// Row provider for the browser ListView: label via browser_entry_display,
+// icon variant follows the widget-supplied `selected` flag (the
+// glide-tracking row_sel), preserving the pill-follows-icon behavior.
+static void browser_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	BrowserContext* b = ctx;
+	FileEntry* entry = &b->entries[i];
+	browser_entry_display(entry, browser_row_buf, sizeof(browser_row_buf));
+	out->label = browser_row_buf;
+	if (Icons_isLoaded()) {
+		if (entry->is_dir)
+			out->icon = Icons_getFolder(selected);
+		else if (entry->is_play_all)
+			out->icon = Icons_getPlayAll(selected);
+		else
+			out->icon = Icons_getForFormat(entry->format, selected);
+	}
+}
+
 // Scroll text state for player title
 static ScrollTextState player_title_scroll;
 
@@ -73,11 +91,8 @@ static char last_next_lyric_line[256] = "";
 
 // Render the file browser
 void render_browser(SDL_Surface* screen, IndicatorType show_setting, BrowserContext* browser) {
+	(void)show_setting;
 	GFX_clear(screen);
-
-	int hw = screen->w;
-	int hh = screen->h;
-	char truncated[256];
 
 	UI_renderMenuBar(screen, "Music Player");
 
@@ -89,90 +104,17 @@ void render_browser(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 		}
 	}
 
-	// Use common list layout calculation
-	ListLayout layout = UI_calcListLayout(screen);
-	browser->items_per_page = layout.items_per_page;
-
-	UI_adjustListScroll(browser->selected, &browser->scroll_offset, browser->items_per_page);
-
-	// Calculate icon size and spacing (icons are 24x24)
-	int icon_size = Icons_isLoaded() ? SCALE1(24) : 0;
-	int icon_spacing = Icons_isLoaded() ? SCALE1(6) : 0;
-	int icon_offset = icon_size + icon_spacing;
-
-	// Selection glide: size the selected entry's pill, draw the moving pill
-	// BEFORE row content; rows pass selected=false and tint by pill position.
-	// Identity is the entries array pointer: entering a folder snaps.
-	ListGlideFrame gf = {layout.list_y, false};
-	if (browser->entry_count > 0) {
-		int rows = browser->items_per_page;
-		if (browser->scroll_offset + rows > browser->entry_count)
-			rows = browser->entry_count - browser->scroll_offset;
-		char sel_display[256];
-		browser_entry_display(&browser->entries[browser->selected],
-							  sel_display, sizeof(sel_display));
-		int sel_pill_w = UI_calcListPillWidth(font.medium, sel_display, truncated,
-											  layout.max_width, icon_offset);
-		gf = UI_listGlideDraw(&browser_glide, screen,
-							  (const void*)browser->entries,
-							  browser->selected - browser->scroll_offset, rows,
-							  layout.list_y, layout.item_h,
-							  sel_pill_w, true);
-	}
-
-	for (int i = 0; i < browser->items_per_page && browser->scroll_offset + i < browser->entry_count; i++) {
-		int idx = browser->scroll_offset + i;
-		FileEntry* entry = &browser->entries[idx];
-
-		int y = layout.list_y + i * layout.item_h;
-		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
-
-		// Get display name (without folder brackets or prefixes when icons are used)
-		char display[256];
-		browser_entry_display(entry, display, sizeof(display));
-
-		// Render pill background and get text position (with icon offset)
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, display, truncated, y, false, icon_offset);
-
-		// Render icon if available
-		if (Icons_isLoaded()) {
-			SDL_Surface* icon = NULL;
-			if (entry->is_dir) {
-				icon = Icons_getFolder(row_sel);
-			} else if (entry->is_play_all) {
-				icon = Icons_getPlayAll(row_sel);
-			} else {
-				icon = Icons_getForFormat(entry->format, row_sel);
-			}
-
-			if (icon) {
-				// Center icon vertically within the item
-				int icon_y = y + (layout.item_h - icon_size) / 2;
-				int icon_x = pos.text_x;
-
-				// Scale and blit the icon
-				SDL_Rect src_rect = {0, 0, icon->w, icon->h};
-				SDL_Rect dst_rect = {icon_x, icon_y, icon_size, icon_size};
-				SDL_BlitScaled(icon, &src_rect, screen, &dst_rect);
-			}
-		}
-
-		// Adjust text position for icon
-		int text_x = pos.text_x + icon_offset;
-		int available_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2) - icon_offset;
-
-		// Use common text rendering with scrolling for selected items;
-		// marquee only once the pill has settled on this row
-		UI_renderListItemText(screen,
-							  (row_sel && !gf.animating) ? &browser_scroll : NULL,
-							  display, font.medium,
-							  text_x, pos.text_y, available_width, row_sel);
-	}
-
-	UI_renderScrollIndicators(screen, browser->scroll_offset, browser->items_per_page, browser->entry_count);
-
-	// Button hints
-	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "SELECT", NULL});
+	ListView* v = &browser_view;
+	v->title = NULL; // menu bar drawn above (caller-owned chrome)
+	v->font = font.medium;
+	v->count = browser->entry_count;
+	v->get_row = browser_get_row;
+	v->ctx = browser;
+	v->list_id = (const void*)browser->entries;
+	v->empty_title = "No music files found";
+	v->empty_subtitle = "Add music to /Music on your SD card";
+	v->hint_pairs = (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "SELECT", NULL};
+	UI_listViewRender(v, screen);
 }
 
 // Render the now playing screen
@@ -251,7 +193,7 @@ void render_playing(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 
 	// Track counter "01 - 03" (smaller, gray) - after the format badge
 	// Use playlist counts if available (playlist_total > 0), otherwise use browser counts
-	int track_num = (playlist_total > 0) ? playlist_track_num : Browser_getCurrentTrackNumber(browser);
+	int track_num = (playlist_total > 0) ? playlist_track_num : Browser_getCurrentTrackNumber(browser, browser_view.selected);
 	int total_tracks = (playlist_total > 0) ? playlist_total : Browser_countAudioFiles(browser);
 	char track_str[32];
 	snprintf(track_str, sizeof(track_str), "%02d - %02d", track_num, total_tracks);
@@ -391,21 +333,6 @@ void render_playing(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 			SDL_FreeSurface(lyric_surf);
 		}
 	}
-}
-
-// Check if browser list has active scrolling (for refresh optimization)
-bool browser_needs_scroll_refresh(void) {
-	return ScrollText_isScrolling(&browser_scroll);
-}
-
-// Check if browser scroll needs a render to transition (delay phase)
-bool browser_scroll_needs_render(void) {
-	return ScrollText_needsRender(&browser_scroll);
-}
-
-// Animate browser scroll only (GPU mode, no screen redraw needed)
-void browser_animate_scroll(void) {
-	ScrollText_animateOnly(&browser_scroll);
 }
 
 // Check if player title has active scrolling (for refresh optimization)

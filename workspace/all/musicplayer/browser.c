@@ -41,8 +41,6 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
 	Browser_freeEntries(ctx);
 
 	strncpy(ctx->current_path, path, sizeof(ctx->current_path) - 1);
-	ctx->selected = 0;
-	ctx->scroll_offset = 0;
 
 	// Create music folder if it doesn't exist
 	if (strcmp(path, music_root) == 0) {
@@ -197,10 +195,10 @@ int Browser_countAudioFiles(const BrowserContext* ctx) {
 	return count;
 }
 
-// Get current track number (1-based)
-int Browser_getCurrentTrackNumber(const BrowserContext* ctx) {
+// Get current track number (1-based) for the entry at `selected`
+int Browser_getCurrentTrackNumber(const BrowserContext* ctx, int selected) {
 	int num = 0;
-	for (int i = 0; i <= ctx->selected && i < ctx->entry_count; i++) {
+	for (int i = 0; i <= selected && i < ctx->entry_count; i++) {
 		if (!ctx->entries[i].is_dir)
 			num++;
 	}

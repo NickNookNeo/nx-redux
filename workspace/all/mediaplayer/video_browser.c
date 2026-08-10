@@ -90,8 +90,6 @@ void VideoBrowser_loadDirectory(VideoBrowserContext* ctx, const char* path, cons
 
 	strncpy(ctx->current_path, path, sizeof(ctx->current_path) - 1);
 	ctx->current_path[sizeof(ctx->current_path) - 1] = '\0';
-	ctx->selected = 0;
-	ctx->scroll_offset = 0;
 
 	// Create video folder if it doesn't exist and we're at root
 	if (strcmp(path, root) == 0) {

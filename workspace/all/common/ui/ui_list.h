@@ -166,16 +166,15 @@ int UI_pillAnimTick(PillAnimState* state);
 bool UI_pillAnimIsActive(PillAnimState* state);
 
 // ---- List Selection Glide ----
-// Shared wiring for the animated selection pill (same feel as the game
-// list: PILL_ANIM_MS smoothstep, width morphs with y). Render-only: the
-// caller keeps owning selection and input. Usage per frame, BEFORE the
-// row loop:
-//   frame = UI_listGlideDraw(&glide, screen, <content ptr>, sel - scroll,
-//                            rows_visible, layout.list_y, layout.item_h,
-//                            sel_pill_w, <no modal open>);
-// then render every row with selected=false and tint its text with
-// UI_listGlideRowSelected(&frame, row_y, item_h). Dirty-flag main loops
-// must keep redrawing while UI_listGlideActive(&glide).
+// Core wiring for the animated selection pill (PILL_ANIM_MS smoothstep,
+// width morphs with y). Render-only: the caller keeps owning selection and
+// input. New list surfaces should use the ListView widget (ui_listview.h),
+// which drives this core; direct use remains for the game list until it
+// migrates. Per frame, BEFORE the row loop: call UI_listGlideDrawAtY with
+// the selected row's target y and the band, then render every row with
+// selected=false and tint its text with UI_listGlideRowSelected(&frame,
+// row_y, item_h). Dirty-flag main loops must keep redrawing while
+// UI_listGlideActive(&glide).
 
 typedef struct {
 	PillAnimState anim;	 // y + width glide state
@@ -195,12 +194,6 @@ ListGlideFrame UI_listGlideDrawAtY(ListGlide* g, SDL_Surface* screen,
 								   const void* list_id, int target_y,
 								   int band_y, int band_h,
 								   int item_h, int pill_w, bool allow_anim);
-// Uniform-rows convenience: target = row0_y + selected_row*item_h, band =
-// the rows_visible rows starting at row0_y.
-ListGlideFrame UI_listGlideDraw(ListGlide* g, SDL_Surface* screen,
-								const void* list_id, int selected_row,
-								int rows_visible, int row0_y, int item_h,
-								int pill_w, bool allow_anim);
 // True when the pill covers the majority of the row at row_y — draw that
 // row's text in the selected colour exactly then.
 bool UI_listGlideRowSelected(const ListGlideFrame* f, int row_y, int item_h);
@@ -251,46 +244,5 @@ MenuItemPos UI_renderMenuItemPill(SDL_Surface* screen, ListLayout* layout,
 // Render a filled rounded rectangle background
 // Works at any height (unlike pill asset which requires PILL_SIZE)
 void UI_renderRoundedRectBg(SDL_Surface* screen, int x, int y, int w, int h, uint32_t color);
-
-// ---- Generic Simple Menu Rendering ----
-
-// Callback to customize item label
-typedef const char* (*MenuItemLabelCallback)(int index, const char* default_label,
-											 char* buffer, int buffer_size);
-
-// Callback to render right-side badge
-typedef void (*MenuItemBadgeCallback)(SDL_Surface* screen, int index, bool selected,
-									  int item_y, int item_h);
-
-// Callback to get icon for a menu item
-typedef SDL_Surface* (*MenuItemIconCallback)(int index, bool selected);
-
-// Callback for custom text rendering
-// Return true if custom rendering was handled, false to use default
-typedef bool (*MenuItemCustomTextCallback)(SDL_Surface* screen, int index, bool selected,
-										   int text_x, int text_y, int max_text_width);
-
-// Configuration for generic simple menu rendering
-typedef struct {
-	const char* title;						// Header title
-	const char** items;						// Array of menu item labels (can be NULL if get_label provided)
-	int item_count;							// Number of items
-	const char* btn_b_label;				// B button label ("EXIT", "BACK", etc.)
-	const char* btn_a_label;				// Optional: A button label; NULL = "OPEN"
-	MenuItemLabelCallback get_label;		// Optional: customize item label
-	MenuItemBadgeCallback render_badge;		// Optional: render right-side badge
-	MenuItemIconCallback get_icon;			// Optional: get icon for item
-	MenuItemCustomTextCallback render_text; // Optional: custom text rendering
-	bool hide_controls_hint;				// Optional: omit START/CONTROLS from hint bar
-} SimpleMenuConfig;
-
-// Render a simple menu with optional customization callbacks
-void UI_renderSimpleMenu(SDL_Surface* screen, int menu_selected,
-						 const SimpleMenuConfig* config);
-
-// True while the simple menu's selection pill is mid-glide — dirty-flag
-// callers must keep redrawing (and re-calling UI_renderSimpleMenu + flip)
-// until it settles.
-bool UI_simpleMenuGlideActive(void);
 
 #endif // UI_LIST_H

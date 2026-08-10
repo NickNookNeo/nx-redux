@@ -13,6 +13,7 @@
 #include "browser.h"
 #include "playlist.h"
 #include "ui_music.h"
+#include "ui_listview.h"
 #include "ui_album_art.h"
 #include "ui_main.h"
 #include "ui_confirmdialog.h"
@@ -67,9 +68,12 @@ static void clear_gpu_layers(void) {
 	PLAT_GPU_Flip();
 }
 
-// Helper to load directory
+// Helper to load directory. Resets the browser ListView so the new
+// directory starts at row 0 (Browser_loadDirectory used to zero the
+// context's selection/scroll; the ListView owns them now).
 static void load_directory(const char* path) {
 	Browser_loadDirectory(&browser, path, MUSIC_PATH);
+	UI_listViewReset(MusicBrowser_view(), browser.entry_count, browser.entries);
 }
 
 // Initialize player module
@@ -109,7 +113,7 @@ static bool try_load_and_play(const char* path) {
 			Resume_savePlaylist(resume_playlist_path, path, name,
 								Playlist_getCurrentIndex(&playlist), 0);
 		} else {
-			int idx = playlist_active ? Playlist_getCurrentIndex(&playlist) : browser.selected;
+			int idx = playlist_active ? Playlist_getCurrentIndex(&playlist) : MusicBrowser_view()->selected;
 			Resume_saveFiles(browser.current_path, path, name, idx, 0);
 		}
 		last_resume_save = SDL_GetTicks();
@@ -136,9 +140,9 @@ static bool browser_pick_random(void) {
 	int random_idx = rand() % (audio_count - 1);
 	int count = 0;
 	for (int i = 0; i < browser.entry_count; i++) {
-		if (!browser.entries[i].is_dir && i != browser.selected) {
+		if (!browser.entries[i].is_dir && i != MusicBrowser_view()->selected) {
 			if (count == random_idx) {
-				browser.selected = i;
+				MusicBrowser_view()->selected = i;
 				return try_load_and_play(browser.entries[i].path);
 			}
 			count++;
@@ -149,9 +153,9 @@ static bool browser_pick_random(void) {
 
 // Pick the next audio file in the browser after current. Returns true on success.
 static bool browser_pick_next(void) {
-	for (int i = browser.selected + 1; i < browser.entry_count; i++) {
+	for (int i = MusicBrowser_view()->selected + 1; i < browser.entry_count; i++) {
 		if (!browser.entries[i].is_dir) {
-			browser.selected = i;
+			MusicBrowser_view()->selected = i;
 			return try_load_and_play(browser.entries[i].path);
 		}
 	}
@@ -163,7 +167,7 @@ static bool handle_track_ended(void) {
 	if (repeat_enabled) {
 		if (playlist_active)
 			return playlist_try_play(-1);
-		return try_load_and_play(browser.entries[browser.selected].path);
+		return try_load_and_play(browser.entries[MusicBrowser_view()->selected].path);
 	}
 
 	if (shuffle_enabled) {
@@ -265,7 +269,12 @@ static bool browser_play_entry(FileEntry* entry) {
 
 // Handle input in browser state. Returns true if module should exit to menu.
 static bool handle_browser_input(PlayerInternalState* state, bool* dirty) {
-	if (PAD_justPressed(BTN_B)) {
+	ListView* v = MusicBrowser_view();
+
+	// The ListView owns navigation; the module switches on actions.
+	ListViewAction act = UI_listViewHandleInput(v);
+	switch (act.type) {
+	case LISTVIEW_BACK:
 		if (strcmp(browser.current_path, MUSIC_PATH) != 0) {
 			char* last_slash = strrchr(browser.current_path, '/');
 			if (last_slash) {
@@ -281,11 +290,10 @@ static bool handle_browser_input(PlayerInternalState* state, bool* dirty) {
 			}
 			return true;
 		}
-	} else if (browser.entry_count > 0) {
-		if (PAD_navigateMenu(&browser.selected, browser.entry_count))
-			*dirty = 1;
-		else if (PAD_justPressed(BTN_A)) {
-			FileEntry* entry = &browser.entries[browser.selected];
+		break;
+	case LISTVIEW_ACTIVATED:
+		if (act.index >= 0 && act.index < browser.entry_count) {
+			FileEntry* entry = &browser.entries[act.index];
 			if (entry->is_dir) {
 				char path_copy[512];
 				snprintf(path_copy, sizeof(path_copy), "%s", entry->path);
@@ -295,30 +303,28 @@ static bool handle_browser_input(PlayerInternalState* state, bool* dirty) {
 				*state = PLAYER_INTERNAL_PLAYING;
 				*dirty = 1;
 			}
-		} else if (PAD_justPressed(BTN_X)) {
-			FileEntry* entry = &browser.entries[browser.selected];
+		}
+		break;
+	case LISTVIEW_BUTTON:
+		if (act.index >= 0 && act.index < browser.entry_count) {
+			FileEntry* entry = &browser.entries[act.index];
 			if (!entry->is_dir && !entry->is_play_all) {
-				snprintf(delete_target_path, sizeof(delete_target_path), "%s", entry->path);
-				snprintf(delete_target_name, sizeof(delete_target_name), "%s", entry->name);
-				show_delete_confirm = true;
-				GFX_clearLayers(LAYER_SCROLLTEXT);
-				*dirty = 1;
-			}
-		} else if (PAD_justPressed(BTN_Y)) {
-			FileEntry* entry = &browser.entries[browser.selected];
-			if (!entry->is_dir && !entry->is_play_all) {
-				AddToPlaylist_open(entry->path, entry->name);
-				*dirty = 1;
+				if (act.btn == BTN_X) {
+					snprintf(delete_target_path, sizeof(delete_target_path), "%s", entry->path);
+					snprintf(delete_target_name, sizeof(delete_target_name), "%s", entry->name);
+					show_delete_confirm = true;
+					GFX_clearLayers(LAYER_SCROLLTEXT);
+					*dirty = 1;
+				} else if (act.btn == BTN_Y) {
+					AddToPlaylist_open(entry->path, entry->name);
+					*dirty = 1;
+				}
 			}
 		}
+		break;
+	default:
+		break;
 	}
-
-	// Animate browser scroll
-	if (browser_needs_scroll_refresh()) {
-		browser_animate_scroll();
-	}
-	if (browser_scroll_needs_render())
-		*dirty = 1;
 
 	return false;
 }
@@ -526,8 +532,9 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 			if (PAD_justPressed(BTN_A)) {
 				if (unlink(delete_target_path) == 0) {
 					load_directory(browser.current_path);
-					if (browser.selected >= browser.entry_count) {
-						browser.selected = browser.entry_count > 0 ? browser.entry_count - 1 : 0;
+					ListView* v = MusicBrowser_view();
+					if (v->selected >= browser.entry_count) {
+						v->selected = browser.entry_count > 0 ? browser.entry_count - 1 : 0;
 					}
 				}
 			}
@@ -586,9 +593,10 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 			dirty = 1;
 		}
 
-		// Render. The glide check keeps the dirty-flag loop redrawing (and
-		// ticking the pill animation) until the selection pill settles.
-		if ((dirty || (state == PLAYER_INTERNAL_BROWSER && browser_glide_active())) && !screen_off) {
+		// Render. The busy check keeps the dirty-flag loop redrawing while
+		// the browser view's pill glides or its marquee needs a main-surface
+		// render.
+		if ((dirty || (state == PLAYER_INTERNAL_BROWSER && UI_listViewBusy(MusicBrowser_view()))) && !screen_off) {
 			if (ModuleCommon_isScreenOffHintActive()) {
 				GFX_clear(screen);
 				render_screen_off_hint(screen);
@@ -609,6 +617,10 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 			GFX_flip(screen);
 			dirty = 0;
 		} else if (!screen_off) {
+			// Idle marquee tick for the browser view (activate-after-delay +
+			// steady GPU scroll happen here, not via dirty).
+			if (state == PLAYER_INTERNAL_BROWSER)
+				UI_listViewTickIdle(MusicBrowser_view());
 			GFX_sync();
 		}
 	}
@@ -629,10 +641,10 @@ void PlayerModule_nextTrack(void) {
 			playlist_try_play(new_idx);
 		}
 	} else if (initialized) {
-		for (int i = browser.selected + 1; i < browser.entry_count; i++) {
+		for (int i = MusicBrowser_view()->selected + 1; i < browser.entry_count; i++) {
 			if (!browser.entries[i].is_dir) {
 				Player_stop();
-				browser.selected = i;
+				MusicBrowser_view()->selected = i;
 				try_load_and_play(browser.entries[i].path);
 				break;
 			}
@@ -649,10 +661,10 @@ void PlayerModule_prevTrack(void) {
 			playlist_try_play(new_idx);
 		}
 	} else if (initialized) {
-		for (int i = browser.selected - 1; i >= 0; i--) {
+		for (int i = MusicBrowser_view()->selected - 1; i >= 0; i--) {
 			if (!browser.entries[i].is_dir) {
 				Player_stop();
-				browser.selected = i;
+				MusicBrowser_view()->selected = i;
 				try_load_and_play(browser.entries[i].path);
 				break;
 			}
@@ -949,10 +961,11 @@ ModuleExitReason PlayerModule_runResume(SDL_Surface* screen, const ResumeState* 
 			Player_seek(resume->position_ms);
 		}
 
-		// Set browser.selected to match the current track for display
+		// Relocate the browser view's cursor to the current track for display
+		// (load_directory above already Reset the view for the new content)
 		for (int i = 0; i < browser.entry_count; i++) {
 			if (strcmp(browser.entries[i].path, track->path) == 0) {
-				browser.selected = i;
+				MusicBrowser_view()->selected = i;
 				break;
 			}
 		}

@@ -4,22 +4,19 @@
 #include <SDL2/SDL.h>
 #include "api.h"
 #include "ui_list.h"
+#include "ui_listview.h"
 
-// Render user's channel list (main screen)
-void render_iptv_user_channels(SDL_Surface* screen, IndicatorType show_setting,
-							   int selected, int scroll_offset,
-							   ScrollTextState* scroll_state);
+// Full-mode ListViews: ui_iptv.c owns/renders them, module_iptv.c drives
+// their input through these accessors.
+ListView* IPTVUserChannels_view(void);
+ListView* IPTVCuratedCountries_view(void);
 
-// Render IPTV empty state (no channels added)
-void render_iptv_empty(SDL_Surface* screen, IndicatorType show_setting);
+// Render user's channel list (main screen). The widget absorbs the empty
+// state (count == 0), so there is no separate empty-state renderer.
+void render_iptv_user_channels(SDL_Surface* screen, IndicatorType show_setting);
 
 // Render curated country list for browsing
-void render_iptv_curated_countries(SDL_Surface* screen, IndicatorType show_setting,
-								   int selected, int* scroll_offset);
-
-// True while a selection pill is still gliding (keep redrawing).
-bool iptv_user_channels_glide_active(void);
-bool iptv_curated_countries_glide_active(void);
+void render_iptv_curated_countries(SDL_Surface* screen, IndicatorType show_setting);
 
 // Render curated channels for a country
 void render_iptv_curated_channels(SDL_Surface* screen, IndicatorType show_setting,

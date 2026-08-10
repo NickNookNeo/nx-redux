@@ -6,7 +6,7 @@
 #include "module_library.h"
 #include "module_player.h"
 #include "module_playlist.h"
-#include "ui_list.h"
+#include "ui_listview.h"
 
 // Library submenu items
 #define LIBRARY_FILES 0
@@ -18,22 +18,35 @@
 
 static const char* library_items[] = {"Files", "Playlists"};
 
-static void render_library_menu(SDL_Surface* screen, IndicatorType show_setting, int menu_selected) {
-	SimpleMenuConfig config = {
-		.title = "Library",
-		.items = library_items,
-		.item_count = LIBRARY_ITEM_COUNT,
-		.btn_b_label = "BACK",
-		.get_label = NULL,
-		.render_badge = NULL,
-		.get_icon = NULL};
-	UI_renderSimpleMenu(screen, menu_selected, &config);
+// Library menu ListView (full mode: the widget owns selection and input)
+static ListView library_view;
+
+static void library_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	const char** items = ctx;
+	out->label = items[i];
+	(void)selected;
+}
+
+static void render_library_menu(SDL_Surface* screen) {
+	GFX_clear(screen);
+	ListView* v = &library_view;
+	v->title = "Library";
+	v->count = LIBRARY_ITEM_COUNT;
+	v->get_row = library_get_row;
+	v->ctx = (void*)library_items;
+	v->list_id = (const void*)library_items;
+	v->hint_pairs = (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "OPEN", NULL};
+	UI_listViewRender(v, screen);
 }
 
 ModuleExitReason LibraryModule_run(SDL_Surface* screen) {
-	int menu_selected = 0;
 	bool dirty = true;
 	IndicatorType show_setting = INDICATOR_NONE;
+
+	// The view owns selection: reset on module entry so the menu starts at
+	// row 0, matching the old fresh local.
+	ListView* v = &library_view;
+	UI_listViewReset(v, LIBRARY_ITEM_COUNT, library_items);
 
 	while (1) {
 		GFX_startFrame();
@@ -51,17 +64,14 @@ ModuleExitReason LibraryModule_run(SDL_Surface* screen) {
 			continue;
 		}
 
-		// Menu navigation
-		if (PAD_justRepeated(BTN_UP)) {
-			menu_selected = (menu_selected > 0) ? menu_selected - 1 : LIBRARY_ITEM_COUNT - 1;
-			dirty = 1;
-		} else if (PAD_justRepeated(BTN_DOWN)) {
-			menu_selected = (menu_selected < LIBRARY_ITEM_COUNT - 1) ? menu_selected + 1 : 0;
-			dirty = 1;
-		} else if (PAD_justPressed(BTN_A)) {
+		// Menu input: the ListView owns navigation, the module switches on
+		// the returned action. MENU is handled globally above - ignored here.
+		ListViewAction act = UI_listViewHandleInput(v);
+		switch (act.type) {
+		case LISTVIEW_ACTIVATED: {
 			ModuleExitReason reason = MODULE_EXIT_TO_MENU;
 
-			switch (menu_selected) {
+			switch (act.index) {
 			case LIBRARY_FILES:
 				reason = PlayerModule_run(screen);
 				break;
@@ -76,21 +86,26 @@ ModuleExitReason LibraryModule_run(SDL_Surface* screen) {
 
 			// Sub-module returned to library menu
 			dirty = 1;
-		} else if (PAD_justPressed(BTN_B)) {
-			return MODULE_EXIT_TO_MENU;
+			break;
 		}
+		case LISTVIEW_BACK:
+			return MODULE_EXIT_TO_MENU;
+		default:
+			break;
+		}
+		if (UI_listViewBusy(v))
+			dirty = 1;
 
 		// Handle power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render. The glide check keeps the dirty-flag loop redrawing (and
-		// ticking the pill animation) until the selection pill settles.
-		if (dirty || UI_simpleMenuGlideActive()) {
-			render_library_menu(screen, show_setting, menu_selected);
+		if (dirty) {
+			render_library_menu(screen);
 
 			GFX_flip(screen);
 			dirty = 0;
 		} else {
+			UI_listViewTickIdle(v);
 			GFX_sync();
 		}
 	}

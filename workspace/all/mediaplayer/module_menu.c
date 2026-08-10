@@ -7,6 +7,7 @@
 #include "module_menu.h"
 #include "ui_main.h"
 #include "ui_list.h"
+#include "ui_listview.h"
 
 // Toast message state
 static char menu_toast_message[128] = "";
@@ -28,10 +29,14 @@ static int get_menu_item_id(int visual_index) {
 }
 
 int MenuModule_run(SDL_Surface* screen) {
-	int menu_selected = 0;
 	bool dirty = true;
 	IndicatorType show_setting = INDICATOR_NONE;
-	int total_items = MENU_ITEM_COUNT;
+
+	// The view owns selection: reset on module entry so re-entering the menu
+	// starts at row 0, matching the old fresh local. render_menu supplies the
+	// real items pointer as list_id on the first frame.
+	ListView* v = MediaMainMenu_view();
+	UI_listViewReset(v, MENU_ITEM_COUNT, NULL);
 
 	while (1) {
 		GFX_startFrame();
@@ -49,30 +54,28 @@ int MenuModule_run(SDL_Surface* screen) {
 			continue;
 		}
 
-		// Menu navigation
-		if (PAD_justRepeated(BTN_UP)) {
-			menu_selected = (menu_selected > 0) ? menu_selected - 1 : total_items - 1;
+		// Menu input: the ListView owns navigation, the module switches on
+		// the returned action. MENU is handled globally above - ignored here.
+		ListViewAction act = UI_listViewHandleInput(v);
+		switch (act.type) {
+		case LISTVIEW_ACTIVATED:
 			GFX_clearLayers(LAYER_SCROLLTEXT);
-			dirty = 1;
-		} else if (PAD_justRepeated(BTN_DOWN)) {
-			menu_selected = (menu_selected < total_items - 1) ? menu_selected + 1 : 0;
-			GFX_clearLayers(LAYER_SCROLLTEXT);
-			dirty = 1;
-		} else if (PAD_justPressed(BTN_A)) {
-			GFX_clearLayers(LAYER_SCROLLTEXT);
-			return get_menu_item_id(menu_selected);
-		} else if (PAD_justPressed(BTN_B)) {
+			return get_menu_item_id(act.index);
+		case LISTVIEW_BACK:
 			GFX_clearLayers(LAYER_SCROLLTEXT);
 			return MENU_QUIT;
+		default:
+			break;
 		}
+		if (UI_listViewBusy(v))
+			dirty = 1;
 
 		// Handle power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render (keep redrawing while the selection pill glides)
-		if (dirty || UI_simpleMenuGlideActive()) {
-			render_menu(screen, show_setting, menu_selected,
-						menu_toast_message, menu_toast_time);
+		if (dirty) {
+			render_menu(screen, show_setting, menu_toast_message,
+						menu_toast_time);
 
 			GFX_flip(screen);
 			dirty = 0;
@@ -80,6 +83,7 @@ int MenuModule_run(SDL_Surface* screen) {
 			// Keep refreshing while toast is visible
 			ModuleCommon_tickToast(menu_toast_message, menu_toast_time, &dirty);
 		} else {
+			UI_listViewTickIdle(v);
 			GFX_sync();
 		}
 	}

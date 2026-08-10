@@ -19,6 +19,7 @@
 #include "launcher.h"
 #include "search.h"
 #include "ui_contextmenu.h"
+#include "ui_listview.h"
 #include "recents.h"
 #include "types.h"
 
@@ -264,8 +265,11 @@ int main(int argc, char* argv[]) {
 			GameList_pillAnimating())
 			dirty = true;
 
-		if (currentScreen == SCREEN_SEARCH && Search_pillAnimating())
-			dirty = true;
+		// Search's dirty signal comes entirely from sr.dirty above
+		// (selection travel + glide, set in Search_handleInput). Do NOT add
+		// UI_listViewBusy(Search_view()) here: its needsRender term would run
+		// full renders through the marquee's 1s pre-scroll delay, re-uploading
+		// the thumbnail layer every frame - visible artwork flicker.
 
 		if (dirty) {
 			SDL_Surface* tmpOldScreen = NULL;
@@ -432,7 +436,8 @@ int main(int argc, char* argv[]) {
 			dirty = false;
 		} else if (folderbgchanged || thumbchanged ||
 				   (GameList_scrollBusy() && !ContextMenu_isOpen()) ||
-				   (currentScreen == SCREEN_SEARCH && Search_scrollBusy())) {
+				   (currentScreen == SCREEN_SEARCH &&
+					UI_listViewMarqueeBusy(Search_view()))) {
 			updateBackgroundLayer(blackBG);
 			renderThumbnail(1, false);
 			// Same flash as the dirty pass (see gamelist.c / 81a0c40a): the idle
@@ -445,8 +450,9 @@ int main(int argc, char* argv[]) {
 			if (currentScreen != SCREEN_GAMESWITCHER &&
 				currentScreen != SCREEN_SEARCH && !ContextMenu_isOpen()) {
 				GameList_scrollTickIdle();
-			} else if (currentScreen == SCREEN_SEARCH && Search_scrollBusy()) {
-				Search_scrollTickIdle();
+			} else if (currentScreen == SCREEN_SEARCH &&
+					   UI_listViewMarqueeBusy(Search_view())) {
+				UI_listViewTickIdle(Search_view());
 			} else {
 				SDL_Delay(16);
 			}

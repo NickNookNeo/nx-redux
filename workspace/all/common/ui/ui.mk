@@ -27,3 +27,7 @@ UI_COMPONENT_SRCS = \
 	$(UI_DIR)/ui_downloadprogress.c \
 	$(UI_DIR)/ui_emptystate.c \
 	$(UI_DIR)/ui_pindialog.c
+
+# ListView widget (depends on ui_list.c - apps that take this must also
+# compile $(UI_DIR)/ui_list.c, which every list-drawing app already does).
+UI_LISTVIEW_SRCS = $(UI_DIR)/ui_listview.c

@@ -5,29 +5,21 @@
 #include "api.h"
 #include "playlist_m3u.h"
 #include "playlist.h"
+#include "ui_listview.h"
 
-// Render the playlist list screen
+// Render the playlist list screen (full-mode ListView; the view owns
+// selection and scroll)
 void render_playlist_list(SDL_Surface* screen, IndicatorType show_setting,
-						  PlaylistInfo* playlists, int count,
-						  int selected, int scroll);
+						  PlaylistInfo* playlists, int count);
 
 // Render the playlist detail screen (tracks in a playlist)
 void render_playlist_detail(SDL_Surface* screen, IndicatorType show_setting,
 							const char* playlist_name,
-							PlaylistTrack* tracks, int count,
-							int selected, int scroll);
+							PlaylistTrack* tracks, int count);
 
-// Check if a selection pill is mid-glide (keep dirty loop redrawing)
-bool playlist_list_glide_active(void);
-bool playlist_detail_glide_active(void);
-
-// Check if playlist list has active scrolling
-bool playlist_list_needs_scroll_refresh(void);
-
-// Check if playlist list scroll needs render (delay phase)
-bool playlist_list_scroll_needs_render(void);
-
-// Animate playlist list scroll (GPU mode)
-void playlist_list_animate_scroll(void);
+// Full-mode ListViews owned by ui_playlist.c (module_playlist drives input
+// and selection through these)
+ListView* PlaylistList_view(void);
+ListView* PlaylistDetail_view(void);
 
 #endif

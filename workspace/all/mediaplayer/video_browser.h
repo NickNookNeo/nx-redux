@@ -15,9 +15,6 @@ typedef struct {
 	char current_path[512];
 	VideoFileEntry* entries;
 	int entry_count;
-	int selected;
-	int scroll_offset;
-	int items_per_page;
 } VideoBrowserContext;
 
 // Detect video format from filename extension

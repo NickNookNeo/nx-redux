@@ -13,14 +13,12 @@ typedef struct {
 	AudioFormat format;
 } FileEntry;
 
-// Browser context structure
+// Browser context structure (selection/scroll live in the browser's
+// ListView — see MusicBrowser_view() in ui_music.h)
 typedef struct {
 	char current_path[512];
 	FileEntry* entries;
 	int entry_count;
-	int selected;
-	int scroll_offset;
-	int items_per_page;
 } BrowserContext;
 
 // Free browser entries
@@ -35,8 +33,8 @@ void Browser_getDisplayName(const char* filename, char* out, int max_len);
 // Count audio files in browser
 int Browser_countAudioFiles(const BrowserContext* ctx);
 
-// Get current track number (1-based)
-int Browser_getCurrentTrackNumber(const BrowserContext* ctx);
+// Get current track number (1-based) for the entry at `selected`
+int Browser_getCurrentTrackNumber(const BrowserContext* ctx, int selected);
 
 // Check if file is a supported audio format
 bool Browser_isAudioFile(const char* filename);

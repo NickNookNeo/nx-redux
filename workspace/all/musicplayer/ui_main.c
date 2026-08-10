@@ -4,8 +4,7 @@
 #include "api.h"
 #include "ui_main.h"
 #include "ui_controlshelp.h"
-#include "ui_fonts.h"
-#include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_toast.h"
 #include "module_menu.h"
 #include "resume.h"
@@ -17,9 +16,6 @@ static const char* menu_items_no_first[] = {"Library", "Online Radio", "Podcasts
 
 // Cached first_item_mode for callbacks
 static int current_first_item_mode = MENU_FIRST_NONE;
-
-// Scroll state for Resume track name
-static ScrollTextState resume_scroll = {0};
 
 // Get label for Now Playing based on background player type
 static const char* get_now_playing_label(void) {
@@ -57,67 +53,29 @@ static const char* main_menu_get_label(int index, const char* default_label,
 	return NULL; // Use default label
 }
 
-// Custom text rendering for first item: fixed prefix + scrolling text
-static bool main_menu_render_text(SDL_Surface* screen, int index, bool selected,
-								  int text_x, int text_y, int max_text_width) {
-	if (current_first_item_mode == MENU_FIRST_NONE || index != 0)
-		return false;
+// Main menu ListView (full mode: the widget owns selection and input;
+// MenuModule_run drives it through MusicMainMenu_view()).
+static ListView main_menu_view;
+static char main_menu_label_buf[256];
 
-	// Only custom-render when selected (for scrolling); default rendering handles non-selected
-	if (!selected)
-		return false;
+ListView* MusicMainMenu_view(void) {
+	return &main_menu_view;
+}
 
-	const char* track_name;
-	const char* prefix;
-
-	if (current_first_item_mode == MENU_FIRST_NOW_PLAYING) {
-		prefix = "Now Playing: ";
-		track_name = get_now_playing_label();
-	} else {
-		const ResumeState* rs = Resume_getState();
-		if (!rs)
-			return false;
-		track_name = rs->track_name[0] ? rs->track_name : "Unknown";
-		prefix = "Resume: ";
-	}
-	SDL_Color text_color = Fonts_getListTextColor(true);
-	int prefix_width = 0;
-	TTF_SizeUTF8(font.large, prefix, &prefix_width, NULL);
-
-	SDL_Surface* prefix_surf = TTF_RenderUTF8_Blended(font.large, prefix, text_color);
-	if (prefix_surf) {
-		SDL_BlitSurface(prefix_surf, NULL, screen, &(SDL_Rect){text_x, text_y});
-		SDL_FreeSurface(prefix_surf);
-	}
-
-	// Render track name in remaining space with clip rect to prevent overflow
-	int remaining_width = max_text_width - prefix_width;
-	if (remaining_width > 0) {
-		int track_x = text_x + prefix_width;
-
-		// Set clip rect to bound the track name within pill
-		SDL_Rect old_clip;
-		SDL_GetClipRect(screen, &old_clip);
-		SDL_Rect clip = {track_x, text_y, remaining_width, TTF_FontHeight(font.large)};
-		SDL_SetClipRect(screen, &clip);
-
-		// Use software scroll (use_gpu=false) to respect SDL clip rect
-		ScrollText_update(&resume_scroll, track_name, font.large, remaining_width,
-						  text_color, screen, track_x, text_y, false);
-
-		// Restore clip rect
-		if (old_clip.w > 0 && old_clip.h > 0)
-			SDL_SetClipRect(screen, &old_clip);
-		else
-			SDL_SetClipRect(screen, NULL);
-	}
-
-	return true;
+static void main_menu_get_row(void* ctx, int i, bool selected,
+							  ListViewRow* out) {
+	const char** items = ctx;
+	const char* label = items[i];
+	const char* custom = main_menu_get_label(i, label, main_menu_label_buf,
+											 sizeof(main_menu_label_buf));
+	out->label = custom ? custom : label;
+	(void)selected;
 }
 
 // Render the main menu
-void render_menu(SDL_Surface* screen, IndicatorType show_setting, int menu_selected,
+void render_menu(SDL_Surface* screen, IndicatorType show_setting,
 				 char* toast_message, uint32_t toast_time, int first_item_mode) {
+	(void)show_setting;
 	current_first_item_mode = first_item_mode;
 	bool has_first = (first_item_mode != MENU_FIRST_NONE);
 
@@ -131,16 +89,16 @@ void render_menu(SDL_Surface* screen, IndicatorType show_setting, int menu_selec
 	const char** items = has_first ? menu_items_with_first : menu_items_no_first;
 	int count = has_first ? 5 : 4;
 
-	SimpleMenuConfig config = {
-		.title = "Music Player",
-		.items = items,
-		.item_count = count,
-		.btn_b_label = "EXIT",
-		.get_label = main_menu_get_label,
-		.render_badge = NULL,
-		.get_icon = NULL,
-		.render_text = main_menu_render_text};
-	UI_renderSimpleMenu(screen, menu_selected, &config);
+	GFX_clear(screen);
+	ListView* v = &main_menu_view;
+	v->title = "Music Player";
+	v->font = font.large;
+	v->count = count;
+	v->get_row = main_menu_get_row;
+	v->ctx = (void*)items;
+	v->list_id = (const void*)items;
+	v->hint_pairs = (char*[]){"MENU", "CONTROLS", "B", "EXIT", "A", "OPEN", NULL};
+	UI_listViewRender(v, screen);
 
 	// Toast notification
 	UI_renderToast(screen, toast_message, toast_time);
@@ -372,12 +330,6 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
 	}
 
 	UI_renderControlsHelp(screen, page_title, controls);
-}
-
-// Check if Resume scroll needs continuous redraw (software scroll mode)
-bool menu_needs_scroll_redraw(void) {
-	// Needs redraw if scrolling is active OR about to start (delay -> active transition)
-	return ScrollText_isScrolling(&resume_scroll) || ScrollText_needsRender(&resume_scroll);
 }
 
 // Render screen off hint message (shown before screen turns off)

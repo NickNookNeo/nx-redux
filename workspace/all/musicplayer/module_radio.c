@@ -11,6 +11,7 @@
 #include "radio.h"
 #include "album_art.h"
 #include "ui_confirmdialog.h"
+#include "ui_listview.h"
 #include "ui_radio.h"
 #include "ui_album_art.h"
 #include "ui_main.h"
@@ -27,15 +28,12 @@ typedef enum {
 	RADIO_INTERNAL_HELP
 } RadioInternalState;
 
-// Module state
-static int radio_selected = 0;
-static int radio_scroll = 0;
+// Module state (list selection/scroll live in the ListViews owned by
+// ui_radio.c - see RadioList_view()/RadioCountries_view())
 static char radio_toast_message[128] = "";
 static uint32_t radio_toast_time = 0;
 
 // Add stations UI state
-static int add_country_selected = 0;
-static int add_country_scroll = 0;
 static int add_station_selected = 0;
 static int add_station_scroll = 0;
 static const char* add_selected_country_code = NULL;
@@ -142,16 +140,20 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 		if (show_confirm) {
 			if (PAD_justPressed(BTN_A)) {
 				if (confirm_action_type == 0) {
-					// Delete from main list
+					// Delete from main list. Content changed: reset the view
+					// to the rebuilt array (glide snap + marquee clear), then
+					// restore the cursor clamped like the old code did.
 					Radio_removeStation(confirm_target_index);
 					Radio_saveStations();
 					RadioStation* stations;
 					int station_count = Radio_getStations(&stations);
-					if (radio_selected >= station_count && station_count > 0) {
-						radio_selected = station_count - 1;
-					} else if (station_count == 0) {
-						radio_selected = 0;
-					}
+					ListView* lv = RadioList_view();
+					int prev_selected = lv->selected;
+					UI_listViewReset(lv, station_count, stations);
+					if (station_count > 0)
+						lv->selected = (prev_selected < station_count)
+										   ? prev_selected
+										   : station_count - 1;
 				} else if (confirm_action_type == 1) {
 					// Remove from browse
 					Radio_removeStationByUrl(confirm_station_url);
@@ -218,43 +220,62 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 		if (state == RADIO_INTERNAL_LIST) {
 			RadioStation* stations;
 			int station_count = Radio_getStations(&stations);
+			ListView* v = RadioList_view();
 
-			if (PAD_navigateMenu(&radio_selected, station_count))
-				dirty = 1;
-			else if (PAD_justPressed(BTN_A) && station_count > 0) {
-				if (!Wifi_ensureConnected(screen, show_setting)) {
-					snprintf(radio_toast_message, sizeof(radio_toast_message), "Internet connection required");
-					radio_toast_time = SDL_GetTicks();
-					dirty = 1;
-				} else {
-					Background_stopAll();
-					if (Radio_play(stations[radio_selected].url) == 0) {
-						ModuleCommon_recordInputTime();
-						last_rendered_artist[0] = '\0';
-						last_rendered_title[0] = '\0';
-						last_art_was_fetching = false;
-						state = RADIO_INTERNAL_PLAYING;
+			// The ListView owns navigation; the module switches on actions.
+			ListViewAction act = UI_listViewHandleInput(v);
+			switch (act.type) {
+			case LISTVIEW_ACTIVATED:
+				if (act.index < station_count) {
+					if (!Wifi_ensureConnected(screen, show_setting)) {
+						snprintf(radio_toast_message, sizeof(radio_toast_message), "Internet connection required");
+						radio_toast_time = SDL_GetTicks();
 						dirty = 1;
+					} else {
+						Background_stopAll();
+						if (Radio_play(stations[act.index].url) == 0) {
+							GFX_clearLayers(LAYER_SCROLLTEXT);
+							ModuleCommon_recordInputTime();
+							last_rendered_artist[0] = '\0';
+							last_rendered_title[0] = '\0';
+							last_art_was_fetching = false;
+							state = RADIO_INTERNAL_PLAYING;
+							dirty = 1;
+						}
 					}
 				}
-			} else if (PAD_justPressed(BTN_B)) {
+				break;
+			case LISTVIEW_BACK:
+				GFX_clearLayers(LAYER_SCROLLTEXT);
 				if (!Radio_isActive()) {
 					Radio_quit();
 				}
 				return MODULE_EXIT_TO_MENU;
-			} else if (PAD_justPressed(BTN_Y)) {
-				add_country_selected = 0;
-				add_country_scroll = 0;
-				state = RADIO_INTERNAL_ADD_COUNTRY;
-				dirty = 1;
-			} else if (PAD_justPressed(BTN_X) && station_count > 0) {
-				strncpy(confirm_station_name, stations[radio_selected].name, RADIO_MAX_NAME - 1);
-				confirm_station_name[RADIO_MAX_NAME - 1] = '\0';
-				confirm_target_index = radio_selected;
-				confirm_action_type = 0;
-				show_confirm = true;
-				dirty = 1;
+			case LISTVIEW_BUTTON:
+				if (act.btn == BTN_Y) {
+					// Enter manage: works from the empty list too (act.index
+					// is -1 there). Reset clears layers + snaps the glide.
+					UI_listViewReset(RadioCountries_view(),
+									 Radio_getCuratedCountryCount(),
+									 Radio_getCuratedCountries());
+					state = RADIO_INTERNAL_ADD_COUNTRY;
+					dirty = 1;
+				} else if (act.btn == BTN_X && act.index >= 0 &&
+						   act.index < station_count) {
+					GFX_clearLayers(LAYER_SCROLLTEXT);
+					strncpy(confirm_station_name, stations[act.index].name, RADIO_MAX_NAME - 1);
+					confirm_station_name[RADIO_MAX_NAME - 1] = '\0';
+					confirm_target_index = act.index;
+					confirm_action_type = 0;
+					show_confirm = true;
+					dirty = 1;
+				}
+				break;
+			default:
+				break;
 			}
+			if (UI_listViewBusy(v))
+				dirty = 1;
 		}
 		// =========================================
 		// RADIO PLAYING STATE
@@ -296,22 +317,24 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 				ModuleCommon_recordInputTime();
 			}
 
-			// Station switching
+			// Station switching (the list view's cursor tracks the current
+			// station, so the list highlights it on return)
 			RadioStation* stations;
 			int station_count = Radio_getStations(&stations);
+			ListView* lv = RadioList_view();
 
 			if (PAD_justPressed(BTN_UP) || PAD_justPressed(BTN_R1)) {
 				if (station_count > 1) {
-					radio_selected = (radio_selected + 1) % station_count;
+					lv->selected = (lv->selected + 1) % station_count;
 					Radio_stop();
-					Radio_play(stations[radio_selected].url);
+					Radio_play(stations[lv->selected].url);
 					dirty = 1;
 				}
 			} else if (PAD_justPressed(BTN_DOWN) || PAD_justPressed(BTN_L1)) {
 				if (station_count > 1) {
-					radio_selected = (radio_selected - 1 + station_count) % station_count;
+					lv->selected = (lv->selected - 1 + station_count) % station_count;
 					Radio_stop();
-					Radio_play(stations[radio_selected].url);
+					Radio_play(stations[lv->selected].url);
 					dirty = 1;
 				}
 			} else if (PAD_justPressed(BTN_B)) {
@@ -379,27 +402,41 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 		// ADD COUNTRY STATE
 		// =========================================
 		else if (state == RADIO_INTERNAL_ADD_COUNTRY) {
-			int country_count = Radio_getCuratedCountryCount();
+			ListView* v = RadioCountries_view();
 
-			if (PAD_navigateMenu(&add_country_selected, country_count))
-				dirty = 1;
-			else if (PAD_justPressed(BTN_A) && country_count > 0) {
+			// The ListView owns navigation; the module switches on actions.
+			ListViewAction act = UI_listViewHandleInput(v);
+			switch (act.type) {
+			case LISTVIEW_ACTIVATED: {
+				GFX_clearLayers(LAYER_SCROLLTEXT);
 				const CuratedCountry* countries = Radio_getCuratedCountries();
-				add_selected_country_code = countries[add_country_selected].code;
+				add_selected_country_code = countries[act.index].code;
 				add_station_selected = 0;
 				add_station_scroll = 0;
 				build_sorted_station_indices(add_selected_country_code);
 				state = RADIO_INTERNAL_ADD_STATIONS;
 				dirty = 1;
-			} else if (PAD_justPressed(BTN_Y)) {
-				help_return_state = RADIO_INTERNAL_ADD_COUNTRY;
-				help_scroll = 0;
-				state = RADIO_INTERNAL_HELP;
-				dirty = 1;
-			} else if (PAD_justPressed(BTN_B)) {
+				break;
+			}
+			case LISTVIEW_BACK:
+				GFX_clearLayers(LAYER_SCROLLTEXT);
 				state = RADIO_INTERNAL_LIST;
 				dirty = 1;
+				break;
+			case LISTVIEW_BUTTON:
+				if (act.btn == BTN_Y) {
+					GFX_clearLayers(LAYER_SCROLLTEXT);
+					help_return_state = RADIO_INTERNAL_ADD_COUNTRY;
+					help_scroll = 0;
+					state = RADIO_INTERNAL_HELP;
+					dirty = 1;
+				}
+				break;
+			default:
+				break;
 			}
+			if (UI_listViewBusy(v))
+				dirty = 1;
 		}
 		// =========================================
 		// ADD STATIONS STATE
@@ -474,11 +511,12 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 			ModuleCommon_PWR_update(&dirty, &show_setting);
 		}
 
-		// Render. The glide checks keep the dirty-flag loop redrawing (and
-		// ticking the pill animation) until the selection pill settles.
+		// Render. The busy checks keep the dirty-flag loop redrawing while
+		// the active view's pill glides or its marquee needs a main-surface
+		// render.
 		if ((dirty ||
-			 (state == RADIO_INTERNAL_LIST && radio_list_glide_active()) ||
-			 (state == RADIO_INTERNAL_ADD_COUNTRY && radio_country_glide_active())) &&
+			 (state == RADIO_INTERNAL_LIST && UI_listViewBusy(RadioList_view())) ||
+			 (state == RADIO_INTERNAL_ADD_COUNTRY && UI_listViewBusy(RadioCountries_view()))) &&
 			!screen_off) {
 			if (ModuleCommon_isScreenOffHintActive()) {
 				GFX_clear(screen);
@@ -486,11 +524,11 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 			} else {
 				switch (state) {
 				case RADIO_INTERNAL_LIST:
-					render_radio_list(screen, show_setting, radio_selected, &radio_scroll,
+					render_radio_list(screen, show_setting,
 									  radio_toast_message, radio_toast_time);
 					break;
 				case RADIO_INTERNAL_PLAYING: {
-					render_radio_playing(screen, show_setting, radio_selected);
+					render_radio_playing(screen, show_setting, RadioList_view()->selected);
 					const RadioMetadata* meta = Radio_getMetadata();
 					strncpy(last_rendered_artist, meta->artist, sizeof(last_rendered_artist) - 1);
 					last_rendered_artist[sizeof(last_rendered_artist) - 1] = '\0';
@@ -499,7 +537,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 					break;
 				}
 				case RADIO_INTERNAL_ADD_COUNTRY:
-					render_radio_add(screen, show_setting, add_country_selected, &add_country_scroll);
+					render_radio_add(screen, show_setting);
 					break;
 				case RADIO_INTERNAL_ADD_STATIONS:
 					render_radio_add_stations(screen, show_setting, add_selected_country_code,
@@ -521,6 +559,12 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 				ModuleCommon_tickToast(radio_toast_message, radio_toast_time, &dirty);
 			}
 		} else if (!screen_off) {
+			// Idle marquee tick for the active list view (activate-after-
+			// delay + steady GPU scroll happen here, not via dirty).
+			if (state == RADIO_INTERNAL_LIST)
+				UI_listViewTickIdle(RadioList_view());
+			else if (state == RADIO_INTERNAL_ADD_COUNTRY)
+				UI_listViewTickIdle(RadioCountries_view());
 			GFX_sync();
 		}
 	}

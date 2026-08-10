@@ -4,156 +4,92 @@
 #include "ui_list.h"
 #include "api.h"
 #include "ui_buttonhintbar.h"
-#include "ui_emptystate.h"
 #include "ui_menubar.h"
 #include "ui_iptv.h"
 #include "ui_fonts.h"
+#include "ui_listview.h"
 #include "ui_toast.h"
 #include "iptv.h"
 #include "iptv_curated.h"
 
-// Selection glide state (one per list surface)
-static ListGlide iptv_user_glide;
-static ListGlide iptv_country_glide;
+// Full-mode ListViews (the widget owns selection, scroll, glide and marquee;
+// module_iptv drives input through the accessors below).
+static ListView iptv_user_channels_view;
+static ListView iptv_curated_countries_view;
 
-// For the module's dirty-flag loops: keep redrawing while a pill glides
-bool iptv_user_channels_glide_active(void) {
-	return UI_listGlideActive(&iptv_user_glide);
+ListView* IPTVUserChannels_view(void) {
+	return &iptv_user_channels_view;
+}
+ListView* IPTVCuratedCountries_view(void) {
+	return &iptv_curated_countries_view;
 }
 
-bool iptv_curated_countries_glide_active(void) {
-	return UI_listGlideActive(&iptv_country_glide);
+static void iptv_user_get_row(void* ctx, int i, bool selected,
+							  ListViewRow* out) {
+	const IPTVChannel* channels = ctx;
+	out->label = channels[i].name;
+	(void)selected;
 }
 
-// Render user's channel list (main screen)
-void render_iptv_user_channels(SDL_Surface* screen, IndicatorType show_setting,
-							   int selected, int scroll_offset,
-							   ScrollTextState* scroll_state) {
+// "%d channels" scratch: the widget consumes the annotation before the next
+// get_row call, so one static buffer per provider is enough.
+static char country_annotation_buf[32];
+
+static void iptv_countries_get_row(void* ctx, int i, bool selected,
+								   ListViewRow* out) {
+	const CuratedTVCountry* countries = ctx;
+	out->label = countries[i].name;
+	snprintf(country_annotation_buf, sizeof(country_annotation_buf),
+			 "%d channels", IPTV_curated_get_channel_count(countries[i].code));
+	out->annotation = country_annotation_buf;
+	(void)selected;
+}
+
+// Render user's channel list (main screen). The widget absorbs the empty
+// state when count == 0.
+void render_iptv_user_channels(SDL_Surface* screen, IndicatorType show_setting) {
+	(void)show_setting;
 	GFX_clear(screen);
-	char truncated[256];
 
 	UI_renderMenuBar(screen, "Online TV");
 
 	int channel_count = IPTV_getUserChannelCount();
 	const IPTVChannel* channels = IPTV_getUserChannels();
 
-	ListLayout layout = UI_calcListLayout(screen);
-	int scroll = scroll_offset;
-	UI_adjustListScroll(selected, &scroll, layout.items_per_page);
-
-	// Selection glide: draw the moving pill BEFORE row content; rows pass
-	// selected=false and tint by pill position. Identity is the user channel
-	// array pointer (single, stable context).
-	ListGlideFrame gf = {layout.list_y, false};
-	if (channel_count > 0) {
-		int rows = layout.items_per_page;
-		if (scroll + rows > channel_count)
-			rows = channel_count - scroll;
-		char sel_trunc[256];
-		int sel_pill_w = UI_calcListPillWidth(font.medium, channels[selected].name,
-											  sel_trunc, layout.max_width, 0);
-		gf = UI_listGlideDraw(&iptv_user_glide, screen,
-							  (const void*)channels,
-							  selected - scroll, rows,
-							  layout.list_y, layout.item_h,
-							  sel_pill_w, true);
-	}
-
-	for (int i = 0; i < layout.items_per_page && (scroll + i) < channel_count; i++) {
-		int idx = scroll + i;
-		const IPTVChannel* ch = &channels[idx];
-		int y = layout.list_y + i * layout.item_h;
-		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
-
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium,
-												ch->name, truncated,
-												y, false, 0);
-
-		// Marquee only once the pill has settled on this row
-		UI_renderListItemText(screen,
-							  (row_sel && !gf.animating) ? scroll_state : NULL,
-							  ch->name, font.medium,
-							  pos.text_x, pos.text_y,
-							  pos.pill_width - SCALE1(BUTTON_PADDING * 2),
-							  row_sel);
-	}
-
-	UI_renderScrollIndicators(screen, scroll, layout.items_per_page, channel_count);
-
-	UI_renderButtonHintBar(screen, (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "PLAY", NULL});
-}
-
-// Render IPTV empty state (no channels added)
-void render_iptv_empty(SDL_Surface* screen, IndicatorType show_setting) {
-	GFX_clear(screen);
-	UI_renderMenuBar(screen, "Online TV");
-	UI_renderEmptyState(screen, "No channels saved",
-						"Press Y to manage channels", "MANAGE");
+	ListView* v = &iptv_user_channels_view;
+	v->title = NULL; // menu bar drawn above (caller-owned chrome)
+	v->font = font.medium;
+	v->count = channel_count;
+	v->get_row = iptv_user_get_row;
+	v->ctx = (void*)channels;
+	v->list_id = (const void*)channels;
+	v->empty_title = "No channels saved";
+	v->empty_subtitle = "Press Y to manage channels";
+	v->empty_y_label = "MANAGE";
+	v->hint_pairs = (char*[]){"MENU", "CONTROLS", "B", "BACK", "A", "PLAY", NULL};
+	UI_listViewRender(v, screen);
 }
 
 // Render curated country list for browsing
-void render_iptv_curated_countries(SDL_Surface* screen, IndicatorType show_setting,
-								   int selected, int* scroll_offset) {
+void render_iptv_curated_countries(SDL_Surface* screen, IndicatorType show_setting) {
+	(void)show_setting;
 	GFX_clear(screen);
-
-	int hw = screen->w;
-	char truncated[256];
 
 	UI_renderMenuBar(screen, "Browse Channels");
 
 	int country_count = IPTV_curated_get_country_count();
 	const CuratedTVCountry* countries = IPTV_curated_get_countries();
 
-	ListLayout layout = UI_calcListLayout(screen);
-	UI_adjustListScroll(selected, scroll_offset, layout.items_per_page);
-
-	// Selection glide: moving pill drawn before row content; rows pass
-	// selected=false and tint by pill position. Identity is the curated
-	// country array pointer (single, stable context).
-	ListGlideFrame gf = {layout.list_y, false};
-	if (country_count > 0) {
-		int rows = layout.items_per_page;
-		if (*scroll_offset + rows > country_count)
-			rows = country_count - *scroll_offset;
-		char sel_trunc[256];
-		int sel_pill_w = UI_calcListPillWidth(font.medium, countries[selected].name,
-											  sel_trunc, layout.max_width, 0);
-		gf = UI_listGlideDraw(&iptv_country_glide, screen,
-							  (const void*)countries,
-							  selected - *scroll_offset, rows,
-							  layout.list_y, layout.item_h,
-							  sel_pill_w, true);
-	}
-
-	for (int i = 0; i < layout.items_per_page && *scroll_offset + i < country_count; i++) {
-		int idx = *scroll_offset + i;
-		const CuratedTVCountry* country = &countries[idx];
-
-		int y = layout.list_y + i * layout.item_h;
-		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
-
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium,
-												country->name, truncated,
-												y, false, 0);
-
-		UI_renderListItemText(screen, NULL, country->name, font.medium,
-							  pos.text_x, pos.text_y, layout.max_width, row_sel);
-
-		// Channel count on right
-		int curated_ch_count = IPTV_curated_get_channel_count(country->code);
-		char count_str[32];
-		snprintf(count_str, sizeof(count_str), "%d channels", curated_ch_count);
-		SDL_Color count_color = row_sel ? COLOR_GRAY : COLOR_DARK_TEXT;
-		SDL_Surface* count_text = TTF_RenderUTF8_Blended(font.tiny, count_str, count_color);
-		if (count_text) {
-			SDL_BlitSurface(count_text, NULL, screen, &(SDL_Rect){hw - count_text->w - SCALE1(PADDING * 2), y + (layout.item_h - count_text->h) / 2});
-			SDL_FreeSurface(count_text);
-		}
-	}
-
-	UI_renderScrollIndicators(screen, *scroll_offset, layout.items_per_page, country_count);
-
-	UI_renderButtonHintBar(screen, (char*[]){"B", "BACK", "A", "SELECT", NULL});
+	ListView* v = &iptv_curated_countries_view;
+	v->title = NULL; // menu bar drawn above (caller-owned chrome)
+	v->font = font.medium;
+	v->count = country_count;
+	v->get_row = iptv_countries_get_row;
+	v->ctx = (void*)countries;
+	v->list_id = (const void*)countries;
+	v->empty_title = NULL; // curated catalog is never empty
+	v->hint_pairs = (char*[]){"B", "BACK", "A", "SELECT", NULL};
+	UI_listViewRender(v, screen);
 }
 
 // Render curated channels for a country

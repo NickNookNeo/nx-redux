@@ -10,6 +10,7 @@
 #include "config.h"
 #include "settings_menu.h"
 #include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_splash.h"
 #include "ui_quitrequest.h"
 #include "ui_confirmdialog.h"
@@ -339,7 +340,13 @@ static void build_menu_tree(void) {
 static const char* main_item_labels[MAIN_ITEM_COUNT] = {
 	"Achievements", "Sync now", "Settings"};
 
-static ListGlide main_glide;
+static ListView main_view;
+
+static void main_list_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	(void)ctx;
+	(void)selected;
+	out->label = main_item_labels[i];
+}
 
 static const SDL_Color col_header_title = {255, 255, 255, 255};
 static const SDL_Color col_header_gray = {180, 180, 180, 255};
@@ -413,44 +420,21 @@ static int render_main_header(SDL_Surface* screen) {
 	return y;
 }
 
-// Selectable list of the 3 main actions, drawn with the shared pill list
-// rendering (same idiom as nxredux's game list).
-static void render_main_list(SDL_Surface* screen, int list_top, int selected) {
-	ListLayout layout = {
-		.item_h = SCALE1(PILL_SIZE),
-		.max_width = screen->w - SCALE1(PADDING * 2),
-	};
-
-	char sel_trunc[256];
-	int sel_pill_w = UI_calcListPillWidth(font.large, main_item_labels[selected],
-										  sel_trunc, layout.max_width, 0);
-	ListGlideFrame gf = UI_listGlideDraw(&main_glide, screen,
-										 (const void*)main_item_labels,
-										 selected, MAIN_ITEM_COUNT,
-										 list_top, layout.item_h,
-										 sel_pill_w, true);
-
-	for (int i = 0; i < MAIN_ITEM_COUNT; i++) {
-		char truncated[256];
-		int y = list_top + i * layout.item_h;
-		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.large,
-												main_item_labels[i], truncated,
-												y, false, 0);
-		int text_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2);
-		UI_renderListItemText(screen, NULL, main_item_labels[i], font.large,
-							  pos.text_x, pos.text_y, text_width, row_sel);
-	}
-}
-
-static void render_main_screen(SDL_Surface* screen, int selected) {
+// Selectable list of the 3 main actions, drawn by the shared ListView widget
+// with its origin pushed below the custom status header.
+static void render_main_screen(SDL_Surface* screen) {
 	GFX_clear(screen);
 	UI_renderMenuBar(screen, "RetroAchievements");
 
 	int list_top = render_main_header(screen);
-	render_main_list(screen, list_top, selected);
-
-	UI_renderButtonHintBar(screen, (char*[]){"B", "EXIT", "A", "OPEN", NULL});
+	main_view.title = NULL; // we drew our own chrome above
+	main_view.font = font.large;
+	main_view.count = MAIN_ITEM_COUNT;
+	main_view.get_row = main_list_get_row;
+	main_view.list_id = (const void*)main_item_labels;
+	main_view.list_y_override = list_top;
+	main_view.hint_pairs = (char*[]){"B", "EXIT", "A", "OPEN", NULL};
+	UI_listViewRender(&main_view, screen);
 }
 
 // Run the settings_menu framework for ra_settings_page only, then return to
@@ -521,10 +505,11 @@ int main(int argc, char* argv[]) {
 	build_menu_tree();
 	settings_menu_init();
 
-	int selected = 0;
 	bool quit = false;
 	bool dirty = true;
 	IndicatorType show_setting = INDICATOR_NONE;
+
+	UI_listViewReset(&main_view, MAIN_ITEM_COUNT, main_item_labels);
 
 	while (!quit) {
 		GFX_startFrame();
@@ -534,19 +519,11 @@ int main(int argc, char* argv[]) {
 							 "Your settings are automatically saved");
 
 		if (!quit) {
-			if (PAD_justRepeated(BTN_DOWN)) {
-				selected = (selected + 1) % MAIN_ITEM_COUNT;
-				dirty = true;
-			}
-			if (PAD_justRepeated(BTN_UP)) {
-				selected = (selected - 1 + MAIN_ITEM_COUNT) % MAIN_ITEM_COUNT;
-				dirty = true;
-			}
-			if (PAD_justPressed(BTN_B)) {
+			ListViewAction act = UI_listViewHandleInput(&main_view);
+			if (act.type == LISTVIEW_BACK) {
 				quit = true;
-			}
-			if (PAD_justPressed(BTN_A)) {
-				switch (selected) {
+			} else if (act.type == LISTVIEW_ACTIVATED) {
+				switch (act.index) {
 				case 0:
 					RATBrowser_run(g_screen);
 					break;
@@ -566,7 +543,7 @@ int main(int argc, char* argv[]) {
 				dirty = true;
 			}
 
-			if (UI_listGlideActive(&main_glide))
+			if (UI_listViewBusy(&main_view))
 				dirty = true;
 		}
 
@@ -586,10 +563,11 @@ int main(int argc, char* argv[]) {
 			dirty = true;
 
 		if (dirty) {
-			render_main_screen(screen, selected);
+			render_main_screen(screen);
 			GFX_flip(screen);
 			dirty = false;
 		} else {
+			UI_listViewTickIdle(&main_view);
 			GFX_sync();
 		}
 	}

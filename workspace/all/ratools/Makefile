@@ -33,7 +33,7 @@ SOURCE = ratools.c ratools_data.c ratools_browser.c ratools_sync.c ratools_prefe
          $(COMMON_PATH)/ra_offline.c $(COMMON_PATH)/ra_offline_net.c \
          $(COMMON_PATH)/ra_hash_cdreader.c ../minarch/chd_reader.c \
          $(COMMON_PATH)/display_helper.c \
-         $(UI_COMPONENT_SRCS) $(UI_DIR)/ui_list.c \
+         $(UI_COMPONENT_SRCS) $(UI_DIR)/ui_list.c $(UI_LISTVIEW_SRCS) \
          $(UI_DIR)/ui_keyboard.c \
          ../../$(PLATFORM)/platform/platform.c
 

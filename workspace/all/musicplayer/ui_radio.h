@@ -2,23 +2,27 @@
 #define __UI_RADIO_H__
 
 #include "api.h"
+#include "ui_listview.h"
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 
 // GPU layer for buffer indicator
 #define LAYER_BUFFER 4
 
+// Full-mode ListViews: ui_radio.c owns/renders them, module_radio.c drives
+// their input through these accessors.
+ListView* RadioList_view(void);
+ListView* RadioCountries_view(void);
+
 // Render the radio station list
 void render_radio_list(SDL_Surface* screen, IndicatorType show_setting,
-					   int radio_selected, int* radio_scroll,
 					   const char* toast_message, uint32_t toast_time);
 
 // Render the radio playing screen
 void render_radio_playing(SDL_Surface* screen, IndicatorType show_setting, int radio_selected);
 
 // Render add stations - country selection screen
-void render_radio_add(SDL_Surface* screen, IndicatorType show_setting,
-					  int add_country_selected, int* add_country_scroll);
+void render_radio_add(SDL_Surface* screen, IndicatorType show_setting);
 
 // Render add stations - station selection screen
 void render_radio_add_stations(SDL_Surface* screen, IndicatorType show_setting,
@@ -29,10 +33,6 @@ void render_radio_add_stations(SDL_Surface* screen, IndicatorType show_setting,
 
 // Render help/instructions screen
 void render_radio_help(SDL_Surface* screen, IndicatorType show_setting, int* help_scroll);
-
-// Check if a selection pill is mid-glide (keep dirty loop redrawing)
-bool radio_list_glide_active(void);
-bool radio_country_glide_active(void);
 
 // GPU buffer indicator and status functions (rendered independently like Spectrum/PlayTime)
 void RadioStatus_setPosition(int bar_x, int bar_y, int bar_w, int bar_h,

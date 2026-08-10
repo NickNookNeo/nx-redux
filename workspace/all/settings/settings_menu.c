@@ -9,6 +9,7 @@
 #include "ui_buttonhintbar.h"
 #include "ui_menubar.h"
 #include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_loadingoverlay.h"
 #include "display_helper.h"
 
@@ -28,6 +29,10 @@ void settings_menu_init(void) {
 void settings_menu_push(SettingsPage* page) {
 	if (stack_depth >= MAX_PAGE_DEPTH)
 		return;
+	// Page transition: the category marquee paints GPU LAYER_SCROLLTEXT,
+	// which persists over the incoming page unless cleared. It re-primes on
+	// the next list render (ScrollText repaints the layer every render).
+	GFX_clearLayers(LAYER_SCROLLTEXT);
 	if (page->on_show)
 		page->on_show(page);
 	page_stack[stack_depth++] = page;
@@ -36,6 +41,8 @@ void settings_menu_push(SettingsPage* page) {
 void settings_menu_pop(void) {
 	if (stack_depth <= 0)
 		return;
+	// Same layer hygiene as settings_menu_push, for the pop direction.
+	GFX_clearLayers(LAYER_SCROLLTEXT);
 	SettingsPage* page = page_stack[stack_depth - 1];
 	if (page->on_hide)
 		page->on_hide(page);
@@ -346,64 +353,54 @@ void settings_menu_handle_input(bool* quit, bool* dirty) {
 // Rendering: Category List Mode
 // ============================================
 
-static ListGlide list_glide;
+static ListView category_view;
 
 bool settings_menu_glide_active(void) {
-	return UI_listGlideActive(&list_glide);
+	// settings.c / ratools.c call this unconditionally every loop iteration
+	// (the loop only tracks glide_active -> dirty; it has no separate idle
+	// branch). That makes this the one safe site to advance the marquee's
+	// idle animation: without it, once a long category name starts scrolling
+	// Busy goes false (isScrolling, not needsRender) and the marquee would
+	// freeze mid-scroll. Ticking here keeps it animating during idle frames.
+	//
+	// Gated to list pages only: category_view belongs to the category list,
+	// and ticking it over a value/settings page would keep repainting the
+	// category marquee onto LAYER_SCROLLTEXT underneath that page (undoing
+	// the push/pop clears above).
+	SettingsPage* page = settings_menu_current();
+	if (!page || !page->is_list)
+		return false;
+	UI_listViewTickIdle(&category_view);
+	return UI_listViewBusy(&category_view);
 }
 
-static void render_list_mode(SDL_Surface* screen, SettingsPage* page, ListLayout* layout) {
+static void category_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	SettingsPage* page = ctx;
+	SettingItem* item = settings_page_visible_item(page, i);
+	const char* text = item ? item->name : "";
+	if (item && item->type == ITEM_STATIC && item->get_display)
+		text = item->get_display();
+	out->label = text;
+	(void)selected;
+}
+
+static void render_list_mode(SDL_Surface* screen, SettingsPage* page,
+							 ListLayout* layout) {
+	(void)layout;
 	int vis_count = settings_page_visible_count(page);
-	if (vis_count == 0)
-		return;
-
-	UI_adjustListScroll(page->selected, &page->scroll, layout->items_per_page);
-
-	char truncated[256];
-	int start = page->scroll;
-	int end = start + layout->items_per_page;
-	if (end > vis_count)
-		end = vis_count;
-
-	// Selection glide: size the selected item's pill and draw the moving
-	// pill before the rows (rows pass selected=false below).
-	ListGlideFrame gf = {layout->list_y, false};
-	{
-		SettingItem* sel_item = settings_page_visible_item(page, page->selected);
-		const char* sel_text = sel_item ? sel_item->name : "";
-		if (sel_item && sel_item->type == ITEM_STATIC && sel_item->get_display)
-			sel_text = sel_item->get_display();
-		int sel_pill_w = UI_calcListPillWidth(font.large, sel_text, truncated,
-											  layout->max_width, 0);
-		gf = UI_listGlideDraw(&list_glide, screen, (const void*)page,
-							  page->selected - start, end - start,
-							  layout->list_y, layout->item_h, sel_pill_w, true);
-	}
-
-	for (int vi = start; vi < end; vi++) {
-		SettingItem* item = settings_page_visible_item(page, vi);
-		if (!item)
-			continue;
-
-		int y = layout->list_y + (vi - start) * layout->item_h;
-		bool row_sel = UI_listGlideRowSelected(&gf, y, layout->item_h);
-
-		const char* text = item->name;
-		if (item->type == ITEM_STATIC && item->get_display)
-			text = item->get_display();
-
-		ListItemPos pos = UI_renderListItemPill(screen, layout, font.large, text,
-												truncated, y, false, 0);
-
-		SDL_Color text_color = UI_getListTextColor(row_sel);
-		SDL_Surface* text_surf = TTF_RenderUTF8_Blended(font.large, truncated, text_color);
-		if (text_surf) {
-			SDL_BlitSurface(text_surf, NULL, screen, &(SDL_Rect){pos.text_x, pos.text_y, 0, 0});
-			SDL_FreeSurface(text_surf);
-		}
-	}
-
-	UI_renderScrollIndicators(screen, page->scroll, layout->items_per_page, vis_count);
+	ListView* v = &category_view;
+	v->title = NULL; // framework draws menu bar + hints
+	v->hint_pairs = NULL;
+	v->font = font.large;
+	v->count = vis_count;
+	v->get_row = category_get_row;
+	v->ctx = page;
+	v->list_id = (const void*)page; // page identity: push/pop snaps the glide
+	// hosted mode: the framework owns selection/scroll; sync before render
+	v->selected = page->selected;
+	v->scroll = page->scroll;
+	UI_listViewRender(v, screen);
+	page->scroll = v->scroll; // widget may have advanced the window
 }
 
 // ============================================

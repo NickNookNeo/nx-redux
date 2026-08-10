@@ -24,7 +24,7 @@
 #include "network_common.h"
 #include "ui_buttonhintbar.h"
 #include "utils.h" // app_quit — a caught signal must unwind the picker/scan loops
-#include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_message.h"
 #include "wifi_direct.h"
 #include "wizard.h"
@@ -79,41 +79,46 @@ static void wiz_error(const char* message) {
 	}
 }
 
-// One list screen for both pickers. UI_renderSimpleMenu draws every item it is
-// given, so the caller's list is windowed here (a scan can return more networks
-// than fit) and the slice start is handed over as the item array.
-static void wiz_render_list(const char* title, const char** labels, int count,
-							int selected, int* scroll) {
-	ListLayout layout = UI_calcListLayout(wiz_screen);
-	UI_adjustListScroll(selected, scroll, layout.items_per_page);
+// One list screen for both pickers. The ListView owns scroll and draws its
+// own indicators, so the full label array goes in — no windowing here. Each
+// picker Resets the view when its labels are rebuilt (scan completion).
+static ListView wiz_pick_view;
 
-	int visible = count - *scroll;
-	if (visible > layout.items_per_page)
-		visible = layout.items_per_page;
+static void wiz_pick_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	const char** labels = ctx;
+	out->label = labels[i];
+	(void)selected;
+}
 
-	SimpleMenuConfig config = {
-		.title = title,
-		.items = labels + *scroll,
-		.item_count = visible,
-		.btn_b_label = "BACK",
-		.btn_a_label = "SELECT",
-		.hide_controls_hint = true};
-	UI_renderSimpleMenu(wiz_screen, selected - *scroll, &config);
-	UI_renderScrollIndicators(wiz_screen, *scroll, layout.items_per_page, count);
+static void wiz_render_list(const char* title, const char** labels, int count) {
+	GFX_clear(wiz_screen);
+	ListView* v = &wiz_pick_view;
+	v->title = title;
+	v->font = font.large;
+	v->count = count;
+	v->get_row = wiz_pick_get_row;
+	v->ctx = (void*)labels;
+	v->list_id = (const void*)labels;
+	v->hint_pairs = (char*[]){"B", "BACK", "A", "SELECT", NULL};
+	UI_listViewRender(v, wiz_screen);
 	GFX_flip(wiz_screen);
 }
 
 // Same frame as wiz_render_list but with no items yet, so the title bar and the
-// B hint stay put while the (blocking) scan runs.
+// B hint stay put while the (blocking) scan runs. empty_title stays NULL — the
+// widget draws no empty-state visual and the centered message below is the copy.
 static void wiz_render_empty(const char* title, const char* message) {
-	SimpleMenuConfig config = {
-		.title = title,
-		.items = NULL,
-		.item_count = 0,
-		.btn_b_label = "BACK",
-		.btn_a_label = "SELECT",
-		.hide_controls_hint = true};
-	UI_renderSimpleMenu(wiz_screen, 0, &config);
+	GFX_clear(wiz_screen);
+	ListView* v = &wiz_pick_view;
+	v->title = title;
+	v->font = font.large;
+	v->count = 0;
+	v->get_row = wiz_pick_get_row;
+	v->ctx = NULL;
+	v->list_id = NULL;
+	v->empty_title = NULL;
+	v->hint_pairs = (char*[]){"B", "BACK", "A", "SELECT", NULL};
+	UI_listViewRender(v, wiz_screen);
 	UI_renderCenteredMessage(wiz_screen, message);
 	GFX_flip(wiz_screen);
 }
@@ -299,8 +304,7 @@ int wiz_wifi_ensure_connected(WizSession* s) {
 	char label_text[WIZ_WIFI_MAX_NETWORKS][WIZ_LABEL_MAX];
 	const char* labels[WIZ_WIFI_MAX_NETWORKS];
 	int count = 0;
-	int selected = 0;
-	int scroll = 0;
+	int last_count = -1; // count at the previous scan; -1 = no scan yet
 	bool dirty = true;
 	bool scanned = false;
 	bool preselected = false;
@@ -356,76 +360,85 @@ int wiz_wifi_ensure_connected(WizSession* s) {
 				labels[i] = label_text[i];
 			}
 
-			// Pre-select the connected network, else the strongest saved one.
-			// Once only: after that the cursor belongs to the user.
-			if (count > 0 && !preselected) {
-				preselected = true;
-				int connected_idx = -1;
-				int best_saved = -1;
-				int best_rssi = -999;
+			// Reset only when the count changed since the last scan (the
+			// initial scan — last_count == -1 — always resets): the labels
+			// pointer is stable, so a quiet rescan keeps the view's identity,
+			// cursor, glide and marquee untouched instead of snapping them
+			// every 4s — wizard_net.c's host-picker model. On a change,
+			// reset, then put the cursor back — the widget owns it now, but
+			// a rescan must not move it out from under the user.
+			if (count != last_count) {
+				int keep = wiz_pick_view.selected;
+				UI_listViewReset(&wiz_pick_view, count, labels);
 
-				for (int i = 0; i < count; i++) {
-					if (connected_ssid && strcmp(networks[i].ssid, connected_ssid) == 0)
-						connected_idx = i;
-					if (networks[i].has_saved_creds && networks[i].rssi > best_rssi) {
-						best_rssi = networks[i].rssi;
-						best_saved = i;
+				// Pre-select the connected network, else the strongest saved
+				// one. Once only: after that the cursor belongs to the user.
+				if (count > 0 && !preselected) {
+					preselected = true;
+					int connected_idx = -1;
+					int best_saved = -1;
+					int best_rssi = -999;
+
+					for (int i = 0; i < count; i++) {
+						if (connected_ssid && strcmp(networks[i].ssid, connected_ssid) == 0)
+							connected_idx = i;
+						if (networks[i].has_saved_creds && networks[i].rssi > best_rssi) {
+							best_rssi = networks[i].rssi;
+							best_saved = i;
+						}
 					}
+
+					if (connected_idx >= 0)
+						wiz_pick_view.selected = connected_idx;
+					else if (best_saved >= 0)
+						wiz_pick_view.selected = best_saved;
+				} else if (keep < count) {
+					wiz_pick_view.selected = keep;
+				} else if (count > 0) {
+					wiz_pick_view.selected = count - 1;
 				}
-
-				if (connected_idx >= 0)
-					selected = connected_idx;
-				else if (best_saved >= 0)
-					selected = best_saved;
-				else
-					selected = 0;
 			}
-
-			if (selected >= count)
-				selected = count > 0 ? count - 1 : 0;
+			last_count = count;
 		}
 
 		GFX_startFrame();
 		PAD_poll();
 
-		if (PAD_justPressed(BTN_B)) {
+		ListViewAction act = UI_listViewHandleInput(&wiz_pick_view);
+		if (act.type == LISTVIEW_BACK) {
 			// Cancelling after a failed attempt must not leave the device
 			// disassociated with its other saved networks disabled.
 			wiz_restore_connection(attempted);
 			return -2;
 		}
+		if (act.type == LISTVIEW_ACTIVATED) {
+			// A long SSID's marquee band (LAYER_SCROLLTEXT) must not persist
+			// over the connect status screens (or past a success return).
+			GFX_clearLayers(LAYER_SCROLLTEXT);
+			if (wiz_picker_connect(&networks[act.index], connected_ssid, &attempted) == 0)
+				return 0;
 
-		if (count > 0) {
-			if (PAD_justRepeated(BTN_UP)) {
-				selected = (selected + count - 1) % count;
-				dirty = true;
-			} else if (PAD_justRepeated(BTN_DOWN)) {
-				selected = (selected + 1) % count;
-				dirty = true;
-			} else if (PAD_justPressed(BTN_A)) {
-				if (wiz_picker_connect(&networks[selected], connected_ssid, &attempted) == 0)
-					return 0;
-
-				// Failed: back to the list with fresh results. The timeout budget
-				// restarts because it exists to catch an abandoned screen, and a
-				// connect attempt (keyboard entry included) is not that — minarch
-				// never restarts it, but there a timeout only closed a menu.
-				scanned = false;
-				dirty = true;
-				start_time = SDL_GetTicks();
-			}
+			// Failed: back to the list with fresh results. The timeout budget
+			// restarts because it exists to catch an abandoned screen, and a
+			// connect attempt (keyboard entry included) is not that — minarch
+			// never restarts it, but there a timeout only closed a menu.
+			scanned = false;
+			dirty = true;
+			start_time = SDL_GetTicks();
 		}
+		if (UI_listViewBusy(&wiz_pick_view))
+			dirty = true;
 
 		PWR_update(&dirty, NULL, NULL, NULL);
 
-		// The glide check keeps redrawing until the selection pill settles.
-		if (dirty || UI_simpleMenuGlideActive()) {
+		if (dirty) {
 			if (count > 0)
-				wiz_render_list("Select WiFi Network", labels, count, selected, &scroll);
+				wiz_render_list("Select WiFi Network", labels, count);
 			else
 				wiz_render_empty("Select WiFi Network", "No networks found");
 			dirty = false;
 		} else {
+			UI_listViewTickIdle(&wiz_pick_view);
 			GFX_sync();
 		}
 	}
@@ -497,8 +510,7 @@ int wiz_hotspot_join(WizSession* s) {
 	const char* labels[WIZ_HOTSPOT_MAX];
 	size_t prefix_len = strlen(LINK_HOTSPOT_SSID_PREFIX);
 	int count = 0;
-	int selected = 0;
-	int scroll = 0;
+	int last_count = -1; // count at the previous scan; -1 = no scan yet
 	bool dirty = true;
 	bool scanned = false;
 	uint32_t last_scan = 0;
@@ -539,40 +551,48 @@ int wiz_hotspot_join(WizSession* s) {
 				labels[i] = label_text[i];
 			}
 
-			if (selected >= count)
-				selected = count > 0 ? count - 1 : 0;
+			// Reset only when the count changed since the last scan (the
+			// initial scan — last_count == -1 — always resets): a quiet
+			// rescan keeps the view's identity, cursor, glide and marquee
+			// untouched — wizard_net.c's host-picker model. On a change,
+			// restore the cursor clamped to the new count.
+			if (count != last_count) {
+				int keep = wiz_pick_view.selected;
+				UI_listViewReset(&wiz_pick_view, count, labels);
+				if (keep < count)
+					wiz_pick_view.selected = keep;
+				else if (count > 0)
+					wiz_pick_view.selected = count - 1;
+			}
+			last_count = count;
 		}
 
 		GFX_startFrame();
 		PAD_poll();
 
-		if (PAD_justPressed(BTN_B))
+		ListViewAction act = UI_listViewHandleInput(&wiz_pick_view);
+		if (act.type == LISTVIEW_BACK)
 			return -2;
-
-		if (count > 0) {
-			if (PAD_justRepeated(BTN_UP)) {
-				selected = (selected + count - 1) % count;
-				dirty = true;
-			} else if (PAD_justRepeated(BTN_DOWN)) {
-				selected = (selected + 1) % count;
-				dirty = true;
-			} else if (PAD_justPressed(BTN_A)) {
-				strncpy(selected_ssid, hotspots[selected], sizeof(selected_ssid) - 1);
-				selected_ssid[sizeof(selected_ssid) - 1] = '\0';
-				continue;
-			}
+		if (act.type == LISTVIEW_ACTIVATED) {
+			// Layer hygiene on the way out to the connect status screens.
+			GFX_clearLayers(LAYER_SCROLLTEXT);
+			strncpy(selected_ssid, hotspots[act.index], sizeof(selected_ssid) - 1);
+			selected_ssid[sizeof(selected_ssid) - 1] = '\0';
+			continue;
 		}
+		if (UI_listViewBusy(&wiz_pick_view))
+			dirty = true;
 
 		PWR_update(&dirty, NULL, NULL, NULL);
 
-		// The glide check keeps redrawing until the selection pill settles.
-		if (dirty || UI_simpleMenuGlideActive()) {
+		if (dirty) {
 			if (count > 0)
-				wiz_render_list("Select code shown on the host", labels, count, selected, &scroll);
+				wiz_render_list("Select code shown on the host", labels, count);
 			else
 				wiz_render_empty("Select code shown on the host", "Waiting for a host...");
 			dirty = false;
 		} else {
+			UI_listViewTickIdle(&wiz_pick_view);
 			GFX_sync();
 		}
 	}

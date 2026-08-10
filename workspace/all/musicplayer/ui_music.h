@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "api.h"
 #include "browser.h"
+#include "ui_listview.h"
 
 // Use LAYER_THUMBNAIL (3) for playtime - platform only supports layers 0-5
 #define LAYER_PLAYTIME 3
@@ -19,17 +20,8 @@ void render_playing(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 					bool shuffle_enabled, bool repeat_enabled,
 					int playlist_track_num, int playlist_total);
 
-// Check if the browser selection pill is mid-glide (keep dirty loop redrawing)
-bool browser_glide_active(void);
-
-// Check if browser list has active scrolling (for refresh optimization)
-bool browser_needs_scroll_refresh(void);
-
-// Check if browser scroll needs a render to transition (delay phase)
-bool browser_scroll_needs_render(void);
-
-// Animate browser scroll only (GPU mode, no screen redraw needed)
-void browser_animate_scroll(void);
+// The browser's full-mode ListView (owns selection/scroll/glide/marquee)
+ListView* MusicBrowser_view(void);
 
 // Check if player title has active scrolling (for refresh optimization)
 bool player_needs_scroll_refresh(void);

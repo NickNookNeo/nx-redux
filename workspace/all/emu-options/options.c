@@ -106,12 +106,12 @@ static SDL_Surface* screen = NULL;
 /*
  * Pill list, used by the picker and the section screen.
  *
- * This is UI_renderSimpleMenu's body with the button hints hoisted into a
- * parameter. That function hardcodes its A hint to "OPEN", which is wrong on
- * the picker — A picks an emulator there — and its hint bar cannot be
- * suppressed, so drawing a second one over it would stack UI_getScrim's
- * 70%-opaque black twice and leave the first bar's labels showing through.
- * Everything else is the same shared components UI_renderSimpleMenu uses.
+ * This renders directly from the shared ListView pill primitives so the
+ * button hints can be passed in as a parameter: the A hint here is not
+ * "OPEN" — A picks an emulator on the picker — and this owns its own single
+ * hint bar (drawing a second bar over a widget-supplied one would stack
+ * UI_getScrim's 70%-opaque black twice and leave the first bar's labels
+ * showing through). Everything else uses the same shared components.
  */
 static void render_list(const char* title, const char** labels, int count,
 						int selected, int* scroll, char** hints) {

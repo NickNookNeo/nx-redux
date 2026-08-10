@@ -45,7 +45,7 @@
 #include "defines.h"
 #include "network_common.h"
 #include "ui_buttonhintbar.h"
-#include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_message.h"
 #include "utils.h"
 #include "wifi_direct.h"
@@ -189,38 +189,45 @@ static void wiz_net_render_wait_status(const char* message, bool cancelable) {
 	GFX_flip(wiz_screen);
 }
 
-// Host list, windowed the same way as wizard_wifi.c's pickers:
-// UI_renderSimpleMenu draws every item it is handed, so the slice start is
-// passed as the item array.
-static void wiz_net_render_list(const char** labels, int count, int selected, int* scroll) {
-	ListLayout layout = UI_calcListLayout(wiz_screen);
-	UI_adjustListScroll(selected, scroll, layout.items_per_page);
+// Host list, same shape as wizard_wifi.c's pickers: the ListView owns scroll
+// and draws its own indicators, so the full label array goes in. The picker
+// Resets the view whenever a poll changes match_count.
+static ListView net_pick_view;
 
-	int visible = count - *scroll;
-	if (visible > layout.items_per_page)
-		visible = layout.items_per_page;
+static void wiz_net_pick_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	const char** labels = ctx;
+	out->label = labels[i];
+	(void)selected;
+}
 
-	SimpleMenuConfig config = {
-		.title = "Select Host",
-		.items = labels + *scroll,
-		.item_count = visible,
-		.btn_b_label = "BACK",
-		.btn_a_label = "SELECT",
-		.hide_controls_hint = true};
-	UI_renderSimpleMenu(wiz_screen, selected - *scroll, &config);
-	UI_renderScrollIndicators(wiz_screen, *scroll, layout.items_per_page, count);
+static void wiz_net_render_list(const char** labels, int count) {
+	GFX_clear(wiz_screen);
+	ListView* v = &net_pick_view;
+	v->title = "Select Host";
+	v->font = font.large;
+	v->count = count;
+	v->get_row = wiz_net_pick_get_row;
+	v->ctx = (void*)labels;
+	v->list_id = (const void*)labels;
+	v->hint_pairs = (char*[]){"B", "BACK", "A", "SELECT", NULL};
+	UI_listViewRender(v, wiz_screen);
 	GFX_flip(wiz_screen);
 }
 
+// empty_title stays NULL — the widget draws no empty-state visual and the
+// centered message below is the copy.
 static void wiz_net_render_empty(const char* message) {
-	SimpleMenuConfig config = {
-		.title = "Select Host",
-		.items = NULL,
-		.item_count = 0,
-		.btn_b_label = "BACK",
-		.btn_a_label = "SELECT",
-		.hide_controls_hint = true};
-	UI_renderSimpleMenu(wiz_screen, 0, &config);
+	GFX_clear(wiz_screen);
+	ListView* v = &net_pick_view;
+	v->title = "Select Host";
+	v->font = font.large;
+	v->count = 0;
+	v->get_row = wiz_net_pick_get_row;
+	v->ctx = NULL;
+	v->list_id = NULL;
+	v->empty_title = NULL;
+	v->hint_pairs = (char*[]){"B", "BACK", "A", "SELECT", NULL};
+	UI_listViewRender(v, wiz_screen);
 	UI_renderCenteredMessage(wiz_screen, message);
 	GFX_flip(wiz_screen);
 }
@@ -1093,8 +1100,6 @@ static int wiz_client_pick_host(const WizArgs* a, char* ip_out, size_t ip_size) 
 	int matches[WIZ_NET_MAX_HOSTS];
 	int host_count = 0; // every host seen, our game or not
 	int match_count = 0;
-	int selected = 0;
-	int scroll = 0;
 	bool dirty = true;
 	uint32_t last_poll = 0;
 	uint32_t start_time = SDL_GetTicks();
@@ -1104,6 +1109,12 @@ static int wiz_client_pick_host(const WizArgs* a, char* ip_out, size_t ip_size) 
 		wiz_net_error("Could not listen for hosts.\n\nPlease try again.");
 		return -1;
 	}
+
+	// Fresh entry, fresh view: the static view may still hold a previous
+	// invocation's count/cursor (a rejected client comes back through here),
+	// and the labels array can land on the same stack address, so the
+	// identity check alone would not catch it.
+	UI_listViewReset(&net_pick_view, 0, NULL);
 
 	while (1) {
 		uint32_t now = SDL_GetTicks();
@@ -1156,45 +1167,50 @@ static int wiz_client_pick_host(const WizArgs* a, char* ip_out, size_t ip_size) 
 				}
 			}
 
+			// Reset only when the count changed: the labels pointer is stable,
+			// so a quiet re-poll keeps the view's identity, cursor and glide
+			// untouched. On a change, restore the cursor clamped to the new
+			// count (today's behaviour).
 			if (match_count != before) {
+				int keep = net_pick_view.selected;
+				UI_listViewReset(&net_pick_view, match_count, labels);
+				if (keep < match_count)
+					net_pick_view.selected = keep;
+				else if (match_count > 0)
+					net_pick_view.selected = match_count - 1;
 				dirty = true;
-				if (selected >= match_count)
-					selected = match_count > 0 ? match_count - 1 : 0;
 			}
 		}
 
 		GFX_startFrame();
 		PAD_poll();
 
-		if (PAD_justPressed(BTN_B) || app_quit) {
+		ListViewAction act = UI_listViewHandleInput(&net_pick_view);
+		if (act.type == LISTVIEW_BACK || app_quit) {
 			close(udp_fd);
 			return -2;
 		}
-
-		if (match_count > 0) {
-			if (PAD_justRepeated(BTN_UP)) {
-				selected = (selected + match_count - 1) % match_count;
-				dirty = true;
-			} else if (PAD_justRepeated(BTN_DOWN)) {
-				selected = (selected + 1) % match_count;
-				dirty = true;
-			} else if (PAD_justPressed(BTN_A)) {
-				snprintf(ip_out, ip_size, "%s", hosts[matches[selected]].host_ip);
-				close(udp_fd);
-				return 0;
-			}
+		if (act.type == LISTVIEW_ACTIVATED) {
+			// A long game title's marquee band (LAYER_SCROLLTEXT) must not
+			// persist over the join/handshake status screens.
+			GFX_clearLayers(LAYER_SCROLLTEXT);
+			snprintf(ip_out, ip_size, "%s", hosts[matches[act.index]].host_ip);
+			close(udp_fd);
+			return 0;
 		}
+		if (UI_listViewBusy(&net_pick_view))
+			dirty = true;
 
 		PWR_update(&dirty, NULL, NULL, NULL);
 
-		// The glide check keeps redrawing until the selection pill settles.
-		if (dirty || UI_simpleMenuGlideActive()) {
+		if (dirty) {
 			if (match_count > 0)
-				wiz_net_render_list(labels, match_count, selected, &scroll);
+				wiz_net_render_list(labels, match_count);
 			else
 				wiz_net_render_empty("Searching for hosts...");
 			dirty = false;
 		} else {
+			UI_listViewTickIdle(&net_pick_view);
 			GFX_sync();
 		}
 	}

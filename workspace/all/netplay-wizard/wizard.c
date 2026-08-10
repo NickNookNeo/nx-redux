@@ -24,7 +24,7 @@
 #include "defines.h"
 #include "api.h"
 #include "config.h"
-#include "ui_list.h"
+#include "ui_listview.h"
 #include "ui_menubar.h"
 #include "ui_message.h"
 #include "ui_splash.h"
@@ -749,27 +749,44 @@ static int run_cleanup(const WizArgs* a) {
 static const char* role_items[] = {"Host Game", "Join Game"};
 static const char* mode_items[] = {"Hotspot", "WiFi"};
 
-static void render_role_menu(const char* game, int selected) {
-	SimpleMenuConfig config = {
-		.title = game,
-		.items = role_items,
-		.item_count = WIZ_MENU_ITEMS,
-		.btn_b_label = "CANCEL",
-		.btn_a_label = "SELECT",
-		.hide_controls_hint = true};
-	UI_renderSimpleMenu(wiz_screen, selected, &config);
+// One ListView serves both two-item menus; list_id (role_items vs mode_items)
+// tells the widget which one is on screen, so switching states snaps the pill
+// instead of gliding between unrelated menus. The per-state cursor lives in
+// main()'s role_selected/mode_selected and is saved/restored on every state
+// transition, preserving the old locals-persist-across-states behaviour.
+static ListView wiz_menu_view;
+
+static void wiz_menu_get_row(void* ctx, int i, bool selected, ListViewRow* out) {
+	const char** items = ctx;
+	out->label = items[i];
+	(void)selected;
+}
+
+static void render_role_menu(const char* game) {
+	GFX_clear(wiz_screen);
+	ListView* v = &wiz_menu_view;
+	v->title = game;
+	v->font = font.large;
+	v->count = WIZ_MENU_ITEMS;
+	v->get_row = wiz_menu_get_row;
+	v->ctx = (void*)role_items;
+	v->list_id = (const void*)role_items;
+	v->hint_pairs = (char*[]){"B", "CANCEL", "A", "SELECT", NULL};
+	UI_listViewRender(v, wiz_screen);
 	GFX_flip(wiz_screen);
 }
 
-static void render_mode_menu(int selected) {
-	SimpleMenuConfig config = {
-		.title = "Connection",
-		.items = mode_items,
-		.item_count = WIZ_MENU_ITEMS,
-		.btn_b_label = "BACK",
-		.btn_a_label = "SELECT",
-		.hide_controls_hint = true};
-	UI_renderSimpleMenu(wiz_screen, selected, &config);
+static void render_mode_menu(void) {
+	GFX_clear(wiz_screen);
+	ListView* v = &wiz_menu_view;
+	v->title = "Connection";
+	v->font = font.large;
+	v->count = WIZ_MENU_ITEMS;
+	v->get_row = wiz_menu_get_row;
+	v->ctx = (void*)mode_items;
+	v->list_id = (const void*)mode_items;
+	v->hint_pairs = (char*[]){"B", "BACK", "A", "SELECT", NULL};
+	UI_listViewRender(v, wiz_screen);
 	GFX_flip(wiz_screen);
 }
 
@@ -778,19 +795,6 @@ static void show_message(const char* message, int hold_ms) {
 	UI_renderCenteredMessage(wiz_screen, message);
 	GFX_flip(wiz_screen);
 	SDL_Delay(hold_ms);
-}
-
-// Two-item menus: wrap rather than clamp. Returns true if the cursor moved.
-static bool menu_navigate(int* selected) {
-	if (PAD_justPressed(BTN_UP)) {
-		*selected = (*selected + WIZ_MENU_ITEMS - 1) % WIZ_MENU_ITEMS;
-		return true;
-	}
-	if (PAD_justPressed(BTN_DOWN)) {
-		*selected = (*selected + 1) % WIZ_MENU_ITEMS;
-		return true;
-	}
-	return false;
 }
 
 //////////////////////////////////
@@ -890,6 +894,12 @@ int main(int argc, char* argv[]) {
 	bool dirty = true;
 	IndicatorType show_setting = INDICATOR_NONE;
 
+	// Initial ST_ROLE entry. Every later entry into ST_ROLE/ST_MODE resets the
+	// shared view the same way (in the transition arms below) and restores that
+	// state's saved cursor.
+	UI_listViewReset(&wiz_menu_view, WIZ_MENU_ITEMS, role_items);
+	wiz_menu_view.selected = role_selected;
+
 	while (!app_quit) {
 		GFX_startFrame();
 		PAD_poll();
@@ -899,35 +909,47 @@ int main(int argc, char* argv[]) {
 			dirty = true;
 
 		switch (state) {
-		case ST_ROLE:
-			if (menu_navigate(&role_selected)) {
-				dirty = true;
-			} else if (PAD_justPressed(BTN_A)) {
-				strcpy(session.role, role_selected == 0 ? "host" : "client");
-				if (role_selected == 0) {
+		case ST_ROLE: {
+			ListViewAction act = UI_listViewHandleInput(&wiz_menu_view);
+			if (act.type == LISTVIEW_ACTIVATED) {
+				role_selected = wiz_menu_view.selected;
+				strcpy(session.role, act.index == 0 ? "host" : "client");
+				if (act.index == 0) {
 					session.player_num = 1;
 					session.num_players = 2;
 				}
 				state = ST_MODE;
+				UI_listViewReset(&wiz_menu_view, WIZ_MENU_ITEMS, mode_items);
+				wiz_menu_view.selected = mode_selected;
 				dirty = true;
-			} else if (PAD_justPressed(BTN_B)) {
+			} else if (act.type == LISTVIEW_BACK) {
+				role_selected = wiz_menu_view.selected;
 				exit_code = 1;
 				app_quit = true;
 			}
-			break;
-
-		case ST_MODE:
-			if (menu_navigate(&mode_selected)) {
+			if (UI_listViewBusy(&wiz_menu_view))
 				dirty = true;
-			} else if (PAD_justPressed(BTN_A)) {
-				strcpy(session.mode, mode_selected == 0 ? "hotspot" : "wifi");
+			break;
+		}
+
+		case ST_MODE: {
+			ListViewAction act = UI_listViewHandleInput(&wiz_menu_view);
+			if (act.type == LISTVIEW_ACTIVATED) {
+				mode_selected = wiz_menu_view.selected;
+				strcpy(session.mode, act.index == 0 ? "hotspot" : "wifi");
 				state = ST_NETSETUP;
 				dirty = true;
-			} else if (PAD_justPressed(BTN_B)) {
+			} else if (act.type == LISTVIEW_BACK) {
+				mode_selected = wiz_menu_view.selected;
 				state = ST_ROLE;
+				UI_listViewReset(&wiz_menu_view, WIZ_MENU_ITEMS, role_items);
+				wiz_menu_view.selected = role_selected;
 				dirty = true;
 			}
+			if (UI_listViewBusy(&wiz_menu_view))
+				dirty = true;
 			break;
+		}
 
 		case ST_NETSETUP: {
 			bool is_host = (strcmp(session.role, "host") == 0);
@@ -946,6 +968,8 @@ int main(int argc, char* argv[]) {
 			if (rc == -2) {
 				wiz_cancel(&session);
 				state = ST_MODE;
+				UI_listViewReset(&wiz_menu_view, WIZ_MENU_ITEMS, mode_items);
+				wiz_menu_view.selected = mode_selected;
 			} else if (rc != 0) {
 				wiz_cancel(&session);
 				exit_code = 2;
@@ -967,6 +991,8 @@ int main(int argc, char* argv[]) {
 			if (rc == -2) {
 				wiz_cancel(&session);
 				state = ST_MODE;
+				UI_listViewReset(&wiz_menu_view, WIZ_MENU_ITEMS, mode_items);
+				wiz_menu_view.selected = mode_selected;
 			} else if (rc != 0) {
 				wiz_cancel(&session);
 				exit_code = 2;
@@ -996,21 +1022,22 @@ int main(int argc, char* argv[]) {
 			break;
 		}
 
-		// The glide check keeps the dirty-flag loop redrawing (and ticking the
-		// pill animation) until the selection pill settles.
-		if (dirty || UI_simpleMenuGlideActive()) {
+		// UI_listViewBusy (checked in the menu states above) keeps dirty set
+		// while the selection pill is travelling, so the pill animation ticks.
+		if (dirty) {
 			switch (state) {
 			case ST_ROLE:
-				render_role_menu(args.game, role_selected);
+				render_role_menu(args.game);
 				break;
 			case ST_MODE:
-				render_mode_menu(mode_selected);
+				render_mode_menu();
 				break;
 			default:
 				break; // the network states draw their own screens
 			}
 			dirty = false;
 		} else {
+			UI_listViewTickIdle(&wiz_menu_view);
 			GFX_sync();
 		}
 	}
