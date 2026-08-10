@@ -339,6 +339,8 @@ static void build_menu_tree(void) {
 static const char* main_item_labels[MAIN_ITEM_COUNT] = {
 	"Achievements", "Sync now", "Settings"};
 
+static ListGlide main_glide;
+
 static const SDL_Color col_header_title = {255, 255, 255, 255};
 static const SDL_Color col_header_gray = {180, 180, 180, 255};
 static const SDL_Color col_header_pending = {255, 200, 80, 255};
@@ -419,15 +421,25 @@ static void render_main_list(SDL_Surface* screen, int list_top, int selected) {
 		.max_width = screen->w - SCALE1(PADDING * 2),
 	};
 
+	char sel_trunc[256];
+	int sel_pill_w = UI_calcListPillWidth(font.large, main_item_labels[selected],
+										  sel_trunc, layout.max_width, 0);
+	ListGlideFrame gf = UI_listGlideDraw(&main_glide, screen,
+										 (const void*)main_item_labels,
+										 selected, MAIN_ITEM_COUNT,
+										 list_top, layout.item_h,
+										 sel_pill_w, true);
+
 	for (int i = 0; i < MAIN_ITEM_COUNT; i++) {
 		char truncated[256];
 		int y = list_top + i * layout.item_h;
+		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
 		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.large,
 												main_item_labels[i], truncated,
-												y, i == selected, 0);
+												y, false, 0);
 		int text_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2);
 		UI_renderListItemText(screen, NULL, main_item_labels[i], font.large,
-							  pos.text_x, pos.text_y, text_width, i == selected);
+							  pos.text_x, pos.text_y, text_width, row_sel);
 	}
 }
 
@@ -459,6 +471,9 @@ static void run_settings_menu(SDL_Surface** screen_ptr) {
 		PAD_poll();
 
 		settings_menu_handle_input(&sub_quit, &dirty);
+
+		if (settings_menu_glide_active())
+			dirty = true;
 
 		// TG5050: keyboard may have triggered display recovery
 		{
@@ -550,6 +565,9 @@ int main(int argc, char* argv[]) {
 				PAD_reset();
 				dirty = true;
 			}
+
+			if (UI_listGlideActive(&main_glide))
+				dirty = true;
 		}
 
 		// TG5050: keyboard may have triggered display recovery

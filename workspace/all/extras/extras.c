@@ -461,14 +461,37 @@ static int render_section_header(SDL_Surface* screen, ListLayout* layout,
 // everything the old right-aligned "update" marker said (user feedback
 // 2026-08-10 - the marker was redundant once the group existed).
 static int render_entry_row(SDL_Surface* screen, ListLayout* layout,
-							const AddonEntry* e, int y, bool selected) {
+							const AddonEntry* e, int y, const ListGlideFrame* gf) {
 	char truncated[256];
+	// selected=false always: the animated selection pill is drawn once per
+	// frame by UI_listGlideDrawAtY (before the row loop), not per row. Only
+	// the text tint follows the pill, flipping to the selected colour on
+	// whichever row the pill currently covers.
 	ListItemPos pos = UI_renderListItemPill(screen, layout, font.large, e->name,
-											truncated, y, selected, 0);
+											truncated, y, false, 0);
+	bool row_sel = UI_listGlideRowSelected(gf, y, layout->item_h);
 	int text_w = pos.pill_width - SCALE1(BUTTON_PADDING * 2);
 	UI_renderListItemText(screen, NULL, truncated, font.large,
-						  pos.text_x, pos.text_y, text_w, selected);
+						  pos.text_x, pos.text_y, text_w, row_sel);
 	return y + layout->item_h;
+}
+
+// Selection-pill glide state for the catalog list (Task 9 of the list-glide
+// rollout). One TabRows instance lives on run_list's stack and is rebuilt IN
+// PLACE by build_tab_rows() on every tab switch/regroup, so its address (and
+// rows->indices) is identical across tabs - pointer identity can't detect a
+// tab switch here. Instead glide_last_tab remembers which tab the previous
+// frame drew and a mismatch forces a snap via allow_anim=false.
+// glide_last_selected remembers the previously drawn selection so an
+// adjacent-row step can be told apart from a wrap/relocation jump (see the
+// header-crossing comment in render_extras_list).
+static ListGlide extras_glide;
+static int glide_last_tab = -1;		 // AddonTab drawn last frame; -1 = never
+static int glide_last_selected = -1; // rows index drawn last frame; -1 = none
+
+// For run_list's dirty loop: keep redrawing while the pill is mid-glide.
+static bool Extras_listGlideActive(void) {
+	return UI_listGlideActive(&extras_glide);
 }
 
 // selected indexes rows->indices (0..rows->count-1) - never entries[]
@@ -482,10 +505,65 @@ static void render_extras_list(SDL_Surface* screen, AddonTab active_tab, int sel
 	ListLayout layout = UI_calcListLayout(screen);
 	layout.list_y = render_tab_bar(screen, &layout, active_tab);
 
+	bool allow_anim = ((int)active_tab == glide_last_tab);
+	glide_last_tab = (int)active_tab;
+
 	if (rows->count == 0) {
 		UI_renderEmptyState(screen, "Nothing here yet", NULL, NULL);
+		glide_last_selected = -1;
 		return;
 	}
+
+	// Pre-pass: mirror the render pass's exact y-advance (entry rows advance
+	// item_h; a header row advances item_h/2 for render_section_header's own
+	// height plus the item_h/4 breathing gap its call site adds) to find the
+	// selected row's y and the band the pill may occupy - rows sit at
+	// irregular y here, so the uniform-row glide wrapper doesn't apply.
+	int sel_y = layout.list_y, band_y = layout.list_y;
+	int yy = layout.list_y;
+	for (int i = 0; i < rows->count; i++) {
+		if (i == rows->update_start && rows->update_start < rows->installed_start)
+			yy += layout.item_h / 2 + layout.item_h / 4;
+		if (i == rows->installed_start)
+			yy += layout.item_h / 2 + layout.item_h / 4;
+		if (i == 0)
+			band_y = yy; // band starts at the first ENTRY row, past any header
+		if (i == selected)
+			sel_y = yy;
+		yy += layout.item_h;
+	}
+	int band_h = yy - band_y;
+
+	// Same width the selected row's own UI_renderListItemPill computes.
+	char sel_trunc[256];
+	int sel_pill_w = UI_calcListPillWidth(font.large, entries[rows->indices[selected]].name,
+										  sel_trunc, layout.max_width, 0);
+
+	// Header-crossing steps: an ADJACENT selection step across a section
+	// header travels item_h * 7/4 - more than the core's one-row jump
+	// threshold - so left alone the helper would treat it as a wrap/page
+	// jump and edge-enter (teleport ~3/4 row, then glide the last row). An
+	// adjacent step should read as continuous travel, so when the previous
+	// drawn selection is exactly one row away, pre-target the underlying
+	// pill anim from its true current position and mark the target as
+	// already-seen (prev_target_y) - UI_listGlideDrawAtY then just ticks,
+	// gliding the real pixel distance across the header. Wraps and detail-
+	// screen relocations move by more than one INDEX, miss this branch, and
+	// keep the core's edge-entry look.
+	const void* list_id = (const void*)rows;
+	if (allow_anim && list_id == extras_glide.list_id &&
+		!UI_listGlideActive(&extras_glide) &&
+		glide_last_selected >= 0 && abs(selected - glide_last_selected) == 1 &&
+		sel_y != extras_glide.prev_target_y &&
+		abs(sel_y - extras_glide.anim.current_y) > layout.item_h) {
+		UI_pillAnimSetTarget(&extras_glide.anim, sel_y, sel_pill_w, true);
+		extras_glide.prev_target_y = sel_y;
+	}
+	glide_last_selected = selected;
+
+	ListGlideFrame gf = UI_listGlideDrawAtY(&extras_glide, screen, list_id,
+											sel_y, band_y, band_h,
+											layout.item_h, sel_pill_w, allow_anim);
 
 	int y = layout.list_y;
 	for (int i = 0; i < rows->count; i++) {
@@ -500,7 +578,7 @@ static void render_extras_list(SDL_Surface* screen, AddonTab active_tab, int sel
 			y = render_section_header(screen, &layout, "Update Available", y) + layout.item_h / 4;
 		if (i == rows->installed_start)
 			y = render_section_header(screen, &layout, "Installed", y) + layout.item_h / 4;
-		y = render_entry_row(screen, &layout, &entries[rows->indices[i]], y, i == selected);
+		y = render_entry_row(screen, &layout, &entries[rows->indices[i]], y, &gf);
 	}
 }
 
@@ -589,6 +667,8 @@ static void run_list(void) {
 			dirty = true;
 		}
 		if (UI_statusBarChanged())
+			dirty = true;
+		if (Extras_listGlideActive())
 			dirty = true;
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {

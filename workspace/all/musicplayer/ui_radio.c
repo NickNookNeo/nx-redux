@@ -14,6 +14,19 @@
 #include "album_art.h"
 #include "radio.h"
 
+// Selection glide state (one per list surface)
+static ListGlide radio_list_glide;
+static ListGlide radio_country_glide;
+
+// For the module's dirty-flag loop: keep redrawing while a pill glides
+bool radio_list_glide_active(void) {
+	return UI_listGlideActive(&radio_list_glide);
+}
+
+bool radio_country_glide_active(void) {
+	return UI_listGlideActive(&radio_country_glide);
+}
+
 // Render the radio station list
 void render_radio_list(SDL_Surface* screen, IndicatorType show_setting,
 					   int radio_selected, int* radio_scroll,
@@ -40,23 +53,38 @@ void render_radio_list(SDL_Surface* screen, IndicatorType show_setting,
 	ListLayout layout = UI_calcListLayout(screen);
 	UI_adjustListScroll(radio_selected, radio_scroll, layout.items_per_page);
 
+	// Selection glide: size the selected pill, draw the moving pill BEFORE
+	// row content; rows pass selected=false and tint by pill position.
+	int rows = layout.items_per_page;
+	if (*radio_scroll + rows > station_count)
+		rows = station_count - *radio_scroll;
+	char sel_trunc[256];
+	int sel_pill_w = UI_calcListPillWidth(font.medium,
+										  stations[radio_selected].name,
+										  sel_trunc, layout.max_width, 0);
+	ListGlideFrame gf = UI_listGlideDraw(&radio_list_glide, screen,
+										 (const void*)stations,
+										 radio_selected - *radio_scroll, rows,
+										 layout.list_y, layout.item_h,
+										 sel_pill_w, true);
+
 	for (int i = 0; i < layout.items_per_page && *radio_scroll + i < station_count; i++) {
 		int idx = *radio_scroll + i;
 		RadioStation* station = &stations[idx];
-		bool selected = (idx == radio_selected);
 
 		int y = layout.list_y + i * layout.item_h;
+		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
 
 		// Render pill background and get text position
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, station->name, truncated, y, selected, 0);
+		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, station->name, truncated, y, false, 0);
 
 		// Station name (no scrolling for radio list)
 		UI_renderListItemText(screen, NULL, station->name, font.medium,
-							  pos.text_x, pos.text_y, layout.max_width, selected);
+							  pos.text_x, pos.text_y, layout.max_width, row_sel);
 
 		// Genre (if available)
 		if (station->genre[0]) {
-			SDL_Color genre_color = selected ? COLOR_GRAY : COLOR_DARK_TEXT;
+			SDL_Color genre_color = row_sel ? COLOR_GRAY : COLOR_DARK_TEXT;
 			SDL_Surface* genre_text = TTF_RenderUTF8_Blended(font.tiny, station->genre, genre_color);
 			if (genre_text) {
 				SDL_BlitSurface(genre_text, NULL, screen, &(SDL_Rect){hw - genre_text->w - SCALE1(PADDING * 2), y + (layout.item_h - genre_text->h) / 2});
@@ -329,25 +357,42 @@ void render_radio_add(SDL_Surface* screen, IndicatorType show_setting,
 	ListLayout layout = UI_calcListLayout(screen);
 	UI_adjustListScroll(add_country_selected, add_country_scroll, layout.items_per_page);
 
+	// Selection glide: moving pill drawn before row content (see radio list)
+	ListGlideFrame gf = {layout.list_y, false};
+	if (country_count > 0) {
+		int rows = layout.items_per_page;
+		if (*add_country_scroll + rows > country_count)
+			rows = country_count - *add_country_scroll;
+		char sel_trunc[256];
+		int sel_pill_w = UI_calcListPillWidth(font.medium,
+											  countries[add_country_selected].name,
+											  sel_trunc, layout.max_width, 0);
+		gf = UI_listGlideDraw(&radio_country_glide, screen,
+							  (const void*)countries,
+							  add_country_selected - *add_country_scroll, rows,
+							  layout.list_y, layout.item_h,
+							  sel_pill_w, true);
+	}
+
 	for (int i = 0; i < layout.items_per_page && *add_country_scroll + i < country_count; i++) {
 		int idx = *add_country_scroll + i;
 		const CuratedCountry* country = &countries[idx];
-		bool selected = (idx == add_country_selected);
 
 		int y = layout.list_y + i * layout.item_h;
+		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
 
 		// Render pill background and get text position
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, country->name, truncated, y, selected, 0);
+		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, country->name, truncated, y, false, 0);
 
 		// Country name
 		UI_renderListItemText(screen, NULL, country->name, font.medium,
-							  pos.text_x, pos.text_y, layout.max_width, selected);
+							  pos.text_x, pos.text_y, layout.max_width, row_sel);
 
 		// Station count on right
 		int curated_station_count = Radio_getCuratedStationCount(country->code);
 		char count_str[32];
 		snprintf(count_str, sizeof(count_str), "%d stations", curated_station_count);
-		SDL_Color count_color = selected ? COLOR_GRAY : COLOR_DARK_TEXT;
+		SDL_Color count_color = row_sel ? COLOR_GRAY : COLOR_DARK_TEXT;
 		SDL_Surface* count_text = TTF_RenderUTF8_Blended(font.tiny, count_str, count_color);
 		if (count_text) {
 			SDL_BlitSurface(count_text, NULL, screen, &(SDL_Rect){hw - count_text->w - SCALE1(PADDING * 2), y + (layout.item_h - count_text->h) / 2});

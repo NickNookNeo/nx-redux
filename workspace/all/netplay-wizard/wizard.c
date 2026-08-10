@@ -996,7 +996,9 @@ int main(int argc, char* argv[]) {
 			break;
 		}
 
-		if (dirty) {
+		// The glide check keeps the dirty-flag loop redrawing (and ticking the
+		// pill animation) until the selection pill settles.
+		if (dirty || UI_simpleMenuGlideActive()) {
 			switch (state) {
 			case ST_ROLE:
 				render_role_menu(args.game, role_selected);

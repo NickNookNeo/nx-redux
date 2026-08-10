@@ -1832,6 +1832,9 @@ int main(int argc, char* argv[]) {
 							 "Your settings are automatically saved");
 		settings_menu_handle_input(&quit, &dirty);
 
+		if (settings_menu_glide_active())
+			dirty = true;
+
 		// TG5050: keyboard may have triggered display recovery
 		{
 			SDL_Surface* ns = DisplayHelper_getReinitScreen();

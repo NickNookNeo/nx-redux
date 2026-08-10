@@ -5,6 +5,7 @@
 #include "api.h"
 #include "module_common.h"
 #include "module_menu.h"
+#include "ui_list.h"
 #include "ui_main.h"
 #include "resume.h"
 #include "background.h"
@@ -91,8 +92,9 @@ int MenuModule_run(SDL_Surface* screen) {
 		// Handle power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render
-		if (dirty) {
+		// Render. The glide check keeps the dirty-flag loop redrawing (and
+		// ticking the pill animation) until the selection pill settles.
+		if (dirty || UI_simpleMenuGlideActive()) {
 			render_menu(screen, show_setting, menu_selected,
 						menu_toast_message, menu_toast_time, first_item_mode);
 

@@ -1187,7 +1187,8 @@ static int wiz_client_pick_host(const WizArgs* a, char* ip_out, size_t ip_size) 
 
 		PWR_update(&dirty, NULL, NULL, NULL);
 
-		if (dirty) {
+		// The glide check keeps redrawing until the selection pill settles.
+		if (dirty || UI_simpleMenuGlideActive()) {
 			if (match_count > 0)
 				wiz_net_render_list(labels, match_count, selected, &scroll);
 			else

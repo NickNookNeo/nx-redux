@@ -165,6 +165,48 @@ void UI_pillAnimSetTarget(PillAnimState* state, int target_y, int target_w, bool
 int UI_pillAnimTick(PillAnimState* state);
 bool UI_pillAnimIsActive(PillAnimState* state);
 
+// ---- List Selection Glide ----
+// Shared wiring for the animated selection pill (same feel as the game
+// list: PILL_ANIM_MS smoothstep, width morphs with y). Render-only: the
+// caller keeps owning selection and input. Usage per frame, BEFORE the
+// row loop:
+//   frame = UI_listGlideDraw(&glide, screen, <content ptr>, sel - scroll,
+//                            rows_visible, layout.list_y, layout.item_h,
+//                            sel_pill_w, <no modal open>);
+// then render every row with selected=false and tint its text with
+// UI_listGlideRowSelected(&frame, row_y, item_h). Dirty-flag main loops
+// must keep redrawing while UI_listGlideActive(&glide).
+
+typedef struct {
+	PillAnimState anim;	 // y + width glide state
+	const void* list_id; // content identity last drawn (NULL = never)
+	int prev_target_y;	 // last settled target (retarget detection)
+} ListGlide;			 // zero-init = valid initial state
+
+typedef struct {
+	int pill_y;		// interpolated pill top for this frame
+	bool animating; // true while mid-glide
+} ListGlideFrame;
+
+// Core (irregular row geometry, e.g. lists with header rows): glide toward
+// target_y, clipped to the band [band_y, band_y+band_h). Snaps when
+// list_id changes or allow_anim is false. pill_w <= 0 skips the draw.
+ListGlideFrame UI_listGlideDrawAtY(ListGlide* g, SDL_Surface* screen,
+								   const void* list_id, int target_y,
+								   int band_y, int band_h,
+								   int item_h, int pill_w, bool allow_anim);
+// Uniform-rows convenience: target = row0_y + selected_row*item_h, band =
+// the rows_visible rows starting at row0_y.
+ListGlideFrame UI_listGlideDraw(ListGlide* g, SDL_Surface* screen,
+								const void* list_id, int selected_row,
+								int rows_visible, int row0_y, int item_h,
+								int pill_w, bool allow_anim);
+// True when the pill covers the majority of the row at row_y — draw that
+// row's text in the selected colour exactly then.
+bool UI_listGlideRowSelected(const ListGlideFrame* f, int row_y, int item_h);
+// For dirty-flag main loops: keep redrawing while true.
+bool UI_listGlideActive(ListGlide* g);
+
 // ---- Rich Pill Rendering ----
 
 // Position information returned by UI_renderListItemPillRich
@@ -245,5 +287,10 @@ typedef struct {
 // Render a simple menu with optional customization callbacks
 void UI_renderSimpleMenu(SDL_Surface* screen, int menu_selected,
 						 const SimpleMenuConfig* config);
+
+// True while the simple menu's selection pill is mid-glide — dirty-flag
+// callers must keep redrawing (and re-calling UI_renderSimpleMenu + flip)
+// until it settles.
+bool UI_simpleMenuGlideActive(void);
 
 #endif // UI_LIST_H

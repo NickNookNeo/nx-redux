@@ -474,8 +474,12 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 			ModuleCommon_PWR_update(&dirty, &show_setting);
 		}
 
-		// Render
-		if (dirty && !screen_off) {
+		// Render. The glide checks keep the dirty-flag loop redrawing (and
+		// ticking the pill animation) until the selection pill settles.
+		if ((dirty ||
+			 (state == RADIO_INTERNAL_LIST && radio_list_glide_active()) ||
+			 (state == RADIO_INTERNAL_ADD_COUNTRY && radio_country_glide_active())) &&
+			!screen_off) {
 			if (ModuleCommon_isScreenOffHintActive()) {
 				GFX_clear(screen);
 				render_screen_off_hint(screen);

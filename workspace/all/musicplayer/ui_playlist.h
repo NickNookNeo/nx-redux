@@ -17,6 +17,10 @@ void render_playlist_detail(SDL_Surface* screen, IndicatorType show_setting,
 							PlaylistTrack* tracks, int count,
 							int selected, int scroll);
 
+// Check if a selection pill is mid-glide (keep dirty loop redrawing)
+bool playlist_list_glide_active(void);
+bool playlist_detail_glide_active(void);
+
 // Check if playlist list has active scrolling
 bool playlist_list_needs_scroll_refresh(void);
 

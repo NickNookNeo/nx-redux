@@ -8,7 +8,30 @@
 #include "ui_menubar.h"
 #include "ui_player.h"
 #include "ui_icons.h"
+#include "ui_list.h"
 #include "video_browser.h"
+
+// Selection glide state (one per list surface)
+static ListGlide browser_glide;
+
+// For the module's dirty-flag loop: keep redrawing while a pill glides
+bool browser_glide_active(void) {
+	return UI_listGlideActive(&browser_glide);
+}
+
+// Build the display name shown for a browser entry (matches the row loop).
+static void browser_entry_display(const VideoFileEntry* entry, char* out, size_t out_sz) {
+	if (entry->is_dir) {
+		if (Icons_isLoaded()) {
+			strncpy(out, entry->name, out_sz - 1);
+			out[out_sz - 1] = '\0';
+		} else {
+			snprintf(out, out_sz, "[%s]", entry->name);
+		}
+	} else {
+		VideoBrowser_getDisplayName(entry->name, out, out_sz);
+	}
+}
 
 // Render the video file browser
 void render_video_browser(SDL_Surface* screen, IndicatorType show_setting,
@@ -46,44 +69,49 @@ void render_video_browser(SDL_Surface* screen, IndicatorType show_setting,
 	// Icon dimensions
 	int icon_size = Icons_isLoaded() ? SCALE1(24) : 0;
 	int icon_spacing = Icons_isLoaded() ? SCALE1(6) : 0;
+	int icon_offset = Icons_isLoaded() ? (icon_size + icon_spacing) : 0;
+
+	// Selection glide: size the selected pill (icon prefix counts toward the
+	// pill width, matching UI_renderListItemPill below), draw the moving pill
+	// BEFORE row content; rows pass selected=false and tint by pill position.
+	// Identity is the entries array pointer: entering a folder snaps.
+	int rows = ctx->items_per_page;
+	if (ctx->scroll_offset + rows > ctx->entry_count)
+		rows = ctx->entry_count - ctx->scroll_offset;
+	char sel_display[256];
+	browser_entry_display(&ctx->entries[ctx->selected], sel_display, sizeof(sel_display));
+	char sel_trunc[256];
+	int sel_pill_w = UI_calcListPillWidth(font.medium, sel_display, sel_trunc,
+										  layout.max_width, icon_offset);
+	ListGlideFrame gf = UI_listGlideDraw(&browser_glide, screen,
+										 (const void*)ctx->entries,
+										 ctx->selected - ctx->scroll_offset, rows,
+										 layout.list_y, layout.item_h,
+										 sel_pill_w, true);
 
 	// Render visible entries
 	for (int i = 0; i < ctx->items_per_page && (ctx->scroll_offset + i) < ctx->entry_count; i++) {
 		int idx = ctx->scroll_offset + i;
 		VideoFileEntry* entry = &ctx->entries[idx];
-		bool selected = (idx == ctx->selected);
 
 		int y = layout.list_y + i * layout.item_h;
+		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
 
 		// Prepare display name
 		char display[256];
-		if (entry->is_dir) {
-			// Directory: show raw name (icons differentiate, or brackets if no icons)
-			if (Icons_isLoaded()) {
-				strncpy(display, entry->name, sizeof(display) - 1);
-				display[sizeof(display) - 1] = '\0';
-			} else {
-				snprintf(display, sizeof(display), "[%s]", entry->name);
-			}
-		} else {
-			// Video file: strip extension for display
-			VideoBrowser_getDisplayName(entry->name, display, sizeof(display));
-		}
-
-		// Calculate icon offset for pill width
-		int icon_offset = Icons_isLoaded() ? (icon_size + icon_spacing) : 0;
+		browser_entry_display(entry, display, sizeof(display));
 
 		// Render pill background and get text position
 		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, display, truncated,
-												y, selected, icon_offset);
+												y, false, icon_offset);
 
 		// Render icon
 		if (Icons_isLoaded()) {
 			SDL_Surface* icon = NULL;
 			if (entry->is_dir) {
-				icon = Icons_getFolder(selected);
+				icon = Icons_getFolder(row_sel);
 			} else {
-				icon = Icons_getForFormat(entry->format, selected);
+				icon = Icons_getForFormat(entry->format, row_sel);
 			}
 			if (icon) {
 				int icon_y = y + (layout.item_h - icon_size) / 2;
@@ -97,9 +125,12 @@ void render_video_browser(SDL_Surface* screen, IndicatorType show_setting,
 		int text_x = pos.text_x + icon_offset;
 		int available_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2) - icon_offset;
 
-		// Render text with scrolling for selected item
-		UI_renderListItemText(screen, scroll, display, font.medium,
-							  text_x, pos.text_y, available_width, selected);
+		// Render text with scrolling for selected item (marquee only once the
+		// pill has settled on this row)
+		UI_renderListItemText(screen,
+							  (row_sel && !gf.animating) ? scroll : NULL,
+							  display, font.medium,
+							  text_x, pos.text_y, available_width, row_sel);
 	}
 
 	// Scroll indicators (up/down arrows)

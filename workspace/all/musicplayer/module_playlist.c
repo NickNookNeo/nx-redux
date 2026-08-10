@@ -254,8 +254,11 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
 		// Power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render
-		if (dirty) {
+		// Render. The glide checks keep the dirty-flag loop redrawing (and
+		// ticking the pill animation) until the selection pill settles.
+		if (dirty ||
+			(state == PLAYLIST_INTERNAL_LIST && playlist_list_glide_active()) ||
+			(state == PLAYLIST_INTERNAL_DETAIL && playlist_detail_glide_active())) {
 			// Bounds check: if current playlist was deleted externally, go back to list
 			if (state == PLAYLIST_INTERNAL_DETAIL &&
 				(current_playlist_index < 0 || current_playlist_index >= playlist_count)) {

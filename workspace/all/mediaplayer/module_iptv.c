@@ -149,7 +149,7 @@ ModuleExitReason IPTVModule_run(SDL_Surface* screen) {
 			}
 
 			ModuleCommon_PWR_update(&dirty, &show_setting);
-			if (dirty) {
+			if (dirty || iptv_curated_countries_glide_active()) {
 				render_iptv_curated_countries(screen, show_setting, curated_country_selected, &curated_country_scroll);
 				GFX_flip(screen);
 				dirty = 0;
@@ -304,7 +304,7 @@ ModuleExitReason IPTVModule_run(SDL_Surface* screen) {
 			dirty = 1;
 
 		ModuleCommon_PWR_update(&dirty, &show_setting);
-		if (dirty) {
+		if (dirty || iptv_user_channels_glide_active()) {
 			if (user_count > 0) {
 				render_iptv_user_channels(screen, show_setting,
 										  ch_selected, ch_scroll, &iptv_scroll);

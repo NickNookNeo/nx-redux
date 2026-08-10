@@ -115,6 +115,10 @@ SettingsPage* settings_menu_current(void);
 
 void settings_menu_handle_input(bool* quit, bool* dirty);
 
+// True while the list-mode selection pill is mid-glide — the host loop must
+// keep the screen dirty until it settles.
+bool settings_menu_glide_active(void);
+
 // Render the current page
 void settings_menu_render(SDL_Surface* screen, IndicatorType show_setting);
 

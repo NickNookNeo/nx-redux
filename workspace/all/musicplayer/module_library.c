@@ -83,8 +83,9 @@ ModuleExitReason LibraryModule_run(SDL_Surface* screen) {
 		// Handle power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render
-		if (dirty) {
+		// Render. The glide check keeps the dirty-flag loop redrawing (and
+		// ticking the pill animation) until the selection pill settles.
+		if (dirty || UI_simpleMenuGlideActive()) {
 			render_library_menu(screen, show_setting, menu_selected);
 
 			GFX_flip(screen);

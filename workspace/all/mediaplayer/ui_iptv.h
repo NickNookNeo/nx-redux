@@ -17,6 +17,10 @@ void render_iptv_empty(SDL_Surface* screen, IndicatorType show_setting);
 void render_iptv_curated_countries(SDL_Surface* screen, IndicatorType show_setting,
 								   int selected, int* scroll_offset);
 
+// True while a selection pill is still gliding (keep redrawing).
+bool iptv_user_channels_glide_active(void);
+bool iptv_curated_countries_glide_active(void);
+
 // Render curated channels for a country
 void render_iptv_curated_channels(SDL_Surface* screen, IndicatorType show_setting,
 								  const char* country_code,

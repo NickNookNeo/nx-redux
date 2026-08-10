@@ -6,6 +6,7 @@
 #include "module_common.h"
 #include "module_menu.h"
 #include "ui_main.h"
+#include "ui_list.h"
 
 // Toast message state
 static char menu_toast_message[128] = "";
@@ -68,8 +69,8 @@ int MenuModule_run(SDL_Surface* screen) {
 		// Handle power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render
-		if (dirty) {
+		// Render (keep redrawing while the selection pill glides)
+		if (dirty || UI_simpleMenuGlideActive()) {
 			render_menu(screen, show_setting, menu_selected,
 						menu_toast_message, menu_toast_time);
 

@@ -586,8 +586,9 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 			dirty = 1;
 		}
 
-		// Render
-		if (dirty && !screen_off) {
+		// Render. The glide check keeps the dirty-flag loop redrawing (and
+		// ticking the pill animation) until the selection pill settles.
+		if ((dirty || (state == PLAYER_INTERNAL_BROWSER && browser_glide_active())) && !screen_off) {
 			if (ModuleCommon_isScreenOffHintActive()) {
 				GFX_clear(screen);
 				render_screen_off_hint(screen);

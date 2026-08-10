@@ -10,4 +10,7 @@ void render_video_browser(SDL_Surface* screen, IndicatorType show_setting,
 						  VideoBrowserContext* ctx, ScrollTextState* scroll,
 						  int selected_resume_sec);
 
+// True while the browser selection pill is still gliding (keep redrawing).
+bool browser_glide_active(void);
+
 #endif

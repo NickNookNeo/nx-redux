@@ -197,8 +197,8 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 		// Handle power management
 		ModuleCommon_PWR_update(&dirty, &show_setting);
 
-		// Render
-		if (dirty) {
+		// Render (keep redrawing while the selection pill glides)
+		if (dirty || browser_glide_active()) {
 			VideoFileEntry* sel = (browser.entry_count > 0) ? &browser.entries[browser.selected] : NULL;
 			int resume_sec = (sel && !sel->is_dir) ? Positions_get(sel->path) : 0;
 			render_video_browser(screen, show_setting, &browser, &browser_scroll, resume_sec);

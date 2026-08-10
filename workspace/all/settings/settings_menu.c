@@ -346,6 +346,12 @@ void settings_menu_handle_input(bool* quit, bool* dirty) {
 // Rendering: Category List Mode
 // ============================================
 
+static ListGlide list_glide;
+
+bool settings_menu_glide_active(void) {
+	return UI_listGlideActive(&list_glide);
+}
+
 static void render_list_mode(SDL_Surface* screen, SettingsPage* page, ListLayout* layout) {
 	int vis_count = settings_page_visible_count(page);
 	if (vis_count == 0)
@@ -359,22 +365,37 @@ static void render_list_mode(SDL_Surface* screen, SettingsPage* page, ListLayout
 	if (end > vis_count)
 		end = vis_count;
 
+	// Selection glide: size the selected item's pill and draw the moving
+	// pill before the rows (rows pass selected=false below).
+	ListGlideFrame gf = {layout->list_y, false};
+	{
+		SettingItem* sel_item = settings_page_visible_item(page, page->selected);
+		const char* sel_text = sel_item ? sel_item->name : "";
+		if (sel_item && sel_item->type == ITEM_STATIC && sel_item->get_display)
+			sel_text = sel_item->get_display();
+		int sel_pill_w = UI_calcListPillWidth(font.large, sel_text, truncated,
+											  layout->max_width, 0);
+		gf = UI_listGlideDraw(&list_glide, screen, (const void*)page,
+							  page->selected - start, end - start,
+							  layout->list_y, layout->item_h, sel_pill_w, true);
+	}
+
 	for (int vi = start; vi < end; vi++) {
 		SettingItem* item = settings_page_visible_item(page, vi);
 		if (!item)
 			continue;
 
-		int selected = (vi == page->selected);
 		int y = layout->list_y + (vi - start) * layout->item_h;
+		bool row_sel = UI_listGlideRowSelected(&gf, y, layout->item_h);
 
 		const char* text = item->name;
 		if (item->type == ITEM_STATIC && item->get_display)
 			text = item->get_display();
 
 		ListItemPos pos = UI_renderListItemPill(screen, layout, font.large, text,
-												truncated, y, selected, 0);
+												truncated, y, false, 0);
 
-		SDL_Color text_color = UI_getListTextColor(selected);
+		SDL_Color text_color = UI_getListTextColor(row_sel);
 		SDL_Surface* text_surf = TTF_RenderUTF8_Blended(font.large, truncated, text_color);
 		if (text_surf) {
 			SDL_BlitSurface(text_surf, NULL, screen, &(SDL_Rect){pos.text_x, pos.text_y, 0, 0});

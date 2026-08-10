@@ -19,6 +19,9 @@ void render_playing(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 					bool shuffle_enabled, bool repeat_enabled,
 					int playlist_track_num, int playlist_total);
 
+// Check if the browser selection pill is mid-glide (keep dirty loop redrawing)
+bool browser_glide_active(void);
+
 // Check if browser list has active scrolling (for refresh optimization)
 bool browser_needs_scroll_refresh(void);
 

@@ -180,7 +180,11 @@ void ScrollText_render(ScrollTextState* state, TTF_Font* font, SDL_Color color,
 
 void ScrollText_update(ScrollTextState* state, const char* text, TTF_Font* font,
 					   int max_width, SDL_Color color, SDL_Surface* screen, int x, int y, bool use_gpu) {
-	if (strcmp(state->text, text) != 0) {
+	// Reset on width change too, not just text change: the async thumbnail
+	// arriving narrows the row mid-selection, and a stale max_width leaves
+	// the scroll band wider than the pill it sits on (and the needs-scroll
+	// decision measured against the wrong width).
+	if (strcmp(state->text, text) != 0 || state->max_width != max_width) {
 		ScrollText_reset(state, text, font, max_width, use_gpu);
 	}
 	ScrollText_render(state, font, color, screen, x, y);
@@ -706,6 +710,97 @@ bool UI_pillAnimIsActive(PillAnimState* state) {
 }
 
 // ============================================
+// List Selection Glide (shared wiring around the pill animation)
+// ============================================
+
+ListGlideFrame UI_listGlideDrawAtY(ListGlide* g, SDL_Surface* screen,
+								   const void* list_id, int target_y,
+								   int band_y, int band_h,
+								   int item_h, int pill_w, bool allow_anim) {
+	ListGlideFrame f = {target_y, false};
+	if (band_h <= 0)
+		return f;
+
+	// List content changed (or first ever draw): snap, never glide across
+	// contexts (folder change, page push/pop, tab switch).
+	bool list_changed = (list_id != g->list_id) || g->list_id == NULL;
+	g->list_id = list_id;
+
+	if (target_y != g->prev_target_y || list_changed ||
+		(!allow_anim && g->anim.active)) {
+		bool animate = allow_anim && !list_changed;
+		// An idle jump of more than one row (wrap last<->first, page jump)
+		// enters through the near edge in the direction of travel instead
+		// of sweeping the whole band: seed the glide one row past the
+		// target, on the side the pill is coming from. Mid-glide retargets
+		// (held repeat) keep gliding from the current position instead.
+		if (animate && !g->anim.active &&
+			abs(target_y - g->anim.current_y) > item_h)
+			g->anim.current_y = target_y +
+								(g->anim.current_y > target_y ? -item_h : item_h);
+		UI_pillAnimSetTarget(&g->anim, target_y, pill_w, animate);
+		g->prev_target_y = target_y;
+	}
+
+	f.pill_y = UI_pillAnimTick(&g->anim);
+	f.animating = UI_pillAnimIsActive(&g->anim);
+	if (!f.animating) {
+		// Width changes outside a glide (label refresh, truncation change)
+		// snap directly — only selection moves animate.
+		g->anim.current_w = pill_w;
+		g->anim.target_w = pill_w;
+	}
+
+	if (pill_w > 0) {
+		// Clip to the band so an edge-entry pill is revealed through the
+		// first/last row instead of sliding over the menu/hint bars.
+		SDL_Rect prev_clip;
+		SDL_GetClipRect(screen, &prev_clip);
+		SDL_SetClipRect(screen, &(SDL_Rect){0, band_y, screen->w, band_h});
+		UI_drawListItemBg(screen,
+						  &(SDL_Rect){SCALE1(PADDING), f.pill_y,
+									  g->anim.current_w, item_h},
+						  true);
+		SDL_SetClipRect(screen, &prev_clip);
+	}
+	return f;
+}
+
+ListGlideFrame UI_listGlideDraw(ListGlide* g, SDL_Surface* screen,
+								const void* list_id, int selected_row,
+								int rows_visible, int row0_y, int item_h,
+								int pill_w, bool allow_anim) {
+	if (rows_visible <= 0)
+		return (ListGlideFrame){row0_y, false};
+	if (selected_row < 0)
+		selected_row = 0;
+	if (selected_row >= rows_visible)
+		selected_row = rows_visible - 1;
+	return UI_listGlideDrawAtY(g, screen, list_id,
+							   row0_y + selected_row * item_h,
+							   row0_y, rows_visible * item_h,
+							   item_h, pill_w, allow_anim);
+}
+
+bool UI_listGlideRowSelected(const ListGlideFrame* f, int row_y, int item_h) {
+	return abs(f->pill_y - row_y) * 2 < item_h;
+}
+
+bool UI_listGlideActive(ListGlide* g) {
+	if (!g->anim.active)
+		return false;
+	// A glide can be abandoned mid-flight (screen exit, list emptied): only
+	// a draw's tick clears `active`, so hooked dirty loops would spin
+	// forever on screens that never draw this list. Once the glide's time
+	// is up, finalize it here (tick clamps to target and clears active) and
+	// report active one last time so the host draws exactly one settled
+	// frame — on which f.animating is false, letting the marquee start.
+	if (SDL_GetTicks() - g->anim.start_time >= PILL_ANIM_MS)
+		UI_pillAnimTick(&g->anim);
+	return true;
+}
+
+// ============================================
 // Rich Pill Rendering
 // ============================================
 
@@ -798,6 +893,12 @@ void UI_renderRoundedRectBg(SDL_Surface* screen, int x, int y, int w, int h, uin
 // Generic Simple Menu Rendering
 // ============================================
 
+static ListGlide simple_menu_glide;
+
+bool UI_simpleMenuGlideActive(void) {
+	return UI_listGlideActive(&simple_menu_glide);
+}
+
 void UI_renderSimpleMenu(SDL_Surface* screen, int menu_selected,
 						 const SimpleMenuConfig* config) {
 	GFX_clear(screen);
@@ -810,8 +911,41 @@ void UI_renderSimpleMenu(SDL_Surface* screen, int menu_selected,
 	int icon_size = SCALE1(24);
 	int icon_spacing = SCALE1(6);
 
+	// Selection glide: size the selected item's pill, then draw the moving
+	// pill BEFORE any row content (rows below pass selected=false to the
+	// pill renderer and tint text by pill position instead).
+	ListGlideFrame glide_frame = {layout.list_y, false};
+	if (config->item_count > 0 && menu_selected >= 0 &&
+		menu_selected < config->item_count) {
+		const char* sel_label =
+			(config->items) ? config->items[menu_selected] : "";
+		if (config->get_label) {
+			const char* custom = config->get_label(
+				menu_selected, sel_label, label_buffer, sizeof(label_buffer));
+			if (custom)
+				sel_label = custom;
+		}
+		int sel_icon_offset = 0;
+		if (config->get_icon && config->get_icon(menu_selected, true))
+			sel_icon_offset = icon_size + icon_spacing;
+		int sel_pill_w = UI_calcListPillWidth(
+			font.large, sel_label, truncated,
+			layout.max_width - sel_icon_offset, sel_icon_offset);
+		// Identity: the items array pointer names the list content; title
+		// string literal is the fallback for get_label-only menus.
+		const void* list_id = config->items ? (const void*)config->items
+											: (const void*)config->title;
+		glide_frame = UI_listGlideDraw(&simple_menu_glide, screen, list_id,
+									   menu_selected, config->item_count,
+									   layout.list_y, SCALE1(PILL_SIZE),
+									   sel_pill_w, true);
+	}
+
 	for (int i = 0; i < config->item_count; i++) {
-		bool selected = (i == menu_selected);
+		int row_y = layout.list_y + i * SCALE1(PILL_SIZE);
+		// Visual selection follows the pill, not the logical selection.
+		bool row_sel = UI_listGlideRowSelected(&glide_frame, row_y,
+											   SCALE1(PILL_SIZE));
 
 		const char* label = (config->items) ? config->items[i] : "";
 		if (config->get_label) {
@@ -823,13 +957,13 @@ void UI_renderSimpleMenu(SDL_Surface* screen, int menu_selected,
 		SDL_Surface* icon = NULL;
 		int icon_offset = 0;
 		if (config->get_icon) {
-			icon = config->get_icon(i, selected);
+			icon = config->get_icon(i, row_sel);
 			if (icon) {
 				icon_offset = icon_size + icon_spacing;
 			}
 		}
 
-		MenuItemPos pos = UI_renderMenuItemPill(screen, &layout, label, truncated, i, selected, icon_offset);
+		MenuItemPos pos = UI_renderMenuItemPill(screen, &layout, label, truncated, i, false, icon_offset);
 
 		int text_x = pos.text_x;
 		if (icon) {
@@ -842,16 +976,16 @@ void UI_renderSimpleMenu(SDL_Surface* screen, int menu_selected,
 
 		bool custom_rendered = false;
 		if (config->render_text) {
-			custom_rendered = config->render_text(screen, i, selected,
+			custom_rendered = config->render_text(screen, i, row_sel,
 												  text_x, pos.text_y, layout.max_width - icon_offset);
 		}
 		if (!custom_rendered) {
 			UI_renderListItemText(screen, NULL, truncated, font.large,
-								  text_x, pos.text_y, layout.max_width - icon_offset, selected);
+								  text_x, pos.text_y, layout.max_width - icon_offset, row_sel);
 		}
 
 		if (config->render_badge) {
-			config->render_badge(screen, i, selected, pos.item_y, SCALE1(PILL_SIZE));
+			config->render_badge(screen, i, row_sel, pos.item_y, SCALE1(PILL_SIZE));
 		}
 	}
 

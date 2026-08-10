@@ -144,6 +144,7 @@ static SystemEntry systems[MAX_SYSTEMS];
 static int system_count = 0;
 static int system_selected = 0;
 static int system_scroll = 0;
+static ListGlide systems_glide; // selection-pill glide for SCREEN_SYSTEMS
 
 static ROMEntry roms[MAX_ROMS];
 static int rom_count = 0;
@@ -658,16 +659,40 @@ static void renderSystemList(void) {
 	ListLayout layout = UI_calcListLayout(screen);
 	UI_adjustListScroll(system_selected, &system_scroll, layout.items_per_page);
 
+	// Selection glide: size the selected pill, draw the moving pill BEFORE
+	// row content; rows pass selected=false and tint by pill position. The
+	// %d/%d badge is a pill prefix, so the pre-pass computes the selected
+	// row's prefix the same way the row loop does (font.tiny badge width +
+	// PADDING) and hands it to UI_calcListPillWidth.
+	int rows = layout.items_per_page;
+	if (system_scroll + rows > system_count)
+		rows = system_count - system_scroll;
+	SystemEntry* sel_sys = &systems[system_selected];
+	char sel_badge[64];
+	snprintf(sel_badge, sizeof(sel_badge), "%d/%d",
+			 sel_sys->scraped_count, sel_sys->rom_count);
+	int sel_badge_tw = 0, sel_badge_th = 0;
+	TTF_SizeUTF8(font.tiny, sel_badge, &sel_badge_tw, &sel_badge_th);
+	int sel_badge_prefix = sel_badge_tw + SCALE1(PADDING);
+	char sel_trunc[256];
+	int sel_pill_w = UI_calcListPillWidth(font.large, sel_sys->name, sel_trunc,
+										  layout.max_width, sel_badge_prefix);
+	ListGlideFrame gf = UI_listGlideDraw(&systems_glide, screen,
+										 (const void*)systems,
+										 system_selected - system_scroll, rows,
+										 layout.list_y, layout.item_h,
+										 sel_pill_w, true);
+
 	for (int i = 0; i < layout.items_per_page && (system_scroll + i) < system_count; i++) {
 		int idx = system_scroll + i;
 		SystemEntry* sys = &systems[idx];
-		bool selected = (idx == system_selected);
 
 		char label[256];
 		snprintf(label, sizeof(label), "%s", sys->name);
 
 		char truncated[256];
 		int y = layout.list_y + i * layout.item_h;
+		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
 
 		char badge[64];
 		snprintf(badge, sizeof(badge), "%d/%d", sys->scraped_count, sys->rom_count);
@@ -676,16 +701,16 @@ static void renderSystemList(void) {
 		int badge_prefix = badge_tw + SCALE1(PADDING);
 
 		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.large,
-												label, truncated, y, selected, badge_prefix);
+												label, truncated, y, false, badge_prefix);
 
-		SDL_Color text_color = UI_getListTextColor(selected);
+		SDL_Color text_color = UI_getListTextColor(row_sel);
 		SDL_Surface* text_surf = TTF_RenderUTF8_Blended(font.large, truncated, text_color);
 		if (text_surf) {
 			SDL_BlitSurface(text_surf, NULL, screen, &(SDL_Rect){pos.text_x, pos.text_y, 0, 0});
 			SDL_FreeSurface(text_surf);
 		}
 
-		SDL_Color badge_color = selected ? COLOR_BLACK : COLOR_GRAY;
+		SDL_Color badge_color = row_sel ? COLOR_BLACK : COLOR_GRAY;
 		int badge_x = pos.pill_width - SCALE1(PADDING) - badge_tw;
 		GFX_blitText(font.tiny, badge, 0, badge_color, screen,
 					 &(SDL_Rect){badge_x, pos.text_y + SCALE1(2), badge_tw, badge_th});
@@ -1142,6 +1167,11 @@ int main(int argc, char* argv[]) {
 
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (UI_statusBarChanged())
+			dirty = true;
+		// Selection-pill glides advance frame-by-frame, so keep redrawing
+		// while either the systems list (SCREEN_SYSTEMS) or the simple-menu
+		// pill (main menu / settings) is still travelling.
+		if (UI_listGlideActive(&systems_glide) || UI_simpleMenuGlideActive())
 			dirty = true;
 
 		if (dirty) {

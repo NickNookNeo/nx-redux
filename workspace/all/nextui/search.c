@@ -22,6 +22,7 @@ static Array* search_results = NULL;
 static int search_selected = 0;
 static int search_scroll = 0;
 static ScrollTextState search_list_scroll = {0};
+static ListGlide search_glide; // selection-pill glide for the results list
 
 void Search_init(void) {
 	search_results = NULL;
@@ -59,6 +60,10 @@ bool Search_open(void) {
 	search_selected = 0;
 	search_scroll = 0;
 	memset(&search_list_scroll, 0, sizeof(search_list_scroll));
+	// Snap the pill to the top on every new query: the result Array is
+	// rebuilt per query so its pointer identity normally changes, but the
+	// free-then-realloc could reuse the same address — reset defensively.
+	memset(&search_glide, 0, sizeof(search_glide));
 
 	return true;
 }
@@ -168,29 +173,70 @@ void Search_render(SDL_Surface* screen, int lastScreen) {
 
 	UI_adjustListScroll(search_selected, &search_scroll, items_per_page);
 
+	// The thumbnail width adjustment is uniform across all rows, so apply it
+	// once up front and both the pre-pass and the row loop share it.
+	if (had_thumb)
+		layout.max_width = MAX(0, ox + SCALE1(BUTTON_MARGIN) - SCALE1(PADDING * 2));
+
+	// Selection glide: size the selected pill and draw the moving pill BEFORE
+	// the row content; rows then pass selected=false and tint their text by
+	// pill position. The selected row's name is trimmed and sized with the
+	// same max_width the loop uses.
+	int rows = items_per_page;
+	if (search_scroll + rows > total)
+		rows = total - search_scroll;
+	char* sel_name = ((Entry*)search_results->items[search_selected])->name;
+	trimSortingMeta(&sel_name);
+	char sel_trunc[256];
+	int sel_pill_w = UI_calcListPillWidth(font.large, sel_name, sel_trunc,
+										  layout.max_width, 0);
+	ListGlideFrame gf = UI_listGlideDraw(&search_glide, screen,
+										 (const void*)search_results,
+										 search_selected - search_scroll, rows,
+										 layout.list_y, layout.item_h,
+										 sel_pill_w, true);
+
 	for (int i = 0; i < items_per_page && (search_scroll + i) < total; i++) {
 		int idx = search_scroll + i;
 		Entry* entry = search_results->items[idx];
-		bool selected = (idx == search_selected);
 		char* entry_name = entry->name;
 
 		trimSortingMeta(&entry_name);
 
 		int y = layout.list_y + i * layout.item_h;
-
-		if (had_thumb)
-			layout.max_width = MAX(0, ox + SCALE1(BUTTON_MARGIN) - SCALE1(PADDING * 2));
+		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
 
 		char truncated[256];
 		ListItemPos pos = UI_renderListItemPill(
 			screen, &layout, font.large,
-			entry_name, truncated, y, selected, 0);
+			entry_name, truncated, y, false, 0);
 		int text_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2);
 		UI_renderListItemText(screen,
-							  selected ? &search_list_scroll : NULL,
+							  (row_sel && !gf.animating) ? &search_list_scroll : NULL,
 							  entry_name, font.large,
-							  pos.text_x, pos.text_y, text_width, selected);
+							  pos.text_x, pos.text_y, text_width, row_sel);
 	}
 
 	UI_renderScrollIndicators(screen, search_scroll, items_per_page, total);
+}
+
+// True while the results-list selection pill is mid-glide — nextui.c keeps
+// the screen dirty until it settles (same contract as GameList_pillAnimating).
+bool Search_pillAnimating(void) {
+	return UI_listGlideActive(&search_glide);
+}
+
+// Marquee driving for the results list, mirroring GameList_scrollBusy /
+// GameList_scrollTickIdle: renders stop once the screen settles, so
+// nextui.c's idle loop must keep ticking the selected row's scroll-text
+// (activate after the 1s delay, then animate) or a long name never scrolls.
+bool Search_scrollBusy(void) {
+	return ScrollText_isScrolling(&search_list_scroll) ||
+		   ScrollText_needsRender(&search_list_scroll);
+}
+
+void Search_scrollTickIdle(void) {
+	ScrollText_activateAfterDelay(&search_list_scroll);
+	if (ScrollText_isScrolling(&search_list_scroll))
+		ScrollText_animateOnly(&search_list_scroll);
 }

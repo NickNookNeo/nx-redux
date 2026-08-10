@@ -418,7 +418,8 @@ int wiz_wifi_ensure_connected(WizSession* s) {
 
 		PWR_update(&dirty, NULL, NULL, NULL);
 
-		if (dirty) {
+		// The glide check keeps redrawing until the selection pill settles.
+		if (dirty || UI_simpleMenuGlideActive()) {
 			if (count > 0)
 				wiz_render_list("Select WiFi Network", labels, count, selected, &scroll);
 			else
@@ -564,7 +565,8 @@ int wiz_hotspot_join(WizSession* s) {
 
 		PWR_update(&dirty, NULL, NULL, NULL);
 
-		if (dirty) {
+		// The glide check keeps redrawing until the selection pill settles.
+		if (dirty || UI_simpleMenuGlideActive()) {
 			if (count > 0)
 				wiz_render_list("Select code shown on the host", labels, count, selected, &scroll);
 			else

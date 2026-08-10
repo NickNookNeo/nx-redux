@@ -30,6 +30,10 @@ void render_radio_add_stations(SDL_Surface* screen, IndicatorType show_setting,
 // Render help/instructions screen
 void render_radio_help(SDL_Surface* screen, IndicatorType show_setting, int* help_scroll);
 
+// Check if a selection pill is mid-glide (keep dirty loop redrawing)
+bool radio_list_glide_active(void);
+bool radio_country_glide_active(void);
+
 // GPU buffer indicator and status functions (rendered independently like Spectrum/PlayTime)
 void RadioStatus_setPosition(int bar_x, int bar_y, int bar_w, int bar_h,
 							 int left_x, int left_y);

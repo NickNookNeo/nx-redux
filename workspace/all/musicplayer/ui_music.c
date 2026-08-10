@@ -26,6 +26,36 @@ static void format_khz(int rate, char* buf, size_t size) {
 // Scroll text state for browser list (selected item)
 static ScrollTextState browser_scroll = {0};
 
+// Selection glide state for the browser list
+static ListGlide browser_glide;
+
+// For the module's dirty-flag loop: keep redrawing while the pill glides
+bool browser_glide_active(void) {
+	return UI_listGlideActive(&browser_glide);
+}
+
+// Build the display label for a browser entry (folder brackets / play-all
+// prefix only when icons are unavailable)
+static void browser_entry_display(const FileEntry* entry, char* display, size_t size) {
+	if (Icons_isLoaded()) {
+		// With icons, use clean names
+		if (entry->is_dir || entry->is_play_all) {
+			snprintf(display, size, "%s", entry->name);
+		} else {
+			Browser_getDisplayName(entry->name, display, size);
+		}
+	} else {
+		// Without icons, use text indicators
+		if (entry->is_dir) {
+			snprintf(display, size, "[%s]", entry->name);
+		} else if (entry->is_play_all) {
+			snprintf(display, size, "> %s", entry->name);
+		} else {
+			Browser_getDisplayName(entry->name, display, size);
+		}
+	}
+}
+
 // Scroll text state for player title
 static ScrollTextState player_title_scroll;
 
@@ -70,46 +100,49 @@ void render_browser(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 	int icon_spacing = Icons_isLoaded() ? SCALE1(6) : 0;
 	int icon_offset = icon_size + icon_spacing;
 
+	// Selection glide: size the selected entry's pill, draw the moving pill
+	// BEFORE row content; rows pass selected=false and tint by pill position.
+	// Identity is the entries array pointer: entering a folder snaps.
+	ListGlideFrame gf = {layout.list_y, false};
+	if (browser->entry_count > 0) {
+		int rows = browser->items_per_page;
+		if (browser->scroll_offset + rows > browser->entry_count)
+			rows = browser->entry_count - browser->scroll_offset;
+		char sel_display[256];
+		browser_entry_display(&browser->entries[browser->selected],
+							  sel_display, sizeof(sel_display));
+		int sel_pill_w = UI_calcListPillWidth(font.medium, sel_display, truncated,
+											  layout.max_width, icon_offset);
+		gf = UI_listGlideDraw(&browser_glide, screen,
+							  (const void*)browser->entries,
+							  browser->selected - browser->scroll_offset, rows,
+							  layout.list_y, layout.item_h,
+							  sel_pill_w, true);
+	}
+
 	for (int i = 0; i < browser->items_per_page && browser->scroll_offset + i < browser->entry_count; i++) {
 		int idx = browser->scroll_offset + i;
 		FileEntry* entry = &browser->entries[idx];
-		bool selected = (idx == browser->selected);
 
 		int y = layout.list_y + i * layout.item_h;
+		bool row_sel = UI_listGlideRowSelected(&gf, y, layout.item_h);
 
 		// Get display name (without folder brackets or prefixes when icons are used)
 		char display[256];
-		if (Icons_isLoaded()) {
-			// With icons, use clean names
-			if (entry->is_dir || entry->is_play_all) {
-				strncpy(display, entry->name, sizeof(display) - 1);
-				display[sizeof(display) - 1] = '\0';
-			} else {
-				Browser_getDisplayName(entry->name, display, sizeof(display));
-			}
-		} else {
-			// Without icons, use text indicators
-			if (entry->is_dir) {
-				snprintf(display, sizeof(display), "[%s]", entry->name);
-			} else if (entry->is_play_all) {
-				snprintf(display, sizeof(display), "> %s", entry->name);
-			} else {
-				Browser_getDisplayName(entry->name, display, sizeof(display));
-			}
-		}
+		browser_entry_display(entry, display, sizeof(display));
 
 		// Render pill background and get text position (with icon offset)
-		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, display, truncated, y, selected, icon_offset);
+		ListItemPos pos = UI_renderListItemPill(screen, &layout, font.medium, display, truncated, y, false, icon_offset);
 
 		// Render icon if available
 		if (Icons_isLoaded()) {
 			SDL_Surface* icon = NULL;
 			if (entry->is_dir) {
-				icon = Icons_getFolder(selected);
+				icon = Icons_getFolder(row_sel);
 			} else if (entry->is_play_all) {
-				icon = Icons_getPlayAll(selected);
+				icon = Icons_getPlayAll(row_sel);
 			} else {
-				icon = Icons_getForFormat(entry->format, selected);
+				icon = Icons_getForFormat(entry->format, row_sel);
 			}
 
 			if (icon) {
@@ -128,9 +161,12 @@ void render_browser(SDL_Surface* screen, IndicatorType show_setting, BrowserCont
 		int text_x = pos.text_x + icon_offset;
 		int available_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2) - icon_offset;
 
-		// Use common text rendering with scrolling for selected items
-		UI_renderListItemText(screen, &browser_scroll, display, font.medium,
-							  text_x, pos.text_y, available_width, selected);
+		// Use common text rendering with scrolling for selected items;
+		// marquee only once the pill has settled on this row
+		UI_renderListItemText(screen,
+							  (row_sel && !gf.animating) ? &browser_scroll : NULL,
+							  display, font.medium,
+							  text_x, pos.text_y, available_width, row_sel);
 	}
 
 	UI_renderScrollIndicators(screen, browser->scroll_offset, browser->items_per_page, browser->entry_count);

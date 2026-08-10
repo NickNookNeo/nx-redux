@@ -264,6 +264,9 @@ int main(int argc, char* argv[]) {
 			GameList_pillAnimating())
 			dirty = true;
 
+		if (currentScreen == SCREEN_SEARCH && Search_pillAnimating())
+			dirty = true;
+
 		if (dirty) {
 			SDL_Surface* tmpOldScreen = NULL;
 			if (animationdirection != ANIM_NONE) {
@@ -428,7 +431,8 @@ int main(int argc, char* argv[]) {
 
 			dirty = false;
 		} else if (folderbgchanged || thumbchanged ||
-				   (GameList_scrollBusy() && !ContextMenu_isOpen())) {
+				   (GameList_scrollBusy() && !ContextMenu_isOpen()) ||
+				   (currentScreen == SCREEN_SEARCH && Search_scrollBusy())) {
 			updateBackgroundLayer(blackBG);
 			renderThumbnail(1, false);
 			// Same flash as the dirty pass (see gamelist.c / 81a0c40a): the idle
@@ -441,6 +445,8 @@ int main(int argc, char* argv[]) {
 			if (currentScreen != SCREEN_GAMESWITCHER &&
 				currentScreen != SCREEN_SEARCH && !ContextMenu_isOpen()) {
 				GameList_scrollTickIdle();
+			} else if (currentScreen == SCREEN_SEARCH && Search_scrollBusy()) {
+				Search_scrollTickIdle();
 			} else {
 				SDL_Delay(16);
 			}
