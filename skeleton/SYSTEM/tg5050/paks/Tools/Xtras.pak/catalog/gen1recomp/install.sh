@@ -82,18 +82,6 @@ for _ca in "$SDCARD_PATH/.system/shared/ssl/ca-certificates.crt" \
     fi
 done
 
-# sha1sum is NOT on the device PATH in the Xtras launch chain (device-
-# verified: /mnt/SDCARD/.system/bin:/mnt/SDCARD/.system/shared/bin:/usr/
-# trimui/bin:/usr/sbin:/usr/bin:/sbin:/bin - busybox on the card has no
-# sha1sum applet). The only copy on the card lives under PortMaster's vendored
-# bin/ - used opportunistically WHEN PortMaster happens to be installed; the
-# ROM auto-scan below skips gracefully (not a fatal error) if neither
-# resolves, so this is not a PortMaster dependency.
-NX_SHA1="$(command -v sha1sum || true)"
-if [ -z "$NX_SHA1" ] && [ -x "$SDCARD_PATH/Emus/shared/PortMaster/bin/sha1sum" ]; then
-    NX_SHA1="$SDCARD_PATH/Emus/shared/PortMaster/bin/sha1sum"
-fi
-
 TMPDIR_NX="$SDCARD_PATH/.extras_tmp"
 TARGET="$EXTRAS_DATA_DIR/gen1recomp"
 LOVE="$TARGET/lovegame"
@@ -299,27 +287,29 @@ echo "@80 Yellow support and mods installed"
 
 echo "@90 Scanning for ROMs..."
 echo "Looking for your Pokemon ROMs..."
+# Recognized by SHA-256 via the same busybox sha256sum fetch() already depends
+# on - every card that can run this install can run the scan. (The game's own
+# importer gates on SHA-1 internally; these are the same three US Red/Blue/
+# Yellow dumps, just hashed with the tool the device actually ships. sha1sum
+# only exists inside PortMaster's vendored bin, which runtime=native users
+# don't have - a card without it used to skip this scan entirely.)
 found=0
-if [ -z "$NX_SHA1" ]; then
-    echo "  ROM auto-scan skipped (no sha1 tool) - copy ROMs manually into Roms/Xtra Games (EXTRAS)/.data/gen1recomp/lovegame/"
-else
-    for dir in "$SDCARD_PATH/Roms/Game Boy (GB)" "$SDCARD_PATH/Roms/Game Boy Color (GBC)"; do
-        [ -d "$dir" ] || continue
-        for rom in "$dir"/*.gb "$dir"/*.gbc; do
-            [ -f "$rom" ] || continue
-            [ -f "$LOVE/$(basename "$rom")" ] && { found=$((found+1)); continue; }
-            case "$("$NX_SHA1" "$rom" | cut -d' ' -f1)" in
-                ea9bcae617fdf159b045185467ae58b2e4a48b9a|\
-                d7037c83e1ae5b39bde3c30787637ba1d4c48ce2|\
-                cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1)
-                    echo "  found $(basename "$rom")"
-                    cp "$rom" "$LOVE/" && found=$((found+1))
-                    ;;
-            esac
-        done
+for dir in "$SDCARD_PATH/Roms/Game Boy (GB)" "$SDCARD_PATH/Roms/Game Boy Color (GBC)"; do
+    [ -d "$dir" ] || continue
+    for rom in "$dir"/*.gb "$dir"/*.gbc; do
+        [ -f "$rom" ] || continue
+        [ -f "$LOVE/$(basename "$rom")" ] && { found=$((found+1)); continue; }
+        case "$(sha256sum "$rom" | cut -d' ' -f1)" in
+            5ca7ba01642a3b27b0cc0b5349b52792795b62d3ed977e98a09390659af96b7b|\
+            2a951313c2640e8c2cb21f25d1db019ae6245d9c7121f754fa61afd7bee6452d|\
+            8cbaa499397e4f1a679c992ea9382a2dd7942ab398b48c19829c2d9529de47bf)
+                echo "  found $(basename "$rom")"
+                cp "$rom" "$LOVE/" && found=$((found+1))
+                ;;
+        esac
     done
-    [ "$found" -eq 0 ] && echo "  none found - copy a US Red/Blue/Yellow ROM into Roms/Xtra Games (EXTRAS)/.data/gen1recomp/lovegame/ later"
-fi
+done
+[ "$found" -eq 0 ] && echo "  none found - copy a US Red/Blue/Yellow ROM into Roms/Xtra Games (EXTRAS)/.data/gen1recomp/lovegame/ later"
 
 # Self-install the EXTRAS platform runtime. The skeleton SYSTEM tree
 # normally ships this pak out of the box (skeleton/SYSTEM/<plat>/paks/

@@ -3,6 +3,32 @@
 SDCARD_PATH=/mnt/SDCARD
 
 # --------------------------------------
+# Firmware validation: NX Redux targets the current TrimUI stock firmware -
+# older firmware is missing rootfs libraries some features hard-depend on
+# (field case 2026-08-10: a Brick on 1.0.6 has no /usr/trimui/lib/
+# libmpg123.so.0, so the Xtras gen1recomp native runtime dies at load; 1.1.1
+# ships it). The system itself still boots, so this must not block the
+# install - but it IS the one moment the user is watching an install screen
+# (tg5040.sh's show2 splash daemon is still up and this script only runs
+# from its MinUI.zip branch), so say it loudly here instead of letting
+# features degrade quietly later. Runs on every install AND update; a single
+# system-level gate, not per-pak probes. README "Supported Devices" carries
+# the same requirement.
+MIN_FW="1.1.1"
+FW="$(cat /etc/version 2>/dev/null)"
+if [ -n "$MIN_FW" ] && [ -n "$FW" ] && [ "$FW" != "$MIN_FW" ]; then
+	# dotted-decimal compare via numeric per-field sort; oldest sorts first
+	OLDEST="$(printf '%s\n%s\n' "$FW" "$MIN_FW" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)"
+	if [ "$OLDEST" = "$FW" ]; then
+		echo "firmware $FW older than supported $MIN_FW"
+		if [ -p /tmp/show2.fifo ]; then
+			echo "TEXT:TrimUI firmware $FW is too old (need $MIN_FW+). Some features will not work - update the stock firmware, then reinstall NX Redux." > /tmp/show2.fifo
+			sleep 12
+		fi
+	fi
+fi
+
+# --------------------------------------
 # clean shipped-name paks out of /Emus and /Tools (moved into .system
 # 2026-07-31; removal of this hook is tracked in DEV_TODO.md);
 # must run before the brick-migration block below, which can reboot without

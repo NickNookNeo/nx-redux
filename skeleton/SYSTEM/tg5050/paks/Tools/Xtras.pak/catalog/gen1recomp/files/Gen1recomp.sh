@@ -124,19 +124,27 @@ done
 # the file lives on the internal rootfs. Confirmed swap-able on both layouts:
 # tg5050's plain ext4 '/' and the brick's overlayfs '/' (upperdir is ext4).
 # Created once and reused each launch; swapon failure is always non-fatal.
-if [ ! -f /swapfile ]; then
-    # If dd or mkswap fails partway (e.g. a full rootfs leaves a truncated
-    # /swapfile), remove it so `[ ! -f /swapfile ]` doesn't pass forever -
-    # without this, every later launch skips creation, swapon silently fails,
-    # and voxel-mod sessions OOM-kill with no swap ever retried.
-    # shellcheck disable=SC2015
-    # (deliberate, not an if/then/else stand-in: `|| rm -f` here means "clean
-    # up on ANY failure in the chain", not just when dd fails.)
-    dd if=/dev/zero of=/swapfile bs=1M count=512 2>/dev/null \
-        && chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 \
-        || rm -f /swapfile
-fi
-swapon /swapfile 2>/dev/null
+# Runs in the BACKGROUND: on a fresh device the 512MB dd takes 10-20s of
+# eMMC writes, and in the foreground that was a black screen between menu
+# and game window long enough to read as a broken launch (and backing out
+# mid-dd left a partial file, so the next launch re-ran the whole dd -
+# every attempt stalled). Swap only matters minutes into a session (voxel
+# peak ~750MB), never at boot, so let the game start while it builds.
+(
+    if [ ! -f /swapfile ]; then
+        # If dd or mkswap fails partway (e.g. a full rootfs leaves a truncated
+        # /swapfile), remove it so `[ ! -f /swapfile ]` doesn't pass forever -
+        # without this, every later launch skips creation, swapon silently fails,
+        # and voxel-mod sessions OOM-kill with no swap ever retried.
+        # shellcheck disable=SC2015
+        # (deliberate, not an if/then/else stand-in: `|| rm -f` here means "clean
+        # up on ANY failure in the chain", not just when dd fails.)
+        dd if=/dev/zero of=/swapfile bs=1M count=512 2>/dev/null \
+            && chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 \
+            || rm -f /swapfile
+    fi
+    swapon /swapfile 2>/dev/null
+) &
 
 # Big-core affinity is tg5050-only: the brick has a single CPU cluster, so
 # there are no performance cores to pin LOVE onto.

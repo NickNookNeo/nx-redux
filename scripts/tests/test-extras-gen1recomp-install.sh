@@ -135,7 +135,7 @@ SD="$TMP/sd"
 GB_DIR="$SD/Roms/Game Boy (GB)"
 GBC_DIR="$SD/Roms/Game Boy Color (GBC)"
 mkdir -p "$GB_DIR" "$GBC_DIR" "$SD/.userdata/tg5050/logs"
-# A "Red" ROM whose sha1 we control via the sha1sum shim below.
+# A "Red" ROM whose sha256 we control via the sha256sum shim below.
 echo 'red-rom' > "$GB_DIR/Pokemon Red.gb"
 echo 'junk'    > "$GB_DIR/Tetris.gb"
 
@@ -171,21 +171,21 @@ case "\$url" in
 esac
 SHIM
 chmod +x "$BIN/wget"
-# sha1sum shim: reports the pinned Red hash for the Red fixture, junk otherwise.
-cat > "$BIN/sha1sum" <<SHIM
+# sha256sum shim -> host shasum (macOS has no sha256sum), EXCEPT the Red ROM
+# fixture, which reports the pinned real-dump sha256 the install.sh ROM scan
+# whitelists (the scan is sha256-keyed since 2026-08-10 - sha1sum only ever
+# existed inside PortMaster's vendored bin, which runtime=native users don't
+# have). Everything else (download digest checks) hashes for real.
+cat > "$BIN/sha256sum" <<SHIM
 #!/usr/bin/env bash
 for f in "\$@"; do
   case "\$f" in
-    *"Pokemon Red.gb") echo "ea9bcae617fdf159b045185467ae58b2e4a48b9a  \$f" ;;
-    *) echo "0000000000000000000000000000000000000000  \$f" ;;
+    *"Pokemon Red.gb")
+      echo "5ca7ba01642a3b27b0cc0b5349b52792795b62d3ed977e98a09390659af96b7b  \$f"
+      exit 0 ;;
   esac
 done
-SHIM
-chmod +x "$BIN/sha1sum"
-# sha256sum shim -> host shasum (macOS has no sha256sum).
-cat > "$BIN/sha256sum" <<'SHIM'
-#!/usr/bin/env bash
-shasum -a 256 "$@"
+shasum -a 256 "\$@"
 SHIM
 chmod +x "$BIN/sha256sum"
 
@@ -209,14 +209,14 @@ run_install() {
   SDCARD_PATH="$SD" \
   LOGS_PATH="$SD/.userdata/tg5050/logs" \
   EXTRAS_ROMS_DIR="$SD/Roms/Xtra Games (EXTRAS)" \
-  EXTRAS_PORTS_DIR="$SD/Roms/Xtra Games (EXTRAS)/.ports" \
+  EXTRAS_DATA_DIR="$SD/Roms/Xtra Games (EXTRAS)/.data" \
   CATALOG_DIR="$ENTRY" \
   XTRAS_STATE_DIR="$SD/.userdata/shared/xtras" \
   NX_EXTRAS_UNZIP="${NX_EXTRAS_UNZIP_OVERRIDE:-unzip}" \
   bash "$ENTRY/install.sh"
 }
 
-G="$SD/Roms/Xtra Games (EXTRAS)/.ports/gen1recomp"
+G="$SD/Roms/Xtra Games (EXTRAS)/.data/gen1recomp"
 
 # ---- 0. preflight: system unzip tool probe ----------------------------
 # Since the runtime=native conversion (2026-08-10) nothing here depends on
@@ -258,12 +258,18 @@ else fail "fresh install exited non-zero: $(tail -3 "$TMP/log1.txt")"; fi
 [ ! -e "$SD/Emus/tg5050/EXTRAS.pak" ] \
   && pass "EXTRAS.pak not leaked into legacy Emus/\$PLATFORM location" \
   || fail "EXTRAS.pak wrongly installed at legacy Emus/\$PLATFORM location"
-grep -q 'GAMEDIR="$SHDIR/.ports/gen1recomp"' \
+grep -q 'GAMEDIR="$SHDIR/.data/gen1recomp"' \
   "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh"      && pass "launcher is nx-patched"  || fail "launcher not patched"
 # runtime=native contract: extras_games_launch.sh execs the entry directly
 # only when this marker sits in the script's first 20 lines.
 head -20 "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" | grep -q '^# NX_RUNTIME: native' \
                                                      && pass "launcher carries the native runtime marker" || fail "native runtime marker missing from launcher"
+# First-launch stall fix (2026-08-10): the 512MB swapfile dd must run in a
+# backgrounded subshell (closing "') &'" at column 0), not in the game's
+# critical path - in the foreground it was 10-20s of black screen that read
+# as a broken launch.
+grep -q '^) &' "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" \
+                                                     && pass "launcher swapfile block is backgrounded" || fail "launcher swapfile block runs in the foreground"
 # Display alias (map.txt is filename<TAB>alias, content.c Directory_index):
 # without it the list shows the launcher basename "Gen1recomp" (lowercase r).
 MAPFILE="$SD/Roms/Xtra Games (EXTRAS)/map.txt"
@@ -373,22 +379,24 @@ else pass "corrupt mod payload aborts"; fi
 grep -q 'install broken, launcher removed' "$TMP/log4.txt" \
   && pass "failure explains launcher removal" || fail "no launcher-removal explanation in log"
 
-# ---- 5. ROM auto-scan degrades gracefully when no sha1 tool is on PATH ----
-# Device-verified gap: busybox on the card has no sha1sum applet, so bare
-# `sha1sum` in the ROM scan resolved to nothing in the real Xtras launch
-# chain - install still succeeded but silently copied 0 ROMs. Reproduce "no
-# sha1 tool anywhere" deterministically: build an isolated PATH containing
+# ---- 5. ROM auto-scan works with NO sha1 tool anywhere on PATH ----------
+# The original field gap: the scan was sha1-keyed, busybox on the card has no
+# sha1sum applet and the only sha1sum lives inside PortMaster's vendored bin
+# - so runtime=native users (no PortMaster) always got "install succeeded,
+# 0 ROMs copied". The scan is sha256-keyed now (same busybox sha256sum the
+# download digest checks already require), so it must WORK on a PATH with no
+# sha1 tool at all. Prove that deterministically: an isolated PATH containing
 # only the exact binaries install.sh needs (this test's own wget/sha256sum
 # shims, plus the real system mkdir/rm/cp/basename/cut/unzip/dirname by
 # direct symlink), and nothing else - a bare `PATH="$BIN:$PATH"` prepend
-# wouldn't prove anything on a host that already has a real sha1sum
-# elsewhere on its inherited PATH (this dev machine does: /sbin/sha1sum).
+# wouldn't prove anything on a host that has a real sha1sum elsewhere on its
+# inherited PATH (this dev machine does: /sbin/sha1sum).
 BIN_NOSHA1="$TMP/bin_nosha1"
 mkdir -p "$BIN_NOSHA1"
-# shasum (not sha1sum) is what the sha256sum shim below shells out to
-# internally (macOS has no real sha256sum) - it lives in a different real
-# directory (/usr/bin) than this host's real sha1sum (/sbin), so symlinking
-# it by exact binary keeps the "no sha1sum anywhere on PATH" guarantee.
+# shasum is what the sha256sum shim shells out to internally (macOS has no
+# real sha256sum) - it lives in a different real directory (/usr/bin) than
+# this host's real sha1sum (/sbin), so symlinking it by exact binary keeps
+# the "no sha1sum anywhere on PATH" guarantee.
 for c in bash mkdir rm cp mv basename cut unzip dirname shasum sed grep head; do
   tool_path="$(command -v "$c")" || { fail "host is missing '$c', can't build the no-sha1 PATH fixture"; tool_path=""; }
   [ -n "$tool_path" ] && ln -s "$tool_path" "$BIN_NOSHA1/$c"
@@ -420,20 +428,22 @@ if NX_VOXEL_SHA256="$VOXEL_SHA_NOSHA1" \
    SDCARD_PATH="$SD" \
    LOGS_PATH="$SD/.userdata/tg5050/logs" \
    EXTRAS_ROMS_DIR="$SD/Roms/Xtra Games (EXTRAS)" \
-   EXTRAS_PORTS_DIR="$SD/Roms/Xtra Games (EXTRAS)/.ports" \
+   EXTRAS_DATA_DIR="$SD/Roms/Xtra Games (EXTRAS)/.data" \
    CATALOG_DIR="$ENTRY" \
    XTRAS_STATE_DIR="$SD/.userdata/shared/xtras" \
    NX_EXTRAS_UNZIP=unzip \
    bash "$ENTRY/install.sh" > "$TMP/log5.txt" 2>&1
-then pass "install with no sha1 tool anywhere still exits 0"
+then pass "install with no sha1 tool anywhere exits 0"
 else fail "install with no sha1 tool anywhere exited non-zero: $(tail -3 "$TMP/log5.txt")"; fi
-[ ! -f "$G/lovegame/Pokemon Red.gb" ] \
-  && pass "no sha1 tool: ROM scan skipped, nothing copied" || fail "no sha1 tool: a ROM was copied anyway"
-grep -qi 'ROM auto-scan skipped' "$TMP/log5.txt" \
-  && pass "no sha1 tool: skip message printed" || fail "no sha1 tool: skip message missing"
+[ -f "$G/lovegame/Pokemon Red.gb" ] \
+  && pass "no sha1 tool: ROM scan still copied Red (sha256-keyed)" || fail "no sha1 tool: ROM scan copied nothing"
+[ ! -f "$G/lovegame/Tetris.gb" ] \
+  && pass "no sha1 tool: junk ROM still skipped" || fail "no sha1 tool: junk ROM copied"
+! grep -qi 'ROM auto-scan skipped' "$TMP/log5.txt" \
+  && pass "no sha1 tool: no skip message printed" || fail "no sha1 tool: scan still skipped itself"
 [ -f "$SD/Roms/Xtra Games (EXTRAS)/Gen1recomp.sh" ] \
-  && pass "no sha1 tool: rest of install still completed (launcher registered)" \
-  || fail "no sha1 tool: install did not complete despite the scan being non-fatal"
+  && pass "no sha1 tool: install completed (launcher registered)" \
+  || fail "no sha1 tool: install did not complete"
 
 # ---- 6. uninstall keeps saves ------------------------------------------
 # uninstall.sh's contract (Task 9): keep-saves - remove the launcher, the
@@ -446,7 +456,7 @@ run_uninstall() {
   SDCARD_PATH="$SD" \
   LOGS_PATH="$SD/.userdata/tg5050/logs" \
   EXTRAS_ROMS_DIR="$SD/Roms/Xtra Games (EXTRAS)" \
-  EXTRAS_PORTS_DIR="$SD/Roms/Xtra Games (EXTRAS)/.ports" \
+  EXTRAS_DATA_DIR="$SD/Roms/Xtra Games (EXTRAS)/.data" \
   CATALOG_DIR="$ENTRY" \
   XTRAS_STATE_DIR="$SD/.userdata/shared/xtras" \
   bash "$ENTRY/uninstall.sh"
